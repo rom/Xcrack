@@ -82,9 +82,20 @@ func NewServer(pool *xcrack.Pool, cfg Config) *Server {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/healthz", s.handleHealth)
+	mux.HandleFunc("/v1/metrics", s.handleMetrics)
 	mux.HandleFunc("/v1/identify", s.handleIdentify)
 	mux.HandleFunc("/v1/decrypt", s.handleDecrypt)
 	return mux
+}
+
+// handleMetrics reports the backing Pool's aggregate counters (counts only, no
+// secrets) for telemetry.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, s.pool.Metrics())
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

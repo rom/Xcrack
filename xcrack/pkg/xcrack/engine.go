@@ -86,6 +86,11 @@ type Options struct {
 	OnProgress func(Progress)
 	OnFound    func(Found)
 	Logger     Logger
+
+	// CandidateProvider, when set, supplies candidates tried ahead of the
+	// per-call source on every Process call (a pluggable live provider). nil
+	// disables it.
+	CandidateProvider CandidateProvider
 }
 
 // DefaultOptions returns Options with explicit, conservative defaults. The zero
@@ -152,6 +157,7 @@ func (o *Options) normalize() {
 type Pool struct {
 	opts    Options
 	cracker *attack.Engine
+	metrics metrics
 }
 
 // NewPool returns a Pool configured by opts (defaults applied). The cracking
@@ -189,14 +195,22 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	e := &engine{opts: p.opts, cracker: p.cracker, spill: spill}
 	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
 	if err != nil {
+		p.metrics.processingErrors.Add(1)
 		return nil, err
+	}
+	// A pluggable live provider's candidates are tried ahead of the per-call set.
+	effective := candidates
+	if p.opts.CandidateProvider != nil {
+		effective = chainSources(p.opts.CandidateProvider.Candidates(ctx), candidates)
 	}
 	acc := newAccounting(p.opts.Limits)
 	prom := newPromoter(!p.opts.NoPromote)
-	root := e.decompose(ctx, "", data, 0, nil, prom, acc, candidates)
+	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
-	return &Result{Root: root, Stats: stats, spills: spill}, nil
+	res := &Result{Root: root, Stats: stats, spills: spill}
+	p.metrics.record(res, stats.Elapsed)
+	return res, nil
 }
 
 // Process is the one-shot convenience entry point: it builds a single-use Pool,

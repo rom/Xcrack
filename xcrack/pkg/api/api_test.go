@@ -152,6 +152,34 @@ func TestMethodNotAllowed(t *testing.T) {
 	}
 }
 
+func TestMetricsEndpoint(t *testing.T) {
+	data := encryptedDoc(t)
+	ts := newTestServer(Config{})
+	defer ts.Close()
+	// Drive one decrypt so the counters are non-zero.
+	resp, err := http.Post(ts.URL+"/v1/decrypt?password=Password1234_", "application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	mresp, err := http.Get(ts.URL + "/v1/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mresp.Body.Close()
+	if mresp.StatusCode != http.StatusOK {
+		t.Fatalf("metrics status = %d, want 200", mresp.StatusCode)
+	}
+	var m xcrack.Metrics
+	if err := json.NewDecoder(mresp.Body).Decode(&m); err != nil {
+		t.Fatal(err)
+	}
+	if m.FilesProcessed < 1 {
+		t.Fatalf("FilesProcessed = %d, want >= 1", m.FilesProcessed)
+	}
+}
+
 func TestDefaultListGated(t *testing.T) {
 	data := encryptedDoc(t)
 	ts := newTestServer(Config{}) // AllowDefaultList false
