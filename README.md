@@ -44,7 +44,9 @@ one is reusable on its own:
 │    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
 │    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool
-│    └─ cmd/xcrack/         CLI
+│    ├─ pkg/api/            HTTP service wrapping the engine (Pool)
+│    ├─ cmd/xcrack/         CLI
+│    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
 └─ docs/                    architecture, design, ASR, MVP, threat model, ADRs
 ```
 
@@ -87,6 +89,31 @@ res, _ := pool.Process(ctx, reader, size,
     candidates.Chain(candidates.Explicit(emailPasswords...), candidates.DefaultList()))
 res.Root.Walk(func(n *xcrack.Node) { /* scan n.Content ... */ })
 ```
+
+### HTTP service (`xcrackd`)
+
+For thin clients (an Impex **kiosk** or **DataLock** appliance) that can't embed
+the engine, run it as a backend service on a more powerful, hardened host — one
+that may optionally front a separate GPU/OpenCL cracking tier. The cryptanalysis
+stays offline (it only attacks the submitted file's own KDF).
+
+```sh
+go build -o xcrackd ./xcrack/cmd/xcrackd
+./xcrackd -addr :8080 -max-procs 16
+
+# detect only
+curl -s --data-binary @suspicious.bin http://localhost:8080/v1/identify
+
+# decrypt + decompose with candidate passwords
+curl -s --data-binary @invoice.zip \
+  'http://localhost:8080/v1/decrypt?password=infected&password=Welcome1'
+```
+
+Both POST routes take the raw file as the body and return the same JSON tree the
+library/CLI produce. The service ships **no** auth or TLS by design — put it
+behind a proxy/mesh that provides them, and never expose it directly to
+untrusted networks. Responses carry recovered passwords and content digests, so
+treat them as sensitive.
 
 ## Status
 
