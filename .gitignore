@@ -1,0 +1,14 @@
+# Binaries
+/xcrack
+*.exe
+*.test
+*.out
+
+# Build / coverage
+/dist/
+coverage.*
+
+# Editor
+.idea/
+.vscode/
+*.swp
