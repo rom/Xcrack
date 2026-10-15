@@ -26,10 +26,12 @@ they are not date-bound. Each phase leaves `main` releasable.
     reported as unsupported.
   - ✅ **archive unpackers:** tar, gzip, bzip2, xz/lzma, **7z**, **rar** (4.x + 5.x);
     `.eml`/MIME attachment extraction.
-  - ⬜ **legacy MS Office** (`.doc/.xls/.ppt`, CryptoAPI/RC4) — the one remaining
-    Phase-2 format. Deferred: its binary crypto cannot be cross-validated here (no
-    reference encoder for known-answer fixtures), and Xcrack ships only crypto it
-    can verify against a trusted oracle.
+  - ✅ **legacy MS Office** (`.doc/.xls/.ppt`): RC4 CryptoAPI (Office XP/2003),
+    Office 97/2000 RC4, and XOR obfuscation. The RC4 CryptoAPI decryption is
+    cross-validated byte-for-byte against gold-standard decrypted Word, Excel,
+    and PowerPoint documents. Known limitations: Word XOR *body* reconstruction
+    is not implemented (no reference oracle); only the main document streams are
+    decrypted.
 - **Document explosion:** full OOXML/OLE part decomposition behind
   `--explode-documents`.
 - ✅ **Concurrency ergonomics:** `--batch-size`, `--max-duration`, `--throttle`

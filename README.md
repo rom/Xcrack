@@ -30,7 +30,7 @@ one is reusable on its own:
 /
 ├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
 │    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
-│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard) · pdf · odf
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml · pdf · odf · officebinary (legacy Office)
 │    ├─ candidates/         candidate sources
 │    ├─ pattern/            hashcat-compatible masks + rules
 │    └─ attack/             concurrent password-search engine
@@ -39,6 +39,7 @@ one is reusable on its own:
 │    ├─ formats/ooxml       encrypted MS Office (CFB-wrapped)
 │    ├─ formats/pdf         encrypted PDF (rebuild a decrypted copy)
 │    ├─ formats/odf         encrypted LibreOffice/OpenOffice (ODF)
+│    ├─ formats/msoffice    legacy MS Office (.doc/.xls/.ppt, RC4/XOR)
 │    ├─ formats/archive     tar · gzip · bzip2 · xz · 7z · rar · MIME (.eml)
 │    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
@@ -94,18 +95,21 @@ Early but working end to end across all three modules.
 **Implemented**
 - `xcrypto` (crypto + cracking engine): primitives (PBKDF2, AES-CTR/CBC/ECB,
   RC4, Office agile/standard key derivation); schemes **ZipCrypto**, **WinZip
-  AES** (AE-1/AE-2, 128/192/256), **OOXML agile + standard**, and **PDF** (RC4 /
-  AESV2 / AESV3, R2-R6, user + owner); candidate sources; a **hashcat-compatible
-  pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4, and a practical rule subset);
-  and the concurrent, globally-bounded **attack** search engine. Zero
-  third-party deps.
+  AES** (AE-1/AE-2, 128/192/256), **OOXML agile + standard**, **PDF** (RC4 /
+  AESV2 / AESV3, R2-R6, user + owner), and **legacy Office binary** (RC4
+  CryptoAPI, Office 97/2000 RC4, XOR obfuscation); candidate sources; a
+  **hashcat-compatible pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4, and a
+  practical rule subset); and the concurrent, globally-bounded **attack** search
+  engine. Zero third-party deps.
 - `xfileformats`: detection + registry; **ZIP** container (per-entry
-  ZipCrypto/AES); **encrypted MS Office** via a bounded **CFB/OLE2** reader;
-  **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
-  **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); and **archive
-  unpackers** (tar, gzip, bzip2, xz, **7z**, **rar**, MIME `.eml`). Builds
-  `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified against
-  known-answer round-trips and the real `zip` / `qpdf` / `7z` / `rar` CLIs.
+  ZipCrypto/AES); **encrypted OOXML MS Office** via a bounded **CFB/OLE2**
+  reader; **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
+  **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); **legacy MS Office**
+  (`.doc/.xls/.ppt` — decrypts each OLE stream); and **archive unpackers**
+  (tar, gzip, bzip2, xz, **7z**, **rar**, MIME `.eml`). Builds `xcrypto.Challenge`
+  and delegates all crypto to Xcrypto. Verified against known-answer round-trips,
+  the real `zip` / `qpdf` / `7z` / `rar` CLIs, and byte-for-byte against
+  gold-standard decrypted legacy-Office documents.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
   nodes / entry-size) + ancestor cycle detection, **two-axis concurrency**
@@ -124,19 +128,24 @@ Early but working end to end across all three modules.
 (`--workers` / `--file-jobs` / `--max-procs` / `--batch-size` / `--throttle` /
 `--timeout` / `--max-duration`).
 
-**Phase 2 formats.** Archive unpackers (tar/gzip/bzip2/xz/**7z**/**rar**, MIME
-`.eml`) and **ODF** (LibreOffice/OpenOffice, AES-256-CBC) are implemented and
-tested — the 7z/rar/pdf/zip/bzip2/xz paths cross-validated against the real
-CLIs. The one remaining Phase-2 format is **legacy MS Office**
-(`.doc/.xls/.ppt`, CryptoAPI/RC4); it is deliberately not yet implemented —
-see the note below.
+**Phase 2 complete.** Archive unpackers (tar/gzip/bzip2/xz/**7z**/**rar**, MIME
+`.eml`), **ODF** (LibreOffice/OpenOffice, AES-256-CBC), and **legacy MS Office**
+(`.doc/.xls/.ppt` — RC4 CryptoAPI, Office 97/2000 RC4, and XOR obfuscation) are
+all implemented and tested. The legacy-Office RC4 CryptoAPI decryption is
+cross-validated byte-for-byte against gold-standard decrypted documents (`.doc`,
+`.xls`, `.ppt`); the 7z/rar/pdf/zip/bzip2/xz paths are cross-validated against
+the real CLIs.
 
-> **Legacy MS Office (`.doc/.xls/.ppt`)** is designed-for (the CFB/OLE2 reader
-> and the registry already accommodate it) but not implemented. Its binary
-> CryptoAPI/RC4 crypto could not be cross-validated in this environment (no
-> reference encoder was available to generate known-answer fixtures), and
-> Xcrack's policy is to ship only crypto it can verify end to end against a
-> trusted oracle. It remains the last open Phase-2 item.
+> **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is the common case and
+> is fully decrypted and cross-validated for Word, Excel, and PowerPoint. The
+> Office 97/2000 RC4 key derivation and the XOR obfuscation scheme are
+> implemented and unit-tested (known-answer vectors + a round-trip); XOR
+> content reconstruction is wired for Excel but not for Word (Word stores the
+> obfuscated body differently and there is no reference oracle for it), so a
+> Word XOR document is detected and its password recovered but its body is not
+> rebuilt. Only the main document streams are decrypted (WordDocument + table +
+> Data, Workbook, PowerPoint Document); auxiliary streams that some variants
+> also encrypt are left as-is.
 
 ## License
 
