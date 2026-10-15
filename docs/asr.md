@@ -121,7 +121,7 @@ the same inputs yield the same result tree.
 | CON-2 | **No network / no online attacks** | Scope & authorized-use posture; offline-only against a file's own KDF. |
 | CON-3 | **Full CLI/library parity** | Every CLI capability is a library `Options` field; the CLI adds no hidden behaviour. |
 | CON-4 | **Two modules, one repo** | Xfileformats importable alone (QA-4); engine/CLI separate. |
-| CON-5 | **Go 1.23+, MIT, minimal vetted dependencies** | Build simplicity; licence compatibility for embedding. |
+| CON-5 | **Go 1.25+, MIT, minimal vetted dependencies** (stdlib-first; the embeddable libraries stay zero-dep, `gopkg.in/yaml.v3` is used only by the CLI) | Build simplicity; licence compatibility for embedding. |
 | CON-6 | **No plaintext spillage** | Decrypted (potentially malicious) content stays in memory or a locked, wiped temp dir; not written unless the caller asks. |
 | CON-7 | **Authorized-use framing in docs & CLI help** | Defensive/recovery tool; operated against owned/authorized data. |
 

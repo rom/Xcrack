@@ -4,7 +4,7 @@ Status: Draft. This document specifies the public APIs of **Xfileformats** and
 the **Xcrack engine**, the recursive decomposition algorithm, the candidate /
 pattern engine, the concurrency model, the configuration and output handling,
 and the error model. Signatures are indicative (pre-implementation) and will be
-finalised against Go 1.23+.
+finalised against Go 1.25+ (stdlib crypto/pbkdf2 requires 1.24).
 
 ---
 
@@ -136,11 +136,11 @@ type Options struct {
     MaxProcs        int           // global ceiling; file-jobs*workers bounded by this
 
     // search behaviour
-    StopOnFirst     bool          // stop at first matching candidate (default true)
-    PromotePasswords bool         // try ancestor passwords first on inner layers (default true)
+    NoRecurse        bool         // disable container decomposition (default: recurse)
+    NoPromote        bool         // disable password promotion (default: promote ancestors first)
 
     // recursion / documents
-    Recurse          bool         // decompose containers (default true)
+    FindAll          bool         // keep searching after first match (reserved; default stop-on-first)
     ExplodeDocuments bool         // decompose documents into parts (default false, opt-in)
 
     // budgets & limits (hostile-input safety)
@@ -364,7 +364,7 @@ func decompose(ctx, node, candidates, depth):
     materialise(content) into memory or spill   # counts against MaxTotalBytes
 
     isDoc := fmt.Caps().Explodable
-    if fmt implements Container and opts.Recurse and (not isDoc or opts.ExplodeDocuments):
+    if fmt implements Container and not opts.NoRecurse and (not isDoc or opts.ExplodeDocuments):
         for entry in fmt.Entries(content):      # scheduled across file-jobs
             child := newNode(entry)
             node.Children.append(child)

@@ -46,10 +46,59 @@ Start with [`docs/README.md`](docs/README.md). Key documents:
 - [Roadmap](docs/roadmap.md) — phased delivery plan.
 - [ADRs](docs/adr/) — the record of the major architecture decisions.
 
+## Building & running
+
+Requires Go 1.25+ (a `go.work` ties the two modules together).
+
+```sh
+# build everything, run the full test suite (with the race detector)
+go build ./xfileformats/... ./xcrack/...
+go test -race ./xfileformats/... ./xcrack/...
+
+# build the CLI
+go build -o xcrack ./xcrack/cmd/xcrack
+
+# decrypt + recursively decompose an archive, writing the tree to ./out
+./xcrack -p infected -p Welcome1 -w rockyou.txt -o ./out invoice.zip
+
+# detect format / encryption only
+./xcrack identify suspicious.bin
+```
+
+Embedding (the Impex pattern) — see `xcrack/examples/impex-embed`:
+
+```go
+pool := xcrack.NewPool(xcrack.Options{Workers: 4, MaxProcs: 8})
+res, _ := pool.Process(ctx, reader, size,
+    candidates.Chain(candidates.Explicit(emailPasswords...), candidates.DefaultList()))
+res.Root.Walk(func(n *xcrack.Node) { /* scan n.Content ... */ })
+```
+
 ## Status
 
-Pre-implementation. The documentation set is being finalised before the two
-modules are scaffolded and the MVP formats are implemented.
+Early implementation. Documentation set complete; the first vertical slice is
+working end to end.
+
+**Implemented**
+- `xfileformats`: format/registry/challenge core; **ZIP** container with
+  **ZipCrypto** (traditional PKWARE) and **WinZip AES** (AE-1/AE-2, 128/192/256)
+  decryption — verified against known-answer round-trips and the real `zip` CLI.
+- `xcrack` engine: recursive decomposition into a result tree, per-node password
+  **and** content, password promotion, resource budgets (depth / total-bytes /
+  nodes / entry-size) and ancestor-based cycle detection, `recover()` guards on
+  every format call, a concurrent candidate search bounded by a reusable global
+  `Pool`, and `context`/budget cancellation.
+- Candidate sources: explicit, wordlist (+gzip, +stdin), built-in default list,
+  de-duplicating chain, in-memory programmatic injection.
+- CLI (`xcrack`, `identify`, `version`) with text/JSON/JSONL output, tree
+  extraction + `manifest.json`, YAML config, and concurrent multi-file scanning.
+
+**Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
+[docs/roadmap.md](docs/roadmap.md))
+- Formats: OOXML MS Office (agile + standard) and PDF (RC4 / AESV2 / AESV3).
+- The hashcat-compatible mask/rule pattern engine (`--pattern`).
+- Disk-spill for large intermediates; sibling-entry parallelism within one file;
+  `--throttle` / `--max-duration` / `--batch-size`; fuzz + bomb corpora in CI.
 
 ## License
 
