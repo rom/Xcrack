@@ -6,16 +6,16 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
-	"sync"
-	"sync/atomic"
 
+	"github.com/rom/xcrypto"
+	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xfileformats"
 )
 
-// engine carries the per-run configuration and the shared global semaphore.
+// engine carries the per-run configuration and the shared cracking engine.
 type engine struct {
-	opts Options
-	sem  semaphore
+	opts    Options
+	cracker *attack.Engine
 }
 
 // decompose detects, (if needed) decrypts, and recursively decomposes data into
@@ -206,97 +206,20 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 			}
 		}
 	}
-	return e.concurrentSearch(ctx, path, verify, depth, acc, base)
-}
-
-// concurrentSearch tests the base candidate source across up to Workers
-// goroutines, each holding one global-semaphore token, stopping on the first
-// match (StopOnFirst) or when the source, budget, or ctx is exhausted.
-func (e *engine) concurrentSearch(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, acc *accounting, base CandidateSource) (string, bool) {
 	if base == nil {
 		return "", false
 	}
-	if err := base.Reset(); err != nil {
+	probe := func(pw []byte) (bool, error) { return safeVerify(verify, pw) }
+	pw, found, tried, err := e.cracker.Crack(ctx, probe, base)
+	acc.addCandidates(tried)
+	if e.opts.OnProgress != nil {
+		e.opts.OnProgress(Progress{Path: path, CandidatesTried: acc.candidatesTried(), Depth: depth})
+	}
+	if err != nil || !found {
 		return "", false
 	}
-
-	sctx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	feed := make(chan []byte, e.opts.Workers*2)
-	var tried atomic.Int64
-	maxCand := e.opts.Limits.MaxCandidates
-
-	var (
-		once   sync.Once
-		result string
-		found  bool
-		wg     sync.WaitGroup
-	)
-
-	// feeder -- part of the WaitGroup so it is guaranteed to stop touching
-	// `base` before concurrentSearch returns (a subsequent search may Reset it).
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		defer close(feed)
-		for {
-			if sctx.Err() != nil {
-				return
-			}
-			pw, err := base.Next()
-			if err != nil {
-				return
-			}
-			if maxCand > 0 && tried.Load() >= maxCand {
-				return
-			}
-			select {
-			case feed <- pw:
-			case <-sctx.Done():
-				return
-			}
-		}
-	}()
-
-	workers := e.opts.Workers
-	if workers < 1 {
-		workers = 1
-	}
-	for w := 0; w < workers; w++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			if e.sem.acquire(sctx) != nil {
-				return
-			}
-			defer e.sem.release()
-			for pw := range feed {
-				if sctx.Err() != nil {
-					return
-				}
-				n := tried.Add(1)
-				acc.addCandidates(1)
-				if e.opts.OnProgress != nil && n%4096 == 0 {
-					e.opts.OnProgress(Progress{Path: path, CandidatesTried: n, Depth: depth})
-				}
-				ok, err := safeVerify(verify, pw)
-				if err == nil && ok {
-					once.Do(func() {
-						result = string(pw)
-						found = true
-						cancel()
-					})
-					return
-				}
-			}
-		}()
-	}
-	wg.Wait()
-	if found {
-		e.found(path, result)
-	}
-	return result, found
+	e.found(path, string(pw))
+	return string(pw), true
 }
 
 func (e *engine) promote(promoted *[]string, pw string) {
@@ -360,12 +283,12 @@ func readBounded(r io.Reader, max int64) ([]byte, error) {
 
 // --- recover() guards around format calls (hostile-input safety) ---
 
-func safeProbe(enc xfileformats.Encrypted, r io.ReaderAt, size int64) (ch *xfileformats.Challenge, err error) {
+func safeProbe(enc xfileformats.Encrypted, r io.ReaderAt, size int64) (ch *xcrypto.Challenge, err error) {
 	defer guard(&err)
 	return enc.Probe(r, size)
 }
 
-func safeDecrypt(enc xfileformats.Encrypted, r io.ReaderAt, size int64, ch *xfileformats.Challenge, key []byte) (out io.Reader, err error) {
+func safeDecrypt(enc xfileformats.Encrypted, r io.ReaderAt, size int64, ch *xcrypto.Challenge, key []byte) (out io.Reader, err error) {
 	defer guard(&err)
 	return enc.Decrypt(r, size, ch, key)
 }

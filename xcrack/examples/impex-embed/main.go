@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/rom/xcrack/pkg/xcrack"
-	"github.com/rom/xcrack/pkg/xcrack/candidates"
+	"github.com/rom/xcrypto/candidates"
 )
 
 func main() {

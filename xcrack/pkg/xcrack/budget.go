@@ -106,3 +106,10 @@ func clampPositive(v, def int) int {
 }
 
 func numCPU() int { return runtime.NumCPU() }
+
+// candidatesTried returns the running candidate count (safe for concurrent use).
+func (a *accounting) candidatesTried() int64 {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.candidates
+}

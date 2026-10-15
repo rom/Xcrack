@@ -11,18 +11,17 @@ import (
 	"io"
 	"time"
 
+	"github.com/rom/xcrypto/attack"
+	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
-// CandidateSource yields password candidates. Implementations need not be
-// thread-safe; the engine serializes access behind a feeder. The candidates
-// package provides the standard implementations.
-type CandidateSource interface {
-	Next() ([]byte, error)
-	Len() int64
-	Reset() error
-}
+// CandidateSource yields password candidates. It is an alias for the shared
+// candidates.Source so sources from the xcrypto candidates package (and the
+// pattern engine) are accepted directly. Implementations need not be
+// thread-safe; the engine serializes access behind a feeder.
+type CandidateSource = candidates.Source
 
 // Logger is a minimal structured logger. The engine never logs recovered
 // passwords or decrypted content through it.
@@ -136,14 +135,21 @@ func (o *Options) normalize() {
 // global semaphore keeps the total number of live candidate testers at or below
 // MaxProcs regardless of how many files are in flight.
 type Pool struct {
-	opts Options
-	sem  semaphore
+	opts    Options
+	cracker *attack.Engine
 }
 
-// NewPool returns a Pool configured by opts (defaults applied).
+// NewPool returns a Pool configured by opts (defaults applied). The cracking
+// engine's global semaphore keeps the total number of live candidate testers at
+// or below MaxProcs across every concurrent Process call.
 func NewPool(opts Options) *Pool {
 	opts.normalize()
-	return &Pool{opts: opts, sem: newSemaphore(opts.MaxProcs)}
+	cr := attack.New(attack.Options{
+		Workers:       opts.Workers,
+		MaxProcs:      opts.MaxProcs,
+		MaxCandidates: opts.Limits.MaxCandidates,
+	})
+	return &Pool{opts: opts, cracker: cr}
 }
 
 // Close releases the Pool. It is currently a no-op but is part of the stable
@@ -162,7 +168,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	e := &engine{opts: p.opts, sem: p.sem}
+	e := &engine{opts: p.opts, cracker: p.cracker}
 	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
 	if err != nil {
 		return nil, err
@@ -200,28 +206,6 @@ func readAllAt(src io.ReaderAt, size, max int64) ([]byte, error) {
 	}
 	return buf[:n], nil
 }
-
-// --- global semaphore (bounds concurrent candidate testers across the Pool) ---
-
-type semaphore chan struct{}
-
-func newSemaphore(n int) semaphore {
-	if n < 1 {
-		n = 1
-	}
-	return make(semaphore, n)
-}
-
-func (s semaphore) acquire(ctx context.Context) error {
-	select {
-	case s <- struct{}{}:
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-}
-
-func (s semaphore) release() { <-s }
 
 // tighter returns the smaller positive duration of a and b (0 means "no bound").
 func tighter(a, b time.Duration) time.Duration {

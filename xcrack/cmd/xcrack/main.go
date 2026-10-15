@@ -16,7 +16,7 @@ import (
 	"sync"
 
 	"github.com/rom/xcrack/pkg/xcrack"
-	"github.com/rom/xcrack/pkg/xcrack/candidates"
+	"github.com/rom/xcrypto/candidates"
 )
 
 const version = "0.1.0-mvp"

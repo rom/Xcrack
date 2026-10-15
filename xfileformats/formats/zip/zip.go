@@ -1,20 +1,16 @@
 // Package zip implements the ZIP container format for Xfileformats, including
-// decryption of the two encryption schemes found in the wild:
-//
-//   - Traditional PKWARE encryption ("ZipCrypto"), and
-//   - WinZip AES (AE-1 / AE-2), AES-128/192/256.
-//
-// ZIP is modeled as a Container: encryption is per-entry, so each encrypted
-// Entry carries its own Challenge and Verify/Open closures that accept a
-// password. The package never searches for passwords -- that is the caller's
-// job. Container parsing is delegated to the standard library's archive/zip
-// (bounded and well-tested); only the crypto layer is implemented here.
+// the two encryption schemes found in the wild (traditional PKWARE "ZipCrypto"
+// and WinZip AES). Container parsing is delegated to the standard library's
+// archive/zip; all cryptography is delegated to the xcrypto scheme packages.
+// This file only wires the two together: it extracts each entry's crypto
+// parameters and raw bytes, and builds the Verify/Open closures.
 package zip
 
 import (
 	stdzip "archive/zip"
 	"bytes"
 	"compress/flate"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -22,6 +18,9 @@ import (
 	"path"
 	"strings"
 
+	"github.com/rom/xcrypto"
+	"github.com/rom/xcrypto/scheme/winzipaes"
+	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
 )
 
@@ -34,7 +33,7 @@ const (
 	// configurable budget; these only stop a single malformed entry from
 	// exhausting memory at the format layer.
 	maxEntries            = 100_000
-	maxEntryRaw     int64 = 1 << 30 // 1 GiB raw (compressed+encrypted) per entry
+	maxEntryRaw     int64 = 1 << 30 // 1 GiB raw per entry
 	maxDecompressed int64 = 1 << 30 // 1 GiB decompressed per entry
 )
 
@@ -87,7 +86,7 @@ func (f *Format) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 		}
 		name := sanitizePath(zf.Name)
 		if name == "" {
-			continue // unsafe or empty name
+			continue
 		}
 		e, err := f.makeEntry(zf, name)
 		if err != nil {
@@ -100,7 +99,6 @@ func (f *Format) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 
 func (f *Format) makeEntry(zf *stdzip.File, name string) (*xfileformats.Entry, error) {
 	if zf.Flags&0x1 == 0 {
-		// not encrypted: let the standard library handle decompression
 		e := &xfileformats.Entry{Path: name, Size: int64(zf.UncompressedSize64)}
 		e.Open = func(_ []byte) (io.Reader, error) {
 			rc, err := zf.Open()
@@ -113,7 +111,7 @@ func (f *Format) makeEntry(zf *stdzip.File, name string) (*xfileformats.Entry, e
 	}
 	if zf.Method == methodAES {
 		p, ok := parseAESExtra(zf.Extra)
-		if !ok || p.keyLen() == 0 {
+		if !ok || p.KeyLen() == 0 {
 			return nil, xfileformats.ErrUnsupported
 		}
 		return f.makeAESEntry(zf, name, p)
@@ -127,42 +125,29 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 		return nil, xfileformats.ErrUnsupported
 	}
 	crc, flags, dosTime := zf.CRC32, zf.Flags, zf.ModifiedTime
-	ch := &xfileformats.Challenge{
-		Format:            "zip",
-		Method:            "zipcrypto",
-		KDF:               xfileformats.KDFSpec{Algo: "none"},
-		Cipher:            xfileformats.CipherSpec{Algo: "rc4-pkware"},
-		DecryptedSizeHint: int64(zf.UncompressedSize64),
-	}
+	ch := zipcrypto.Challenge(int64(zf.UncompressedSize64))
+
 	decryptPlain := func(password []byte) ([]byte, error) {
 		raw, err := readRawBytes(zf, maxEntryRaw)
 		if err != nil {
 			return nil, err
 		}
-		if len(raw) < pkHeaderLen {
-			return nil, errWrongPassword
+		if flags&0x8 == 0 && !zipcrypto.HeaderOK(password, raw, zipcrypto.CheckByte(flags, crc, dosTime)) {
+			return nil, xcrypto.ErrWrongPassword
 		}
-		// Fast reject on the header check byte (only reliable when not streaming).
-		if flags&0x8 == 0 {
-			if _, ok := zipCryptoHeaderOK(password, raw, flags, crc, dosTime); !ok {
-				return nil, errWrongPassword
-			}
+		payload, err := zipcrypto.Decrypt(password, raw)
+		if err != nil {
+			return nil, err
 		}
-		buf := make([]byte, len(raw))
-		copy(buf, raw)
-		k := newPkKeys(password)
-		k.decrypt(buf)
-		return decompress(buf[pkHeaderLen:], method, int64(zf.UncompressedSize64))
+		return decompress(payload, method)
 	}
 	verify := func(password []byte) (bool, error) {
 		plain, err := decryptPlain(password)
 		if err != nil {
-			// A genuine read error on the source is real; any crypto/decode
-			// failure just means this password is wrong.
 			if errors.Is(err, xfileformats.ErrMalformed) {
-				return false, err
+				return false, err // genuine read error
 			}
-			return false, nil
+			return false, nil // crypto/decode failure => wrong password
 		}
 		return crc32.ChecksumIEEE(plain) == crc, nil
 	}
@@ -172,7 +157,7 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 			return nil, err
 		}
 		if crc32.ChecksumIEEE(plain) != crc {
-			return nil, errWrongPassword
+			return nil, xcrypto.ErrWrongPassword
 		}
 		return bytes.NewReader(plain), nil
 	}
@@ -182,59 +167,43 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 	}, nil
 }
 
-func (f *Format) makeAESEntry(zf *stdzip.File, name string, p aesParams) (*xfileformats.Entry, error) {
-	if p.actualMethod != methodStore && p.actualMethod != methodDeflate {
+func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) (*xfileformats.Entry, error) {
+	if p.ActualMethod != methodStore && p.ActualMethod != methodDeflate {
 		return nil, xfileformats.ErrUnsupported
 	}
-	saltLen := p.saltLen()
 	crc := zf.CRC32
-	ch := &xfileformats.Challenge{
-		Format:            "zip",
-		Method:            p.methodName(),
-		KDF:               xfileformats.KDFSpec{Algo: "pbkdf2-hmac-sha1", Iterations: aesPBKDF2Iter, KeyLen: p.keyLen()},
-		Cipher:            xfileformats.CipherSpec{Algo: "aes-ctr", KeyBits: p.keyLen() * 8},
+	ch := &xcrypto.Challenge{
+		Scheme:            p.SchemeName(),
+		KDF:               xcrypto.KDFSpec{Algo: "pbkdf2-hmac-sha1", Iterations: winzipaes.PBKDF2Iter, KeyLen: p.KeyLen()},
+		Cipher:            xcrypto.CipherSpec{Algo: "aes-ctr", KeyBits: p.KeyLen() * 8},
 		DecryptedSizeHint: int64(zf.UncompressedSize64),
 	}
-	if hdr, err := readRawBytes(zf, int64(saltLen+aesPWVerifLen)); err == nil && len(hdr) >= saltLen+aesPWVerifLen {
-		ch.KDF.Salt = append([]byte(nil), hdr[:saltLen]...)
-		ch.Verifier = append([]byte(nil), hdr[saltLen:saltLen+aesPWVerifLen]...)
-	}
-	split := func() (salt, pwv, ct, mac []byte, err error) {
-		raw, err := readRawBytes(zf, maxEntryRaw)
-		if err != nil {
-			return nil, nil, nil, nil, err
-		}
-		if len(raw) < saltLen+aesPWVerifLen+aesMACLen {
-			return nil, nil, nil, nil, xfileformats.ErrMalformed
-		}
-		salt = raw[:saltLen]
-		pwv = raw[saltLen : saltLen+aesPWVerifLen]
-		ct = raw[saltLen+aesPWVerifLen : len(raw)-aesMACLen]
-		mac = raw[len(raw)-aesMACLen:]
-		return salt, pwv, ct, mac, nil
+	if hdr, err := readRawBytes(zf, int64(p.SaltLen()+winzipaes.PWVerifLen)); err == nil && len(hdr) >= p.SaltLen()+winzipaes.PWVerifLen {
+		ch.KDF.Salt = append([]byte(nil), hdr[:p.SaltLen()]...)
+		ch.Verifier = append([]byte(nil), hdr[p.SaltLen():p.SaltLen()+winzipaes.PWVerifLen]...)
 	}
 	verify := func(password []byte) (bool, error) {
-		salt, pwv, ct, mac, err := split()
+		raw, err := readRawBytes(zf, maxEntryRaw)
 		if err != nil {
 			return false, err
 		}
-		return aesVerify(password, p, salt, pwv, ct, mac)
+		return winzipaes.Verify(password, p, raw)
 	}
 	open := func(password []byte) (io.Reader, error) {
-		salt, pwv, ct, mac, err := split()
+		raw, err := readRawBytes(zf, maxEntryRaw)
 		if err != nil {
 			return nil, err
 		}
-		comp, err := aesDecrypt(password, p, salt, pwv, ct, mac)
+		comp, err := winzipaes.Decrypt(password, p, raw)
 		if err != nil {
 			return nil, err
 		}
-		plain, err := decompress(comp, p.actualMethod, int64(zf.UncompressedSize64))
+		plain, err := decompress(comp, p.ActualMethod)
 		if err != nil {
 			return nil, err
 		}
 		if crc != 0 && crc32.ChecksumIEEE(plain) != crc { // AE-1 carries CRC; AE-2 does not
-			return nil, errWrongPassword
+			return nil, xcrypto.ErrWrongPassword
 		}
 		return bytes.NewReader(plain), nil
 	}
@@ -244,8 +213,34 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p aesParams) (*xfile
 	}, nil
 }
 
-// unsupportedEntry represents an entry we recognized but cannot process, so the
-// caller still sees it in the tree instead of losing it.
+// parseAESExtra scans the raw extra-field blob for the 0x9901 WinZip AES header.
+func parseAESExtra(extra []byte) (winzipaes.Params, bool) {
+	b := extra
+	for len(b) >= 4 {
+		id := binary.LittleEndian.Uint16(b[0:2])
+		sz := int(binary.LittleEndian.Uint16(b[2:4]))
+		if 4+sz > len(b) {
+			return winzipaes.Params{}, false
+		}
+		if id == 0x9901 {
+			if sz < 7 {
+				return winzipaes.Params{}, false
+			}
+			body := b[4 : 4+sz]
+			if binary.LittleEndian.Uint16(body[2:4]) != winzipaes.VendorAE {
+				return winzipaes.Params{}, false
+			}
+			return winzipaes.Params{
+				VendorVer:    binary.LittleEndian.Uint16(body[0:2]),
+				Strength:     body[4],
+				ActualMethod: binary.LittleEndian.Uint16(body[5:7]),
+			}, true
+		}
+		b = b[4+sz:]
+	}
+	return winzipaes.Params{}, false
+}
+
 func unsupportedEntry(zf *stdzip.File, name string, cause error) *xfileformats.Entry {
 	return &xfileformats.Entry{
 		Path:      name,
@@ -268,7 +263,7 @@ func readRawBytes(zf *stdzip.File, limit int64) ([]byte, error) {
 	return out, nil
 }
 
-func decompress(data []byte, method uint16, _ int64) ([]byte, error) {
+func decompress(data []byte, method uint16) ([]byte, error) {
 	switch method {
 	case methodStore:
 		return data, nil
@@ -287,8 +282,6 @@ func decompress(data []byte, method uint16, _ int64) ([]byte, error) {
 
 func sanitizePath(name string) string {
 	name = strings.ReplaceAll(name, "\\", "/")
-	// Force to an absolute path and clean it, which collapses any ".."
-	// components so they cannot escape, then drop the leading slash.
 	cleaned := strings.TrimPrefix(path.Clean("/"+name), "/")
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return ""

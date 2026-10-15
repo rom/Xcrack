@@ -12,8 +12,6 @@ var (
 	// ErrUnsupported indicates a recognized format whose specific variant is not
 	// (yet) supported.
 	ErrUnsupported = errors.New("xfileformats: unsupported variant")
-	// ErrWrongPassword indicates a verifier mismatch for the supplied password.
-	ErrWrongPassword = errors.New("xfileformats: wrong password")
 	// ErrLimitExceeded indicates a safety limit was hit while parsing (e.g. too
 	// many entries, declared size too large).
 	ErrLimitExceeded = errors.New("xfileformats: limit exceeded")

@@ -10,7 +10,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/rom/xcrack/pkg/xcrack/candidates"
+	"github.com/rom/xcrypto/candidates"
 )
 
 func zipBin(t *testing.T) string {

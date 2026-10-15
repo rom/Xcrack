@@ -9,7 +9,11 @@
 // derives keys and moves bytes, which makes it safe to point at hostile input.
 package xfileformats
 
-import "io"
+import (
+	"io"
+
+	"github.com/rom/xcrypto"
+)
 
 // Caps advertises what a Format can do.
 type Caps struct {
@@ -46,16 +50,16 @@ type Encrypted interface {
 	// Probe extracts the verifiable crypto material once, so a caller can test
 	// many candidate passwords cheaply without re-parsing the file. It must be
 	// allocation-bounded and must not trust sizes declared in the input.
-	Probe(r io.ReaderAt, size int64) (*Challenge, error)
+	Probe(r io.ReaderAt, size int64) (*xcrypto.Challenge, error)
 	// Verify tests a single password against a probed Challenge, performing the
 	// (deliberately expensive) KDF and an authoritative verifier check. On
 	// success it returns the derived content key so Decrypt need not re-derive
 	// it. It must be safe to call concurrently for one Challenge.
-	Verify(ch *Challenge, password []byte) (ok bool, key []byte, err error)
+	Verify(ch *xcrypto.Challenge, password []byte) (ok bool, key []byte, err error)
 	// Decrypt streams plaintext given a verified key (or the password, if the
 	// format derives per-call). The returned reader is bounded by the engine's
 	// limits; implementations should not materialize unbounded output.
-	Decrypt(r io.ReaderAt, size int64, ch *Challenge, key []byte) (io.Reader, error)
+	Decrypt(r io.ReaderAt, size int64, ch *xcrypto.Challenge, key []byte) (io.Reader, error)
 }
 
 // Container is implemented by archives and compound files. Its entries may be
@@ -82,7 +86,7 @@ type Entry struct {
 	Encrypted bool
 	// Challenge describes the entry's encryption for reporting and external
 	// testing. Non-nil iff Encrypted.
-	Challenge *Challenge
+	Challenge *xcrypto.Challenge
 	// Verify tests one password against this entry, performing an authoritative
 	// check (not just a fast-reject heuristic). Safe for concurrent use. nil for
 	// unencrypted entries (treat as always-ok).

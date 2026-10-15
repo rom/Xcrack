@@ -4,10 +4,7 @@ import (
 	stdzip "archive/zip"
 	"bytes"
 	"compress/flate"
-	"crypto/aes"
-	"crypto/hmac"
 	"crypto/rand"
-	"crypto/sha1"
 	"encoding/binary"
 	"hash/crc32"
 	"io"
@@ -16,10 +13,12 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/rom/xcrypto/scheme/winzipaes"
+	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
 )
 
-// --- fixture builders (the encrypt side, so tests need no external tools) ---
+// --- fixture builders (use the xcrypto schemes so tests need no external tools) ---
 
 func deflateBytes(t *testing.T, plain []byte) []byte {
 	t.Helper()
@@ -46,54 +45,34 @@ func randBytes(t *testing.T, n int) []byte {
 	return b
 }
 
-// encZipCrypto builds the raw stored bytes for a ZipCrypto deflate entry.
 func encZipCrypto(t *testing.T, password, plain []byte) (raw []byte, crc uint32) {
 	t.Helper()
 	crc = crc32.ChecksumIEEE(plain)
 	comp := deflateBytes(t, plain)
-	hdr := randBytes(t, pkHeaderLen)
-	hdr[pkHeaderLen-1] = byte(crc >> 24) // bit 3 not set => CRC-based check byte
-	buf := append(hdr, comp...)
-	k := newPkKeys(password)
-	k.encrypt(buf)
-	return buf, crc
+	hdr11 := randBytes(t, zipcrypto.HeaderLen-1)
+	return zipcrypto.EncryptRaw(password, hdr11, byte(crc>>24), comp), crc
 }
 
-func aesExtra(p aesParams) []byte {
+func aesExtra(p winzipaes.Params) []byte {
 	e := make([]byte, 0, 11)
 	e = binary.LittleEndian.AppendUint16(e, 0x9901)
 	e = binary.LittleEndian.AppendUint16(e, 7)
-	e = binary.LittleEndian.AppendUint16(e, p.vendorVer)
-	e = binary.LittleEndian.AppendUint16(e, aesVendorAE)
-	e = append(e, p.strength)
-	e = binary.LittleEndian.AppendUint16(e, p.actualMethod)
+	e = binary.LittleEndian.AppendUint16(e, p.VendorVer)
+	e = binary.LittleEndian.AppendUint16(e, winzipaes.VendorAE)
+	e = append(e, p.Strength)
+	e = binary.LittleEndian.AppendUint16(e, p.ActualMethod)
 	return e
 }
 
-// encWinZipAES builds the raw stored bytes for a WinZip AES (AE-2) deflate entry.
-func encWinZipAES(t *testing.T, password, plain []byte, strength byte) (raw []byte, p aesParams) {
+func encWinZipAES(t *testing.T, password, plain []byte, strength byte) (raw []byte, p winzipaes.Params) {
 	t.Helper()
-	p = aesParams{strength: strength, actualMethod: methodDeflate, vendorVer: 2}
+	p = winzipaes.Params{Strength: strength, ActualMethod: methodDeflate, VendorVer: 2}
 	comp := deflateBytes(t, plain)
-	salt := randBytes(t, p.saltLen())
-	encKey, authKey, pwv, err := aesDerive(password, salt, p.keyLen())
+	salt := randBytes(t, p.SaltLen())
+	raw, err := winzipaes.EncryptRaw(password, p, salt, comp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	block, err := aes.NewCipher(encKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ct := make([]byte, len(comp))
-	copy(ct, comp)
-	aesCTRXor(block, ct)
-	m := hmac.New(sha1.New, authKey)
-	m.Write(ct)
-	mac := m.Sum(nil)[:aesMACLen]
-	raw = append([]byte{}, salt...)
-	raw = append(raw, pwv...)
-	raw = append(raw, ct...)
-	raw = append(raw, mac...)
 	return raw, p
 }
 
@@ -224,7 +203,8 @@ func TestZipCryptoRoundTrip(t *testing.T) {
 func TestWinZipAESRoundTrip(t *testing.T) {
 	for _, strength := range []byte{1, 3} { // AES-128 and AES-256
 		strength := strength
-		t.Run(aesParams{strength: strength}.methodName(), func(t *testing.T) {
+		p := winzipaes.Params{Strength: strength}
+		t.Run(p.SchemeName(), func(t *testing.T) {
 			password := []byte("Welcome1")
 			plain := bytes.Repeat([]byte("nested-secret-"), 40)
 			data := buildWinZipAES(t, password, strength, []fixtureFile{{"doc.bin", plain}})
@@ -234,7 +214,6 @@ func TestWinZipAESRoundTrip(t *testing.T) {
 }
 
 func TestEmptyPasswordAndStored(t *testing.T) {
-	// empty-password ZipCrypto (common in malware) and a stored (uncompressed) entry
 	password := []byte("")
 	plain := []byte("x")
 	data := buildZipCrypto(t, password, []fixtureFile{{"a.txt", plain}})
@@ -285,18 +264,15 @@ func TestSanitizePath(t *testing.T) {
 }
 
 func TestMixedEntries(t *testing.T) {
-	// one encrypted, one plaintext, in the same archive
 	password := []byte("pw")
 	var b bytes.Buffer
 	zw := stdzip.NewWriter(&b)
-	// plaintext entry via normal Create
 	w, err := zw.Create("clear.txt")
 	if err != nil {
 		t.Fatal(err)
 	}
 	clearPlain := []byte("in the clear")
 	w.Write(clearPlain)
-	// encrypted entry via CreateRaw
 	enc := []byte("secret content")
 	raw, crc := encZipCrypto(t, password, enc)
 	fh := &stdzip.FileHeader{Name: "secret.txt", Method: stdzip.Deflate}
