@@ -16,6 +16,7 @@ import (
 type engine struct {
 	opts    Options
 	cracker *attack.Engine
+	spill   *spillSet
 }
 
 // decompose detects, (if needed) decrypts, and recursively decomposes data into
@@ -58,7 +59,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if err != nil {
 		// unknown format => plaintext leaf
 		n.Status = StatusPlain
-		n.Content = newMemContent(data)
+		n.Content = e.spill.materialize(data)
 		return n
 	}
 	n.Format = fm.Name()
@@ -138,7 +139,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if !n.WasEncrypted {
 		n.Status = StatusPlain
 	}
-	n.Content = newMemContent(data)
+	n.Content = e.spill.materialize(data)
 	return n
 }
 

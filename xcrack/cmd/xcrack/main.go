@@ -283,6 +283,7 @@ func render(files []string, results []*xcrack.Result, errs []error, outFormat, o
 				f.Close()
 			}
 		}
+		res.Close() // release any disk-spilled intermediates
 	}
 	if exit == 2 {
 		return 2

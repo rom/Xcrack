@@ -170,7 +170,8 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	e := &engine{opts: p.opts, cracker: p.cracker}
+	spill := newSpillSet(p.opts.Limits.SpillThreshold, p.opts.Limits.TempDir)
+	e := &engine{opts: p.opts, cracker: p.cracker, spill: spill}
 	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
 	if err != nil {
 		return nil, err
@@ -180,7 +181,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	root := e.decompose(ctx, "", data, 0, nil, &promoted, acc, candidates)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
-	return &Result{Root: root, Stats: stats}, nil
+	return &Result{Root: root, Stats: stats, spills: spill}, nil
 }
 
 // Process is the one-shot convenience entry point: it builds a single-use Pool,
