@@ -58,33 +58,57 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		return n
 	}
 
-	fm, err := e.opts.Registry.Detect(peek(data))
-	if err != nil {
-		// unknown format => plaintext leaf
+	// Select a format. Several formats can claim the same magic -- notably the
+	// CFB/OLE2 compound-file signature, shared by encrypted OOXML and the legacy
+	// .doc/.xls/.ppt binaries -- so we try detection candidates in confidence
+	// order and let one decline (ErrUnsupported) so the next can handle the file.
+	var (
+		fm        xfileformats.Format
+		caps      xfileformats.Caps
+		ch        *xcrypto.Challenge
+		enc       xfileformats.Encrypted
+		encrypted bool
+	)
+	for _, cand := range e.opts.Registry.DetectAll(peek(data)) {
+		cc := cand.Caps()
+		if ce, ok := cand.(xfileformats.Encrypted); ok && cc.Encrypted {
+			c, perr := safeProbe(ce, bytes.NewReader(data), int64(len(data)))
+			if perr != nil {
+				if errors.Is(perr, xfileformats.ErrUnsupported) || errors.Is(perr, xfileformats.ErrUnknownFormat) {
+					continue // recognizes the magic but not this file; try next
+				}
+				n.Format = cand.Name()
+				if errors.Is(perr, xfileformats.ErrNotEncrypted) {
+					// recognized but plaintext: a plain leaf.
+					n.Status = StatusPlain
+					n.Content = e.spill.materialize(data)
+					return n
+				}
+				n.Status = StatusError
+				n.Err = perr
+				return n
+			}
+			fm, caps, ch, enc, encrypted = cand, cc, c, ce, true
+			break
+		}
+		// A container (or a format with neither capability) binds without a
+		// probe; the container branch below validates it and can fall back to a
+		// leaf if it declines.
+		fm, caps = cand, cc
+		break
+	}
+	if fm == nil {
+		// Unknown format, or every encrypted candidate declined => plaintext leaf.
 		n.Status = StatusPlain
 		n.Content = e.spill.materialize(data)
 		return n
 	}
 	n.Format = fm.Name()
-	caps := fm.Caps()
 
 	// Whole-file encryption (e.g. an encrypted OOXML/PDF wrapper). ZIP is NOT
 	// handled here -- its encryption is per-entry (see the Container branch).
-	if enc, ok := fm.(xfileformats.Encrypted); ok && caps.Encrypted {
+	if encrypted {
 		ra := bytes.NewReader(data)
-		ch, perr := safeProbe(enc, ra, int64(len(data)))
-		if perr != nil {
-			// A format that is recognized but turns out not to be encrypted
-			// falls through to a plain leaf; anything else is a per-node error.
-			if errors.Is(perr, xfileformats.ErrNotEncrypted) {
-				n.Status = StatusPlain
-				n.Content = e.spill.materialize(data)
-				return n
-			}
-			n.Status = StatusError
-			n.Err = perr
-			return n
-		}
 		verify := func(pw []byte) (bool, error) {
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
@@ -130,6 +154,16 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if cont, ok := fm.(xfileformats.Container); ok && caps.Container && !e.opts.NoRecurse && (!caps.Explodable || e.opts.ExplodeDocuments) {
 		entries, eerr := safeEntries(cont, bytes.NewReader(data), int64(len(data)))
 		if eerr != nil {
+			// A container that recognizes the magic but not this specific file
+			// (e.g. an OLE2 compound file that is neither encrypted OOXML nor a
+			// legacy Office binary) falls back to a plain leaf rather than erroring.
+			if errors.Is(eerr, xfileformats.ErrUnsupported) || errors.Is(eerr, xfileformats.ErrUnknownFormat) || errors.Is(eerr, xfileformats.ErrNotEncrypted) {
+				if !n.WasEncrypted {
+					n.Status = StatusPlain
+				}
+				n.Content = e.spill.materialize(data)
+				return n
+			}
 			if !n.WasEncrypted {
 				n.Format = fm.Name()
 			}

@@ -32,8 +32,8 @@ callable both as a Go library (as Impex will) and from the CLI.*
 3. **PDF** — RC4 40/128-bit, AESV2 (128), AESV3 (256); user **and** owner password.
 
 > Legacy MS Office, ODF, and the remaining archive formats (tar/gzip/bzip2/xz/
-> 7z/rar/eml) are **post-MVP** ([roadmap](roadmap.md)), but the interfaces and
-> the registry are designed for them now.
+> 7z/rar/eml) were **post-MVP** ([roadmap](roadmap.md)); the interfaces and the
+> registry were designed for them, and they have since all landed in Phase 2.
 
 ### Container / recursion
 - ZIP unpacking and **recursive decomposition** across ZIP layers (and into

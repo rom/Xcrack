@@ -38,6 +38,20 @@ func (r *Registry) Formats() []Format {
 // for peek, or ErrUnknownFormat if none claims it. Ties are broken by
 // registration order (earlier wins) for determinism.
 func (r *Registry) Detect(peek []byte) (Format, error) {
+	all := r.DetectAll(peek)
+	if len(all) == 0 {
+		return nil, ErrUnknownFormat
+	}
+	return all[0], nil
+}
+
+// DetectAll returns every registered format that claims peek, ranked by
+// detection confidence (highest first); ties are broken by registration order
+// (earlier wins) for determinism. It lets a caller fall back to the next
+// candidate when the top one recognizes the magic but then declines the file
+// (e.g. several formats share the CFB/OLE2 container signature). The slice is
+// empty if none claims the stream.
+func (r *Registry) DetectAll(peek []byte) []Format {
 	type scored struct {
 		f    Format
 		conf float64
@@ -50,16 +64,17 @@ func (r *Registry) Detect(peek []byte) (Format, error) {
 			matches = append(matches, scored{f, conf, i})
 		}
 	}
-	if len(matches) == 0 {
-		return nil, ErrUnknownFormat
-	}
 	sort.SliceStable(matches, func(i, j int) bool {
 		if matches[i].conf != matches[j].conf {
 			return matches[i].conf > matches[j].conf
 		}
 		return matches[i].idx < matches[j].idx
 	})
-	return matches[0].f, nil
+	out := make([]Format, len(matches))
+	for i, m := range matches {
+		out[i] = m.f
+	}
+	return out
 }
 
 // safeDetect runs a format's Detect with a recover() guard: a panic in a

@@ -14,6 +14,7 @@ pkgs=(
   ./xfileformats/formats/pdf
   ./xfileformats/formats/archive
   ./xfileformats/formats/odf
+  ./xfileformats/formats/msoffice
   ./xcrack/pkg/xcrack
 )
 fail=0

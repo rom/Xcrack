@@ -100,12 +100,22 @@ type Registry struct { /* ... */ }
 func NewRegistry() *Registry
 func (r *Registry) Register(f Format)
 func (r *Registry) Detect(peek []byte) (Format, error) // best-confidence match
+func (r *Registry) DetectAll(peek []byte) []Format      // all matches, ranked
 
 // A default registry is populated by the formats/* packages via their
 // Register(reg) constructors. Callers that want determinism/isolation build
 // their own Registry and register only the formats they trust.
 func Default() *Registry
 ```
+
+Some magics are shared by more than one format — notably the **CFB/OLE2**
+compound-file signature, claimed by both the encrypted-OOXML format and the
+legacy `.doc/.xls/.ppt` (`msoffice`) format. `DetectAll` returns every match in
+confidence order so the engine can try candidates in turn: a whole-file format
+that recognizes the magic but declines the specific file (`ErrUnsupported`)
+yields to the next candidate, and a container that declines falls back to a
+plain leaf. `ooxml` is registered before `msoffice`, so an encrypted OOXML
+wrapper is probed first and the legacy binaries are handled on fallback.
 
 Formats are registered **explicitly** by constructor (`zipcrypto.Register(reg)`)
 rather than by `init()` side effects, so a consumer controls exactly which

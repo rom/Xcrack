@@ -94,8 +94,8 @@ knowledge; zero third-party dependencies.
   Office agile & standard iterated-hash key derivation, UTF-16LE, constant-time
   compare.
 - **scheme/** — concrete schemes (`zipcrypto`, `winzipaes`, `ooxml` agile +
-  standard, `pdf` RC4/AESV2/AESV3, `odf` AES-256-CBC), each turning
-  parameters + password into verify/decrypt.
+  standard, `pdf` RC4/AESV2/AESV3, `odf` AES-256-CBC, `officebinary` legacy
+  Office RC4/XOR), each turning parameters + password into verify/decrypt.
 - **candidates** — candidate sources (explicit, wordlist, default list, chain).
 - **pattern** — hashcat-compatible mask + mangling-rule candidate generation.
 - **attack** — the crypto/cracking engine: a concurrent search over a `Probe`
@@ -156,7 +156,8 @@ xcrypto/
 │   ├─ winzipaes/     ✓ WinZip AES AE-1/AE-2 (128/192/256)
 │   ├─ ooxml/         ✓ MS Office agile + standard
 │   ├─ pdf/           ✓ RC4 40/128, AESV2-128, AESV3-256 (R2-R6, user+owner)
-│   └─ odf/           ✓ ODF AES-256-CBC (PBKDF2-HMAC-SHA1 + SHA-256/SHA-1 start key)
+│   ├─ odf/           ✓ ODF AES-256-CBC (PBKDF2-HMAC-SHA1 + SHA-256/SHA-1 start key)
+│   └─ officebinary/  ✓ legacy Office: RC4 CryptoAPI · Office 97/2000 RC4 · XOR
 ├─ candidates/        ✓ explicit · wordlist(+gzip,+stdin) · default list · chain
 ├─ pattern/           ✓ hashcat masks (?l?u?d?s?a?b, ?1-?4) + mangling rules + DSL
 └─ attack/            ✓ concurrent search over a Probe + Source, global semaphore
@@ -176,7 +177,7 @@ xfileformats/
 │   ├─ pdf/           ✓ encrypted PDF (parse /Encrypt+/ID; rebuild decrypted)
 │   ├─ odf/           ✓ encrypted ODF (AES-256-CBC; Blowfish-CFB detected→unsupported)
 │   ├─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
-│   └─ msoffice/      ◦ legacy .doc/.xls/.ppt (CryptoAPI/RC4) — not yet built
+│   └─ msoffice/      ✓ legacy .doc/.xls/.ppt (RC4 CryptoAPI / RC4 97-2000 / XOR)
 └─ internal/cfb/      ✓ bounded OLE2 / compound-file reader (+ writer for fixtures)
 ```
 
