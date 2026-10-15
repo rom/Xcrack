@@ -1,12 +1,14 @@
 # Xcrack — MVP Definition
 
-> **Status (implementation in progress).** The reusable crypto/cracking module
-> (Xcrypto), ZIP (ZipCrypto + WinZip AES), **OOXML MS Office (agile + standard)**,
-> the **hashcat-compatible pattern engine**, recursive decomposition, the result
-> tree, budgets, and the CLI are **implemented and tested**. Still outstanding
-> for the MVP: **PDF**, disk-spill for large intermediates, sibling-entry
-> parallelism, and the fuzz/bomb CI corpora. See the repository README's Status
-> section for the live checklist.
+> **Status: MVP complete.** The reusable crypto/cracking module (Xcrypto), ZIP
+> (ZipCrypto + WinZip AES), **OOXML MS Office (agile + standard)**, **PDF**
+> (RC4/AESV2/AESV3), the **hashcat-compatible pattern engine**, **disk-spill**,
+> **fuzz + bomb corpora with CI**, **two-axis concurrency (parallel sibling
+> entries)**, recursive decomposition, the result tree, budgets, and the CLI are
+> **implemented and tested**. PDF is now **cross-validated in CI against the real
+> `qpdf` encoder** (RC4-40/128, AES-128, AES-256), closing the last MVP gap.
+> Phase-2 breadth (ODF + archive unpackers incl. 7z/rar) has also landed; see the
+> repository README's Status section for the live checklist.
 
 The MVP proves the architecture end-to-end on a vertical slice: the standalone
 **Xfileformats** library, the **Xcrack** engine with recursion and the two-axis

@@ -1,0 +1,2 @@
+go test fuzz v1
+[]byte("%PDF- 6 0 obj<</R 1>>/Encrypt6 0 R0")

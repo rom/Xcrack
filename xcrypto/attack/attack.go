@@ -13,6 +13,7 @@ import (
 	"context"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // Source yields password candidates. It need not be safe for concurrent use;
@@ -35,13 +36,22 @@ type Options struct {
 	MaxProcs      int   // global ceiling on concurrent testers (0 => Workers)
 	MaxCandidates int64 // cap per Crack call (0 => unlimited)
 	// OnProgress, if set, is called periodically with the running count tried.
-	OnProgress func(tried int64)
+	// BatchSize is how many candidates a worker takes per channel hand-off; it
+	// amortizes channel overhead for cheap KDFs (0 => 1).
+	BatchSize int
+	// ThrottlePercent approximates a CPU duty cycle in 1..99 (0 or 100 => no
+	// throttle): a worker runs for its batch, then sleeps proportionally so its
+	// active fraction is about ThrottlePercent/100.
+	ThrottlePercent int
+	OnProgress      func(tried int64)
 }
 
 // Engine runs password searches under a shared global semaphore.
 type Engine struct {
 	workers  int
 	maxCand  int64
+	batch    int
+	throttle int
 	progress func(int64)
 	sem      chan struct{}
 }
@@ -57,9 +67,15 @@ func New(o Options) *Engine {
 	if mp < w {
 		mp = w
 	}
+	batch := o.BatchSize
+	if batch < 1 {
+		batch = 1
+	}
 	return &Engine{
 		workers:  w,
 		maxCand:  o.MaxCandidates,
+		batch:    batch,
+		throttle: o.ThrottlePercent,
 		progress: o.OnProgress,
 		sem:      make(chan struct{}, mp),
 	}
@@ -93,7 +109,7 @@ func (e *Engine) Crack(ctx context.Context, probe Probe, src Source) (password [
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	feed := make(chan []byte, e.workers*2)
+	feed := make(chan [][]byte, e.workers*2)
 	var triedN atomic.Int64
 
 	var (
@@ -109,21 +125,39 @@ func (e *Engine) Crack(ctx context.Context, probe Probe, src Source) (password [
 	go func() {
 		defer wg.Done()
 		defer close(feed)
+		batch := make([][]byte, 0, e.batch)
+		flush := func() bool {
+			if len(batch) == 0 {
+				return true
+			}
+			b := batch
+			batch = make([][]byte, 0, e.batch)
+			select {
+			case feed <- b:
+				return true
+			case <-sctx.Done():
+				return false
+			}
+		}
 		for {
 			if sctx.Err() != nil {
 				return
 			}
 			pw, nerr := src.Next()
 			if nerr != nil {
+				flush()
 				return
 			}
 			if e.maxCand > 0 && triedN.Load() >= e.maxCand {
+				flush()
 				return
 			}
-			select {
-			case feed <- pw:
-			case <-sctx.Done():
-				return
+			// copy: a source may reuse its buffer across Next calls
+			batch = append(batch, append([]byte(nil), pw...))
+			if len(batch) >= e.batch {
+				if !flush() {
+					return
+				}
 			}
 		}
 	}()
@@ -136,26 +170,34 @@ func (e *Engine) Crack(ctx context.Context, probe Probe, src Source) (password [
 				return
 			}
 			defer e.release()
-			for pw := range feed {
-				if sctx.Err() != nil {
-					return
+			for batch := range feed {
+				start := time.Now()
+				for _, pw := range batch {
+					if sctx.Err() != nil {
+						return
+					}
+					n := triedN.Add(1)
+					if e.progress != nil && n%4096 == 0 {
+						e.progress(n)
+					}
+					ok, verr := probe(pw)
+					if verr != nil {
+						once.Do(func() { perr = verr; cancel() })
+						return
+					}
+					if ok {
+						once.Do(func() {
+							result = append([]byte(nil), pw...)
+							hit = true
+							cancel()
+						})
+						return
+					}
 				}
-				n := triedN.Add(1)
-				if e.progress != nil && n%4096 == 0 {
-					e.progress(n)
-				}
-				ok, verr := probe(pw)
-				if verr != nil {
-					once.Do(func() { perr = verr; cancel() })
-					return
-				}
-				if ok {
-					once.Do(func() {
-						result = append([]byte(nil), pw...)
-						hit = true
-						cancel()
-					})
-					return
+				if e.throttle > 0 && e.throttle < 100 {
+					if work := time.Since(start); work > 0 {
+						time.Sleep(work * time.Duration(100-e.throttle) / time.Duration(e.throttle))
+					}
 				}
 			}
 		}()

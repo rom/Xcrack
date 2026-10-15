@@ -14,7 +14,10 @@ import (
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
+	"github.com/rom/xfileformats/formats/archive"
+	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
+	"github.com/rom/xfileformats/formats/pdf"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -60,8 +63,10 @@ type Found struct {
 // the library and CLI have identical capability (CON-3).
 type Options struct {
 	Workers         int // candidate-test goroutines within one file (0 => NumCPU)
-	FileConcurrency int // reserved for sibling-entry parallelism (phase 2)
+	FileConcurrency int // container entries processed concurrently (0 => NumCPU; set 1 to disable)
 	MaxProcs        int // global ceiling on concurrent candidate testers (0 => NumCPU)
+	BatchSize       int // candidates per worker hand-off (0 => 1); amortizes channel overhead
+	ThrottlePercent int // approximate CPU duty cycle 1..99 (0/100 => no throttle)
 
 	// Behavior toggles are phrased so the zero value is the sensible default:
 	// the engine recurses, promotes passwords, and stops on the first match
@@ -99,6 +104,9 @@ func DefaultRegistry() *xfileformats.Registry {
 	r := xfileformats.NewRegistry()
 	zip.Register(r)
 	ooxml.Register(r)
+	pdf.Register(r)
+	odf.Register(r)
+	archive.Register(r)
 	return r
 }
 
@@ -147,9 +155,11 @@ type Pool struct {
 func NewPool(opts Options) *Pool {
 	opts.normalize()
 	cr := attack.New(attack.Options{
-		Workers:       opts.Workers,
-		MaxProcs:      opts.MaxProcs,
-		MaxCandidates: opts.Limits.MaxCandidates,
+		Workers:         opts.Workers,
+		MaxProcs:        opts.MaxProcs,
+		MaxCandidates:   opts.Limits.MaxCandidates,
+		BatchSize:       opts.BatchSize,
+		ThrottlePercent: opts.ThrottlePercent,
 	})
 	return &Pool{opts: opts, cracker: cr}
 }
@@ -170,17 +180,18 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		ctx, cancel = context.WithTimeout(ctx, d)
 		defer cancel()
 	}
-	e := &engine{opts: p.opts, cracker: p.cracker}
+	spill := newSpillSet(p.opts.Limits.SpillThreshold, p.opts.Limits.TempDir)
+	e := &engine{opts: p.opts, cracker: p.cracker, spill: spill}
 	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
 	if err != nil {
 		return nil, err
 	}
 	acc := newAccounting(p.opts.Limits)
-	var promoted []string
-	root := e.decompose(ctx, "", data, 0, nil, &promoted, acc, candidates)
+	prom := newPromoter(!p.opts.NoPromote)
+	root := e.decompose(ctx, "", data, 0, nil, prom, acc, candidates)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
-	return &Result{Root: root, Stats: stats}, nil
+	return &Result{Root: root, Stats: stats, spills: spill}, nil
 }
 
 // Process is the one-shot convenience entry point: it builds a single-use Pool,

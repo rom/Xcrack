@@ -73,9 +73,9 @@ Across **three** Go modules, each lower one reusable on its own (see
           imports    │                                         imports    │
                      ▼                                                    ▼
 ┌──── module: github.com/rom/xfileformats ────┐      ┌──── module: github.com/rom/xcrypto ─────────┐
-│ Registry · Detector · Format plugins        │────▶ │ prim (PBKDF2/AES/RC4/Office hash) ·          │
-│ (ZIP, OOXML/CFB) · Probe → xcrypto.Challenge │ uses │ scheme/* (zipcrypto, winzipaes, ooxml) ·     │
-│ · Entries   — parsing only, policy-free      │      │ candidates · pattern · attack (search engine)│
+│ Registry · Detector · Format plugins (ZIP,  │────▶ │ prim (PBKDF2/AES/RC4/Office hash) ·          │
+│ OOXML/CFB, PDF, ODF, archives) · Probe →     │ uses │ scheme/* (zipcrypto, winzipaes, ooxml, pdf, │
+│ xcrypto.Challenge · Entries — policy-free    │      │ odf) · candidates · pattern · attack         │
 └─────────────────────────────────────────────┘      └──────────────────────────────────────────────┘
 ```
 
@@ -94,7 +94,8 @@ knowledge; zero third-party dependencies.
   Office agile & standard iterated-hash key derivation, UTF-16LE, constant-time
   compare.
 - **scheme/** — concrete schemes (`zipcrypto`, `winzipaes`, `ooxml` agile +
-  standard), each turning parameters + password into verify/decrypt.
+  standard, `pdf` RC4/AESV2/AESV3, `odf` AES-256-CBC), each turning
+  parameters + password into verify/decrypt.
 - **candidates** — candidate sources (explicit, wordlist, default list, chain).
 - **pattern** — hashcat-compatible mask + mangling-rule candidate generation.
 - **attack** — the crypto/cracking engine: a concurrent search over a `Probe`
@@ -154,7 +155,8 @@ xcrypto/
 │   ├─ zipcrypto/     ✓ traditional PKWARE
 │   ├─ winzipaes/     ✓ WinZip AES AE-1/AE-2 (128/192/256)
 │   ├─ ooxml/         ✓ MS Office agile + standard
-│   └─ pdf/           ◦ RC4 40/128, AESV2-128, AESV3-256
+│   ├─ pdf/           ✓ RC4 40/128, AESV2-128, AESV3-256 (R2-R6, user+owner)
+│   └─ odf/           ✓ ODF AES-256-CBC (PBKDF2-HMAC-SHA1 + SHA-256/SHA-1 start key)
 ├─ candidates/        ✓ explicit · wordlist(+gzip,+stdin) · default list · chain
 ├─ pattern/           ✓ hashcat masks (?l?u?d?s?a?b, ?1-?4) + mangling rules + DSL
 └─ attack/            ✓ concurrent search over a Probe + Source, global semaphore
@@ -171,10 +173,10 @@ xfileformats/
 ├─ formats/
 │   ├─ zip/           ✓ ZIP container; per-entry ZipCrypto/WinZip-AES (via xcrypto)
 │   ├─ ooxml/         ✓ encrypted MS Office (CFB-wrapped; crypto via xcrypto)
-│   ├─ pdf/           ◦ PDF encryption dictionary
-│   ├─ msoffice/      ◦ legacy .doc/.xls/.ppt (CryptoAPI/RC4)
-│   ├─ odf/           ◦ ODF (Blowfish-CFB legacy, AES-GCM modern)
-│   └─ archive/       ◦ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
+│   ├─ pdf/           ✓ encrypted PDF (parse /Encrypt+/ID; rebuild decrypted)
+│   ├─ odf/           ✓ encrypted ODF (AES-256-CBC; Blowfish-CFB detected→unsupported)
+│   ├─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
+│   └─ msoffice/      ◦ legacy .doc/.xls/.ppt (CryptoAPI/RC4) — not yet built
 └─ internal/cfb/      ✓ bounded OLE2 / compound-file reader (+ writer for fixtures)
 ```
 
@@ -191,7 +193,7 @@ pkg/xcrack/
 ├─ node.go            ✓ Node, Result, per-node status/error, ContentRef
 ├─ budget.go          ✓ Budget + Limits accounting (depth, bytes, nodes, time)
 ├─ cmd/xcrack/        ✓ CLI: flags/config/output (text/json/jsonl), manifest
-└─ store (spill)      ◦ disk-spill for large intermediates (memory-backed today)
+└─ node.go spill      ✓ disk-spill for large intermediates (threshold-gated)
 ```
 
 ## 4. Runtime views

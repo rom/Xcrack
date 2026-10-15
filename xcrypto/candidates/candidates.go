@@ -22,6 +22,14 @@ type Source interface {
 	Reset() error
 }
 
+// Cloner is an optional capability: a Source that can produce an independent
+// fresh copy of itself, so two consumers can iterate concurrently without
+// sharing mutable state. CloneSource returns nil if the source cannot be cloned
+// (e.g. a one-shot stdin stream). The engine uses this to parallelize work.
+type Cloner interface {
+	CloneSource() Source
+}
+
 // --- explicit, in-memory list (also used for --password and programmatic injection) ---
 
 type sliceSource struct {
@@ -57,19 +65,23 @@ func (s *sliceSource) Next() ([]byte, error) {
 func (s *sliceSource) Len() int64   { return int64(len(s.items)) }
 func (s *sliceSource) Reset() error { s.i = 0; return nil }
 
+// CloneSource returns a fresh iterator over the same (immutable) items.
+func (s *sliceSource) CloneSource() Source { return &sliceSource{items: s.items} }
+
 // --- wordlist reader (line-delimited; gzip auto-detected) ---
 
 type readerSource struct {
-	open func() (io.ReadCloser, error)
-	rc   io.ReadCloser
-	sc   *bufio.Scanner
+	open      func() (io.ReadCloser, error)
+	cloneable bool
+	rc        io.ReadCloser
+	sc        *bufio.Scanner
 }
 
 // Reader returns a Source over newline-delimited candidates read from the
 // stream produced by open. open is called on first use and on Reset so the
 // source can be re-iterated.
 func Reader(open func() (io.ReadCloser, error)) Source {
-	return &readerSource{open: open}
+	return &readerSource{open: open, cloneable: true}
 }
 
 // File returns a Source over a wordlist file, decompressing transparently if it
@@ -153,10 +165,22 @@ func (s *readerSource) Reset() error {
 	return nil
 }
 
+// CloneSource returns a fresh reader over the same underlying source if it can
+// be re-opened (e.g. a file), or nil for a one-shot stream (e.g. stdin).
+func (s *readerSource) CloneSource() Source {
+	if !s.cloneable {
+		return nil
+	}
+	return &readerSource{open: s.open, cloneable: true}
+}
+
 // Stdin returns a Source over newline-delimited candidates from standard input.
 // It cannot be re-iterated; Reset is a no-op after the first pass.
 func Stdin() Source {
-	return Reader(func() (io.ReadCloser, error) { return io.NopCloser(os.Stdin), nil })
+	return &readerSource{
+		open:      func() (io.ReadCloser, error) { return io.NopCloser(os.Stdin), nil },
+		cloneable: false,
+	}
 }
 
 // --- built-in default list (passwords common in malware campaigns) ---
@@ -234,4 +258,21 @@ func (c *chainSource) Reset() error {
 		}
 	}
 	return nil
+}
+
+// CloneSource clones the chain only if every member can be cloned.
+func (c *chainSource) CloneSource() Source {
+	clones := make([]Source, len(c.sources))
+	for i, s := range c.sources {
+		cl, ok := s.(Cloner)
+		if !ok {
+			return nil
+		}
+		cs := cl.CloneSource()
+		if cs == nil {
+			return nil
+		}
+		clones[i] = cs
+	}
+	return Chain(clones...)
 }

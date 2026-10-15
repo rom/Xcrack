@@ -1,5 +1,6 @@
-# Binaries
-/xcrack
+# Binaries (the CLI builds to an explicit path; the module dir is `xcrack/`, so
+# never ignore a bare `xcrack` here -- that would exclude the module).
+/xcrack-bin
 *.exe
 *.test
 *.out

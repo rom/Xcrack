@@ -30,13 +30,16 @@ one is reusable on its own:
 /
 ├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
 │    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
-│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard)
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard) · pdf · odf
 │    ├─ candidates/         candidate sources
 │    ├─ pattern/            hashcat-compatible masks + rules
 │    └─ attack/             concurrent password-search engine
 ├─ xfileformats/            module github.com/rom/xfileformats  (parse + detect)
 │    ├─ formats/zip         ZIP container (per-entry encryption)
 │    ├─ formats/ooxml       encrypted MS Office (CFB-wrapped)
+│    ├─ formats/pdf         encrypted PDF (rebuild a decrypted copy)
+│    ├─ formats/odf         encrypted LibreOffice/OpenOffice (ODF)
+│    ├─ formats/archive     tar · gzip · bzip2 · xz · 7z · rar · MIME (.eml)
 │    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
 │    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool
@@ -91,29 +94,49 @@ Early but working end to end across all three modules.
 **Implemented**
 - `xcrypto` (crypto + cracking engine): primitives (PBKDF2, AES-CTR/CBC/ECB,
   RC4, Office agile/standard key derivation); schemes **ZipCrypto**, **WinZip
-  AES** (AE-1/AE-2, 128/192/256), and **OOXML agile + standard**; candidate
-  sources; a **hashcat-compatible pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4,
-  and a practical rule subset); and the concurrent, globally-bounded **attack**
-  search engine. Zero third-party deps.
+  AES** (AE-1/AE-2, 128/192/256), **OOXML agile + standard**, and **PDF** (RC4 /
+  AESV2 / AESV3, R2-R6, user + owner); candidate sources; a **hashcat-compatible
+  pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4, and a practical rule subset);
+  and the concurrent, globally-bounded **attack** search engine. Zero
+  third-party deps.
 - `xfileformats`: detection + registry; **ZIP** container (per-entry
   ZipCrypto/AES); **encrypted MS Office** via a bounded **CFB/OLE2** reader;
-  builds `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified
-  against known-answer round-trips and the real `zip` CLI.
+  **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
+  **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); and **archive
+  unpackers** (tar, gzip, bzip2, xz, **7z**, **rar**, MIME `.eml`). Builds
+  `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified against
+  known-answer round-trips and the real `zip` / `qpdf` / `7z` / `rar` CLIs.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
-  nodes / entry-size) + ancestor cycle detection, `recover()` guards on every
-  format call, `context`/budget cancellation, and a reusable global pool.
+  nodes / entry-size) + ancestor cycle detection, **two-axis concurrency**
+  (candidate workers x parallel sibling entries, globally bounded), **disk-spill**
+  for large intermediates, `recover()` guards on every format call, `context`/budget
+  cancellation, and a reusable global pool.
+- **Hardening**: fuzz targets on every hostile-input parser (+ the whole
+  pipeline) and a decompression-bomb / fan-out / byte-budget / cycle corpus,
+  run by `scripts/fuzz.sh` and a GitHub Actions CI workflow. Fuzzing already
+  found and fixed a PDF slice-bounds crash and capped the OOXML spin count.
 - CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
   + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
 
-**Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
-[docs/roadmap.md](docs/roadmap.md))
-- PDF (RC4 / AESV2 / AESV3).
-- Disk-spill for large intermediates; sibling-entry parallelism within one file;
-  `--throttle` / `--max-duration` / `--batch-size`; fuzz + bomb corpora in CI.
+**MVP complete.** PDF is cross-validated in CI against the real `qpdf` encoder
+(RC4-40/128, AES-128, AES-256); all concurrency flags are wired
+(`--workers` / `--file-jobs` / `--max-procs` / `--batch-size` / `--throttle` /
+`--timeout` / `--max-duration`).
 
-**Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
-and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).
+**Phase 2 formats.** Archive unpackers (tar/gzip/bzip2/xz/**7z**/**rar**, MIME
+`.eml`) and **ODF** (LibreOffice/OpenOffice, AES-256-CBC) are implemented and
+tested — the 7z/rar/pdf/zip/bzip2/xz paths cross-validated against the real
+CLIs. The one remaining Phase-2 format is **legacy MS Office**
+(`.doc/.xls/.ppt`, CryptoAPI/RC4); it is deliberately not yet implemented —
+see the note below.
+
+> **Legacy MS Office (`.doc/.xls/.ppt`)** is designed-for (the CFB/OLE2 reader
+> and the registry already accommodate it) but not implemented. Its binary
+> CryptoAPI/RC4 crypto could not be cross-validated in this environment (no
+> reference encoder was available to generate known-answer fixtures), and
+> Xcrack's policy is to ship only crypto it can verify end to end against a
+> trusted oracle. It remains the last open Phase-2 item.
 
 ## License
 

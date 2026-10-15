@@ -119,9 +119,23 @@ A third-party decompression/crypto dependency carries a vulnerability.
 - **Out of model:** host OS hardening, container escape, and Impex's own network
   exposure are the responsibility of the deployment, not Xcrack.
 
-## 4. Security testing requirements (tie to CI)
+## 4. Security testing (implemented)
 
-- Fuzz corpus committed; `go test -fuzz` gate on parser invariants.
-- Bomb/quine/deep-nest corpus with asserted bounded resource use.
-- `govulncheck`, `go vet`, and `-race` in CI.
-- Golden round-trip + known-answer vectors as regression guards for QA-6.
+- **Fuzz targets** on every parser exposed to hostile input -- the pattern
+  engine, the OOXML EncryptionInfo parser, the CFB reader, ZIP central-directory
+  parsing, the OOXML/PDF format probes, the PDF decrypt-rebuild scanner, and the
+  whole engine pipeline (`FuzzProcess`). Each asserts the invariant *no panic,
+  bounded work, terminates*. `scripts/fuzz.sh` runs them all; `go test` replays
+  the committed seed/regression corpora. Fuzzing already found and fixed a real
+  DoS/crash: an out-of-range slice on a crafted PDF with a short `/O` or a huge
+  `/Length` (now clamped), and an unbounded agile `spinCount` (now capped). The
+  crasher is kept as a regression seed.
+- **Bomb corpus** (`bomb_test.go`): a decompression bomb (cut off at
+  `MaxEntrySize`), a fan-out bomb (bounded by `MaxNodes`), the cumulative
+  byte-budget (`MaxTotalBytes`), and a cycle/quine case (ancestor-hash
+  detection) -- each asserting bounded resource use.
+- **CI** (`.github/workflows/ci.yml`): build, `go vet`, `gofmt` check,
+  `go test -race` across all three modules (which also replays the fuzz seeds),
+  a bounded fuzz smoke run, and `govulncheck` (non-blocking).
+- Golden round-trip + known-answer vectors remain the regression guards for
+  QA-6 (no false-positive unlocks).

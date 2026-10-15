@@ -58,6 +58,7 @@ func main() {
 		os.Exit(2)
 	}
 
+	defer res.Close()
 	fmt.Printf("scanned %s: %d node(s), %d candidate(s) tried, %d byte(s) extracted in %s\n",
 		path, res.Stats.FilesSeen, res.Stats.CandidatesTried, res.Stats.BytesExtracted, res.Stats.Elapsed)
 

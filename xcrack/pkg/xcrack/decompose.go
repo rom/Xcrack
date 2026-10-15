@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
+	"sync"
 
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/attack"
+	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
 )
 
@@ -16,13 +19,14 @@ import (
 type engine struct {
 	opts    Options
 	cracker *attack.Engine
+	spill   *spillSet
 }
 
 // decompose detects, (if needed) decrypts, and recursively decomposes data into
 // a Node. It is the single node factory: callers that have already decrypted an
 // entry still route its plaintext bytes through here so nested containers are
 // handled uniformly.
-func (e *engine) decompose(ctx context.Context, path string, data []byte, depth int, ancestors [][32]byte, promoted *[]string, acc *accounting, base CandidateSource) *Node {
+func (e *engine) decompose(ctx context.Context, path string, data []byte, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource) *Node {
 	n := &Node{Path: path}
 
 	if err := ctx.Err(); err != nil {
@@ -58,7 +62,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if err != nil {
 		// unknown format => plaintext leaf
 		n.Status = StatusPlain
-		n.Content = newMemContent(data)
+		n.Content = e.spill.materialize(data)
 		return n
 	}
 	n.Format = fm.Name()
@@ -70,6 +74,13 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		ra := bytes.NewReader(data)
 		ch, perr := safeProbe(enc, ra, int64(len(data)))
 		if perr != nil {
+			// A format that is recognized but turns out not to be encrypted
+			// falls through to a plain leaf; anything else is a per-node error.
+			if errors.Is(perr, xfileformats.ErrNotEncrypted) {
+				n.Status = StatusPlain
+				n.Content = e.spill.materialize(data)
+				return n
+			}
 			n.Status = StatusError
 			n.Err = perr
 			return n
@@ -78,13 +89,13 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
 		}
-		pw, found := e.searchTarget(ctx, path, verify, depth, promoted, acc, base)
+		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
 			return n
 		}
-		e.promote(promoted, pw)
+		prom.add(pw)
 		_, key, _ := enc.Verify(ch, []byte(pw))
 		pr, derr := safeDecrypt(enc, ra, int64(len(data)), ch, key)
 		if derr != nil {
@@ -128,9 +139,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		}
 		childAnc := append(append([][32]byte{}, ancestors...), sum)
 		n.Children = make([]*Node, len(entries))
-		for i, entry := range entries {
-			n.Children[i] = e.processEntry(ctx, joinPath(path, entry.Path), entry, depth+1, childAnc, promoted, acc, base)
-		}
+		e.processEntries(ctx, path, entries, depth+1, childAnc, prom, acc, base, n.Children)
 		return n
 	}
 
@@ -138,20 +147,20 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if !n.WasEncrypted {
 		n.Status = StatusPlain
 	}
-	n.Content = newMemContent(data)
+	n.Content = e.spill.materialize(data)
 	return n
 }
 
 // processEntry handles one container entry: find its password if encrypted,
 // read its plaintext, and route it back through decompose so nested layers are
 // handled. It then annotates the child node with the encryption outcome.
-func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, promoted *[]string, acc *accounting, base CandidateSource) *Node {
+func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource) *Node {
 	if entry.Encrypted {
 		verify := entry.Verify
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
-		pw, found := e.searchTarget(ctx, childPath, verify, depth, promoted, acc, base)
+		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base)
 		if !found {
 			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
 			if !acc.addNode() {
@@ -160,7 +169,7 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 			}
 			return n
 		}
-		e.promote(promoted, pw)
+		prom.add(pw)
 		r, oerr := safeOpen(entry, []byte(pw))
 		if oerr != nil {
 			return e.errNode(childPath, oerr, acc)
@@ -169,7 +178,7 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if rerr != nil {
 			return e.errNode(childPath, rerr, acc)
 		}
-		child := e.decompose(ctx, childPath, data, depth, ancestors, promoted, acc, base)
+		child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base)
 		child.WasEncrypted = true
 		child.Password = pw
 		if child.Status == StatusPlain {
@@ -186,24 +195,22 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 	if rerr != nil {
 		return e.errNode(childPath, rerr, acc)
 	}
-	return e.decompose(ctx, childPath, data, depth, ancestors, promoted, acc, base)
+	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base)
 }
 
 // searchTarget finds a password that satisfies verify: it tries promoted
 // (ancestor) passwords first (cheap, usually hits for nested archives), then
 // runs a concurrent search over the base candidate source.
-func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, promoted *[]string, acc *accounting, base CandidateSource) (string, bool) {
-	if !e.opts.NoPromote {
-		for _, pw := range *promoted {
-			if ctx.Err() != nil {
-				return "", false
-			}
-			ok, err := safeVerify(verify, []byte(pw))
-			acc.addCandidates(1)
-			if err == nil && ok {
-				e.found(path, pw)
-				return pw, true
-			}
+func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource) (string, bool) {
+	for _, pw := range prom.snapshot() {
+		if ctx.Err() != nil {
+			return "", false
+		}
+		ok, err := safeVerify(verify, []byte(pw))
+		acc.addCandidates(1)
+		if err == nil && ok {
+			e.found(path, pw)
+			return pw, true
 		}
 	}
 	if base == nil {
@@ -222,16 +229,97 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 	return string(pw), true
 }
 
-func (e *engine) promote(promoted *[]string, pw string) {
-	if e.opts.NoPromote {
+// promoter holds passwords recovered in outer layers for "promotion" to inner
+// layers. It is safe for concurrent use so siblings can be processed in
+// parallel.
+type promoter struct {
+	mu sync.Mutex
+	pw []string
+	on bool
+}
+
+func newPromoter(on bool) *promoter { return &promoter{on: on} }
+
+func (p *promoter) snapshot() []string {
+	if !p.on {
+		return nil
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, len(p.pw))
+	copy(out, p.pw)
+	return out
+}
+
+func (p *promoter) add(s string) {
+	if !p.on {
 		return
 	}
-	for _, p := range *promoted {
-		if p == pw {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, x := range p.pw {
+		if x == s {
 			return
 		}
 	}
-	*promoted = append(*promoted, pw)
+	p.pw = append(p.pw, s)
+}
+
+// processEntries processes a container's entries into out[i], either
+// sequentially or -- when FileConcurrency > 1 and the candidate source can be
+// cloned so each worker iterates its own copy -- across up to FileConcurrency
+// goroutines. Result order is preserved by writing to out by index. The attack
+// engine's global semaphore still bounds total candidate testers, so this only
+// adds parallelism to unpacking/decompression and overlaps independent searches.
+func (e *engine) processEntries(ctx context.Context, parent string, entries []*xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, out []*Node) {
+	jobs := e.opts.FileConcurrency
+	_, cloneable := cloneBase(base)
+	if jobs <= 1 || len(entries) <= 1 || !cloneable {
+		for i, entry := range entries {
+			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, base)
+		}
+		return
+	}
+	sem := make(chan struct{}, jobs)
+	var wg sync.WaitGroup
+	for i, entry := range entries {
+		if ctx.Err() != nil {
+			break
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(i int, entry *xfileformats.Entry) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			b, _ := cloneBase(base) // independent iterator for this sibling
+			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, b)
+		}(i, entry)
+	}
+	wg.Wait()
+	for i := range out {
+		if out[i] == nil {
+			out[i] = &Node{Path: joinPath(parent, entries[i].Path), Status: StatusError, Err: context.Canceled}
+			acc.addNode()
+		}
+	}
+}
+
+// cloneBase returns an independent copy of base for concurrent use. A nil base
+// is safe to share (no iteration state); otherwise the source must implement
+// candidates.Cloner and successfully clone.
+func cloneBase(base CandidateSource) (CandidateSource, bool) {
+	if base == nil {
+		return nil, true
+	}
+	c, ok := base.(candidates.Cloner)
+	if !ok {
+		return nil, false
+	}
+	cl := c.CloneSource()
+	if cl == nil {
+		return nil, false
+	}
+	return cl, true
 }
 
 func (e *engine) found(path, pw string) {
