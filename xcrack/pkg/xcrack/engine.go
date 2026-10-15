@@ -15,6 +15,7 @@ import (
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/archive"
+	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
 	"github.com/rom/xfileformats/formats/pdf"
@@ -104,6 +105,10 @@ func DefaultRegistry() *xfileformats.Registry {
 	r := xfileformats.NewRegistry()
 	zip.Register(r)
 	ooxml.Register(r)
+	// msoffice (legacy .doc/.xls/.ppt) shares the CFB/OLE2 magic with ooxml; it
+	// is registered AFTER ooxml so an encrypted OOXML wrapper is probed first and
+	// the engine falls back here only for the legacy binaries.
+	msoffice.Register(r)
 	pdf.Register(r)
 	odf.Register(r)
 	archive.Register(r)
