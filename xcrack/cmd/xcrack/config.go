@@ -35,6 +35,11 @@ type fileConfig struct {
 		Passwords      []string `yaml:"passwords"`
 		UseDefaultList *bool    `yaml:"use_default_list"`
 	} `yaml:"candidates"`
+	Patterns struct {
+		Masks          []string          `yaml:"masks"`
+		Rules          []string          `yaml:"rules"`
+		CustomCharsets map[string]string `yaml:"custom_charsets"`
+	} `yaml:"patterns"`
 	Output struct {
 		Format      string `yaml:"format"`
 		ResultsFile string `yaml:"results_file"`

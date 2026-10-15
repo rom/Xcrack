@@ -17,6 +17,7 @@ import (
 
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
+	"github.com/rom/xcrypto/pattern"
 )
 
 const version = "0.1.0-mvp"
@@ -143,8 +144,11 @@ func runCrack(args []string) int {
 	resFile := firstNonEmpty(flagIf(set["results-file"], *resultsFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.ResultsFile }), "")
 	_ = logLevel // reserved: structured logging wiring is phase 2
 
-	if len(patterns) > 0 {
-		fmt.Fprintln(os.Stderr, "xcrack: warning: --pattern is not yet implemented (phase 2); ignoring")
+	// Build the pattern set from --pattern files and the config's patterns block.
+	patternSet, err := buildPatternSet(patterns, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: pattern: %v\n", err)
+		return 2
 	}
 
 	// assemble sources
@@ -185,12 +189,18 @@ func runCrack(args []string) int {
 			srcs = append(srcs, candidates.DefaultList())
 		}
 		for _, wl := range allWordlists {
+			var base candidates.Source
 			if wl == "-" {
-				srcs = append(srcs, candidates.Stdin())
+				base = candidates.Stdin()
 			} else {
-				srcs = append(srcs, candidates.File(wl))
+				base = candidates.File(wl)
 			}
+			// Mangling rules expand each wordlist entry.
+			base = patternSet.ApplyRules(base)
+			srcs = append(srcs, base)
 		}
+		// Masks are standalone keyspaces appended after the wordlists.
+		srcs = append(srcs, patternSet.MaskSources()...)
 		return candidates.Chain(srcs...)
 	}
 
@@ -457,4 +467,35 @@ COMMON FLAGS:
 
 Authorized use only: operate on files you own or are permitted to access.
 `)
+}
+
+// buildPatternSet merges the pattern-file DSL (--pattern) and the config's
+// patterns block into one compiled pattern.Set (masks + rules + custom charsets).
+func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, error) {
+	spec := pattern.Spec{CustomCharsets: map[rune]string{}}
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return nil, err
+		}
+		s, err := pattern.ParseText(data)
+		if err != nil {
+			return nil, err
+		}
+		spec.Masks = append(spec.Masks, s.Masks...)
+		spec.Rules = append(spec.Rules, s.Rules...)
+		for k, v := range s.CustomCharsets {
+			spec.CustomCharsets[k] = v
+		}
+	}
+	if cfg != nil {
+		spec.Masks = append(spec.Masks, cfg.Patterns.Masks...)
+		spec.Rules = append(spec.Rules, cfg.Patterns.Rules...)
+		for k, v := range cfg.Patterns.CustomCharsets {
+			if len(k) == 1 {
+				spec.CustomCharsets[rune(k[0])] = v
+			}
+		}
+	}
+	return pattern.Compile(spec)
 }
