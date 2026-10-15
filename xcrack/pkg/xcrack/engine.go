@@ -15,6 +15,7 @@ import (
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/ooxml"
+	"github.com/rom/xfileformats/formats/pdf"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -99,6 +100,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	r := xfileformats.NewRegistry()
 	zip.Register(r)
 	ooxml.Register(r)
+	pdf.Register(r)
 	return r
 }
 

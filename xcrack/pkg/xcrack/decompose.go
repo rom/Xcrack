@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 
@@ -71,6 +72,13 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		ra := bytes.NewReader(data)
 		ch, perr := safeProbe(enc, ra, int64(len(data)))
 		if perr != nil {
+			// A format that is recognized but turns out not to be encrypted
+			// falls through to a plain leaf; anything else is a per-node error.
+			if errors.Is(perr, xfileformats.ErrNotEncrypted) {
+				n.Status = StatusPlain
+				n.Content = e.spill.materialize(data)
+				return n
+			}
 			n.Status = StatusError
 			n.Err = perr
 			return n

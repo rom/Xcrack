@@ -9,6 +9,10 @@ var (
 	// ErrMalformed indicates the input is not a valid instance of the claimed
 	// format (truncated, corrupt, or hostile).
 	ErrMalformed = errors.New("xfileformats: malformed input")
+	// ErrNotEncrypted indicates a recognized format that turns out not to be
+	// encrypted (e.g. a PDF with no /Encrypt). The engine treats the file as a
+	// plain leaf rather than an error.
+	ErrNotEncrypted = errors.New("xfileformats: not encrypted")
 	// ErrUnsupported indicates a recognized format whose specific variant is not
 	// (yet) supported.
 	ErrUnsupported = errors.New("xfileformats: unsupported variant")
