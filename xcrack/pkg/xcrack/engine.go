@@ -14,6 +14,7 @@ import (
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
+	"github.com/rom/xfileformats/formats/ooxml"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -97,6 +98,7 @@ func DefaultOptions() Options {
 func DefaultRegistry() *xfileformats.Registry {
 	r := xfileformats.NewRegistry()
 	zip.Register(r)
+	ooxml.Register(r)
 	return r
 }
 
