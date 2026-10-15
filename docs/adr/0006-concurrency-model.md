@@ -33,3 +33,13 @@ safe for concurrent use.
   (defaults: both `NumCPU`, `MaxProcs = NumCPU`).
 - Backpressure via bounded channels; `batch-size` hand-off (phase 2) amortises
   overhead for cheap KDFs.
+
+**Update (implemented):** both axes are live. Sibling entries of one container
+are processed across up to `FileConcurrency` goroutines; because the candidate
+source is stateful, each concurrent sibling gets an independent clone
+(`candidates.Cloner`), falling back to sequential when a source cannot be cloned
+(e.g. stdin). Cross-layer password promotion is shared through a mutex-guarded
+promoter. The attack engine's global semaphore still bounds total candidate
+testers, so `FileConcurrency` adds parallelism to unpacking/decompression and
+overlaps independent searches without raising the CPU ceiling. `OnFound` /
+`OnProgress` may therefore be invoked concurrently.

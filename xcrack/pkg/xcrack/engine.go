@@ -61,7 +61,7 @@ type Found struct {
 // the library and CLI have identical capability (CON-3).
 type Options struct {
 	Workers         int // candidate-test goroutines within one file (0 => NumCPU)
-	FileConcurrency int // reserved for sibling-entry parallelism (phase 2)
+	FileConcurrency int // container entries processed concurrently (0 => NumCPU; set 1 to disable)
 	MaxProcs        int // global ceiling on concurrent candidate testers (0 => NumCPU)
 
 	// Behavior toggles are phrased so the zero value is the sensible default:
@@ -179,8 +179,8 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		return nil, err
 	}
 	acc := newAccounting(p.opts.Limits)
-	var promoted []string
-	root := e.decompose(ctx, "", data, 0, nil, &promoted, acc, candidates)
+	prom := newPromoter(!p.opts.NoPromote)
+	root := e.decompose(ctx, "", data, 0, nil, prom, acc, candidates)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
 	return &Result{Root: root, Stats: stats, spills: spill}, nil

@@ -151,8 +151,7 @@ func TestCycleDetection(t *testing.T) {
 	acc := newAccounting(opts.Limits)
 	data := []byte("content that is registered as its own ancestor")
 	ancestors := [][32]byte{sha256.Sum256(data)}
-	var promoted []string
-	n := e.decompose(context.Background(), "x", data, 1, ancestors, &promoted, acc, candidates.Explicit())
+	n := e.decompose(context.Background(), "x", data, 1, ancestors, newPromoter(true), acc, candidates.Explicit())
 	if n.Status != StatusLimitExceeded {
 		t.Fatalf("cycle not detected: status = %v", n.Status)
 	}

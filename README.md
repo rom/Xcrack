@@ -103,8 +103,9 @@ Early but working end to end across all three modules.
   known-answer round-trips and the real `zip` CLI.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
-  nodes / entry-size) + ancestor cycle detection, **disk-spill** for large
-  intermediates, `recover()` guards on every format call, `context`/budget
+  nodes / entry-size) + ancestor cycle detection, **two-axis concurrency**
+  (candidate workers x parallel sibling entries, globally bounded), **disk-spill**
+  for large intermediates, `recover()` guards on every format call, `context`/budget
   cancellation, and a reusable global pool.
 - **Hardening**: fuzz targets on every hostile-input parser (+ the whole
   pipeline) and a decompression-bomb / fan-out / byte-budget / cycle corpus,
@@ -115,8 +116,8 @@ Early but working end to end across all three modules.
 
 **Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
 [docs/roadmap.md](docs/roadmap.md))
-- Sibling-entry parallelism within one file; `--throttle` / `--max-duration` /
-  `--batch-size`; PDF cross-validation against a reference encoder.
+- `--throttle` / `--max-duration` / `--batch-size`; PDF cross-validation against
+  a reference encoder.
 
 **Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
 and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).
