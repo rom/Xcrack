@@ -163,6 +163,14 @@ func parseHandler(data []byte) (*xpdf.Handler, error) {
 	case hasLen && lengthBits > 0:
 		keyLen = lengthBits / 8
 	}
+	if v < 5 { // MD5-handler keys are 5..16 bytes; clamp a crafted /Length
+		if keyLen < 5 {
+			keyLen = 5
+		}
+		if keyLen > 16 {
+			keyLen = 16
+		}
+	}
 
 	cipher := xpdf.CipherRC4
 	switch {

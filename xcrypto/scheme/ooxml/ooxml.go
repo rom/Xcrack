@@ -35,7 +35,11 @@ var (
 	blockEncryptedKeyValue = []byte{0x14, 0x6e, 0x0b, 0xe7, 0xab, 0xac, 0xd0, 0xd6}
 )
 
-const agileSegment = 4096
+const (
+	agileSegment = 4096
+	// maxSpinCount bounds the agile iterated-hash work factor against a crafted file.
+	maxSpinCount = 50_000_000
+)
 
 // Info is a parsed EncryptionInfo. Use ParseEncryptionInfo to build one.
 type Info struct {
@@ -144,6 +148,15 @@ func parseAgile(xmlBytes []byte) (*Info, error) {
 		return nil, fmt.Errorf("%w: no password key encryptor", xcrypto.ErrUnsupported)
 	}
 	ke := doc.KeyEncryptors.KeyEncryptor[0].EncryptedKey
+	// Bound the attacker-controlled spin count so a crafted EncryptionInfo cannot
+	// turn verification into a CPU-exhaustion DoS. Real files use ~100000.
+	if ke.SpinCount < 0 || ke.SpinCount > maxSpinCount {
+		return nil, fmt.Errorf("%w: implausible spinCount %d", xcrypto.ErrUnsupported, ke.SpinCount)
+	}
+	// Bound block sizes to sane AES values.
+	if ke.BlockSize <= 0 || ke.BlockSize > 256 || doc.KeyData.BlockSize <= 0 || doc.KeyData.BlockSize > 256 {
+		return nil, fmt.Errorf("%w: implausible block size", xcrypto.ErrMalformed)
+	}
 	keyHash, _, err := hashByName(doc.KeyData.HashAlgorithm)
 	if err != nil {
 		return nil, err

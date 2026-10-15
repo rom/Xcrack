@@ -106,14 +106,17 @@ Early but working end to end across all three modules.
   nodes / entry-size) + ancestor cycle detection, **disk-spill** for large
   intermediates, `recover()` guards on every format call, `context`/budget
   cancellation, and a reusable global pool.
+- **Hardening**: fuzz targets on every hostile-input parser (+ the whole
+  pipeline) and a decompression-bomb / fan-out / byte-budget / cycle corpus,
+  run by `scripts/fuzz.sh` and a GitHub Actions CI workflow. Fuzzing already
+  found and fixed a PDF slice-bounds crash and capped the OOXML spin count.
 - CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
   + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
 
 **Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
 [docs/roadmap.md](docs/roadmap.md))
 - Sibling-entry parallelism within one file; `--throttle` / `--max-duration` /
-  `--batch-size`; fuzz + bomb corpora in CI; PDF cross-validation against a
-  reference encoder.
+  `--batch-size`; PDF cross-validation against a reference encoder.
 
 **Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
 and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).

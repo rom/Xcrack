@@ -73,11 +73,24 @@ func xorKey(key []byte, b byte) []byte {
 
 // --- R2-R4 (RC4 / AESV2) ---
 
-func (h *Handler) fileKeyFromUser(pw []byte) []byte {
+// keyLenBytes returns the MD5-handler key length, clamped to the valid 5..16
+// range so a crafted /Length cannot drive an out-of-range slice.
+func (h *Handler) keyLenBytes() int {
 	n := h.Length
+	if n < 5 {
+		n = 5
+	}
+	if n > 16 {
+		n = 16
+	}
+	return n
+}
+
+func (h *Handler) fileKeyFromUser(pw []byte) []byte {
+	n := h.keyLenBytes()
 	m := md5.New()
 	m.Write(padPassword(pw))
-	m.Write(h.O[:32])
+	m.Write(prim.Fit(h.O, 32, 0)) // tolerate a short/absent /O
 	var p [4]byte
 	binary.LittleEndian.PutUint32(p[:], uint32(h.P))
 	m.Write(p[:])
@@ -96,7 +109,7 @@ func (h *Handler) fileKeyFromUser(pw []byte) []byte {
 }
 
 func (h *Handler) ownerRC4Key(ownerPw []byte) []byte {
-	n := h.Length
+	n := h.keyLenBytes()
 	s := md5.Sum(padPassword(ownerPw))
 	d := s[:]
 	if h.R >= 3 {
@@ -151,7 +164,7 @@ func (h *Handler) VerifyOwner(pw []byte) (bool, []byte) {
 		return h.verifyOwnerR6(pw)
 	}
 	key := h.ownerRC4Key(pw)
-	data := append([]byte(nil), h.O[:32]...)
+	data := prim.Fit(h.O, 32, 0) // tolerate a short/absent /O
 	if h.R == 2 {
 		data, _ = prim.RC4(key, data)
 	} else {
