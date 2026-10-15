@@ -30,13 +30,16 @@ one is reusable on its own:
 /
 ├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
 │    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
-│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard)
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard) · pdf · odf
 │    ├─ candidates/         candidate sources
 │    ├─ pattern/            hashcat-compatible masks + rules
 │    └─ attack/             concurrent password-search engine
 ├─ xfileformats/            module github.com/rom/xfileformats  (parse + detect)
 │    ├─ formats/zip         ZIP container (per-entry encryption)
 │    ├─ formats/ooxml       encrypted MS Office (CFB-wrapped)
+│    ├─ formats/pdf         encrypted PDF (rebuild a decrypted copy)
+│    ├─ formats/odf         encrypted LibreOffice/OpenOffice (ODF)
+│    ├─ formats/archive     tar · gzip · bzip2 · xz · 7z · rar · MIME (.eml)
 │    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
 │    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool
@@ -98,9 +101,11 @@ Early but working end to end across all three modules.
   third-party deps.
 - `xfileformats`: detection + registry; **ZIP** container (per-entry
   ZipCrypto/AES); **encrypted MS Office** via a bounded **CFB/OLE2** reader;
-  **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF); builds
+  **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
+  **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); and **archive
+  unpackers** (tar, gzip, bzip2, xz, **7z**, **rar**, MIME `.eml`). Builds
   `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified against
-  known-answer round-trips and the real `zip` CLI.
+  known-answer round-trips and the real `zip` / `qpdf` / `7z` / `rar` CLIs.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
   nodes / entry-size) + ancestor cycle detection, **two-axis concurrency**
@@ -119,8 +124,19 @@ Early but working end to end across all three modules.
 (`--workers` / `--file-jobs` / `--max-procs` / `--batch-size` / `--throttle` /
 `--timeout` / `--max-duration`).
 
-**Phase 2 formats** (in progress): archive unpackers (tar/gzip/bzip2/xz/7z/rar,
-MIME `.eml`), ODF, and legacy MS Office (`.doc/.xls/.ppt`).
+**Phase 2 formats.** Archive unpackers (tar/gzip/bzip2/xz/**7z**/**rar**, MIME
+`.eml`) and **ODF** (LibreOffice/OpenOffice, AES-256-CBC) are implemented and
+tested — the 7z/rar/pdf/zip/bzip2/xz paths cross-validated against the real
+CLIs. The one remaining Phase-2 format is **legacy MS Office**
+(`.doc/.xls/.ppt`, CryptoAPI/RC4); it is deliberately not yet implemented —
+see the note below.
+
+> **Legacy MS Office (`.doc/.xls/.ppt`)** is designed-for (the CFB/OLE2 reader
+> and the registry already accommodate it) but not implemented. Its binary
+> CryptoAPI/RC4 crypto could not be cross-validated in this environment (no
+> reference encoder was available to generate known-answer fixtures), and
+> Xcrack's policy is to ship only crypto it can verify end to end against a
+> trusted oracle. It remains the last open Phase-2 item.
 
 ## License
 

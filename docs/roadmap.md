@@ -20,13 +20,21 @@ they are not date-bound. Each phase leaves `main` releasable.
 - `examples/impex-embed` reference integration.
 
 ## Phase 2 — Format breadth + ergonomics
-- **Formats:** legacy MS Office (`.doc/.xls/.ppt`, CryptoAPI/RC4); ODF (Blowfish-CFB
-  legacy + AES-GCM modern); archive unpackers: tar, gzip, bzip2, xz/lzma, 7z, rar;
-  `.eml`/MIME attachment extraction.
+- **Formats:**
+  - ✅ **ODF** (LibreOffice/OpenOffice): modern **AES-256-CBC** (PBKDF2-HMAC-SHA1,
+    SHA-256/SHA-1 start key, 1K checksum). Legacy Blowfish-CFB is detected and
+    reported as unsupported.
+  - ✅ **archive unpackers:** tar, gzip, bzip2, xz/lzma, **7z**, **rar** (4.x + 5.x);
+    `.eml`/MIME attachment extraction.
+  - ⬜ **legacy MS Office** (`.doc/.xls/.ppt`, CryptoAPI/RC4) — the one remaining
+    Phase-2 format. Deferred: its binary crypto cannot be cross-validated here (no
+    reference encoder for known-answer fixtures), and Xcrack ships only crypto it
+    can verify against a trusted oracle.
 - **Document explosion:** full OOXML/OLE part decomposition behind
   `--explode-documents`.
-- **Concurrency ergonomics:** `--batch-size`, `--max-duration`, `--throttle`,
-  `--input-list` streaming.
+- ✅ **Concurrency ergonomics:** `--batch-size`, `--max-duration`, `--throttle`
+  (and `--workers`/`--file-jobs`/`--max-procs`/`--timeout`); `--input-list`
+  streaming.
 - **Resilience:** checkpoint/resume for long single-file searches (FR-11).
 
 ## Phase 3 — Smarter search
