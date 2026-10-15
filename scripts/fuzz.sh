@@ -12,6 +12,7 @@ pkgs=(
   ./xfileformats/formats/zip
   ./xfileformats/formats/ooxml
   ./xfileformats/formats/pdf
+  ./xfileformats/formats/archive
   ./xcrack/pkg/xcrack
 )
 fail=0
