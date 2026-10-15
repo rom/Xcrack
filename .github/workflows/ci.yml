@@ -18,8 +18,12 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.5"
-      - name: Install qpdf (for PDF cross-validation)
-        run: sudo apt-get update && sudo apt-get install -y qpdf
+      - name: Install reference tools (format cross-validation)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qpdf p7zip-full
+          # rar/unrar live in multiverse and are non-free; best-effort (tests skip if absent)
+          sudo apt-get install -y rar unrar || true
       - name: Build
         run: go build ./xcrypto/... ./xfileformats/... ./xcrack/...
       - name: Vet

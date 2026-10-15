@@ -24,6 +24,8 @@ func FuzzEntries(f *testing.F) {
 
 	f.Add([]byte("From: a\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n--B--\r\n"))
 	f.Add([]byte("BZh9"))
+	f.Add([]byte("7z\xbc\xaf\x27\x1c"))
+	f.Add([]byte("Rar!\x1a\x07\x00"))
 	f.Add([]byte{0x1f, 0x8b})
 	f.Add([]byte{})
 
@@ -34,10 +36,14 @@ func FuzzEntries(f *testing.F) {
 		bzip2Format{}.Detect(b)
 		tarFormat{}.Detect(b)
 		emlFormat{}.Detect(b)
+		sevenzipFormat{}.Detect(b)
+		rarFormat{}.Detect(b)
 		gzipFormat{}.Entries(r, int64(len(b)))
 		xzFormat{}.Entries(r, int64(len(b)))
 		bzip2Format{}.Entries(r, int64(len(b)))
 		tarFormat{}.Entries(r, int64(len(b)))
 		emlFormat{}.Entries(r, int64(len(b)))
+		sevenzipFormat{}.Entries(r, int64(len(b)))
+		rarFormat{}.Entries(r, int64(len(b)))
 	})
 }

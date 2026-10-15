@@ -185,3 +185,91 @@ func TestXZ(t *testing.T) {
 		t.Fatal("xz content mismatch")
 	}
 }
+
+func findEntry(es []*xfileformats.Entry, name string) *xfileformats.Entry {
+	for _, e := range es {
+		if e.Path == name {
+			return e
+		}
+	}
+	return nil
+}
+
+func TestSevenZipEncrypted(t *testing.T) {
+	bin, err := exec.LookPath("7z")
+	if err != nil {
+		t.Skip("7z CLI not available")
+	}
+	dir := t.TempDir()
+	content := bytes.Repeat([]byte("7z secret payload "), 50)
+	os.WriteFile(filepath.Join(dir, "secret.txt"), content, 0o600)
+	cmd := exec.Command(bin, "a", "-pHunter2", "arc.7z", "secret.txt")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("7z: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "arc.7z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	es := entriesOf(t, sevenzipFormat{}, data)
+	e := findEntry(es, "secret.txt")
+	if e == nil || !e.Encrypted {
+		t.Fatalf("secret.txt encrypted entry not found: %+v", es)
+	}
+	if ok, err := e.Verify([]byte("Hunter2")); err != nil || !ok {
+		t.Fatalf("Verify(correct): ok=%v err=%v", ok, err)
+	}
+	if ok, _ := e.Verify([]byte("wrong")); ok {
+		t.Fatal("Verify(wrong) = true")
+	}
+	if got := readEntryPw(t, e, "Hunter2"); !bytes.Equal(got, content) {
+		t.Fatal("7z content mismatch")
+	}
+}
+
+func TestRarEncrypted(t *testing.T) {
+	bin, err := exec.LookPath("rar")
+	if err != nil {
+		t.Skip("rar CLI not available")
+	}
+	dir := t.TempDir()
+	content := bytes.Repeat([]byte("rar secret payload "), 50)
+	os.WriteFile(filepath.Join(dir, "secret.txt"), content, 0o600)
+	cmd := exec.Command(bin, "a", "-pHunter2", "arc.rar", "secret.txt")
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("rar: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "arc.rar"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	es := entriesOf(t, rarFormat{}, data)
+	e := findEntry(es, "secret.txt")
+	if e == nil || !e.Encrypted {
+		t.Fatalf("secret.txt encrypted entry not found: %+v", es)
+	}
+	if ok, err := e.Verify([]byte("Hunter2")); err != nil || !ok {
+		t.Fatalf("Verify(correct): ok=%v err=%v", ok, err)
+	}
+	if ok, _ := e.Verify([]byte("wrong")); ok {
+		t.Fatal("Verify(wrong) = true")
+	}
+	if got := readEntryPw(t, e, "Hunter2"); !bytes.Equal(got, content) {
+		t.Fatal("rar content mismatch")
+	}
+}
+
+func readEntryPw(t *testing.T, e *xfileformats.Entry, pw string) []byte {
+	t.Helper()
+	r, err := e.Open([]byte(pw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
