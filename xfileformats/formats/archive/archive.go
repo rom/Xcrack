@@ -24,6 +24,7 @@ const (
 func Register(r *xfileformats.Registry) {
 	r.Register(gzipFormat{})
 	r.Register(bzip2Format{})
+	r.Register(xzFormat{})
 	r.Register(tarFormat{})
 	r.Register(emlFormat{})
 }

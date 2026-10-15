@@ -156,3 +156,32 @@ func TestBzip2(t *testing.T) {
 		t.Fatal("bzip2 content mismatch")
 	}
 }
+
+func TestXZ(t *testing.T) {
+	xzBin, err := exec.LookPath("xz")
+	if err != nil {
+		t.Skip("xz CLI not available")
+	}
+	dir := t.TempDir()
+	payload := bytes.Repeat([]byte("xz payload "), 300)
+	src := filepath.Join(dir, "p.bin")
+	os.WriteFile(src, payload, 0o600)
+	if out, err := exec.Command(xzBin, "-k", "-f", src).CombinedOutput(); err != nil {
+		t.Fatalf("xz: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(src + ".xz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := xzFormat{}
+	if _, ok := f.Detect(data); !ok {
+		t.Fatal("xz not detected")
+	}
+	es := entriesOf(t, f, data)
+	if len(es) != 1 {
+		t.Fatalf("got %d entries", len(es))
+	}
+	if got := readEntry(t, es[0]); !bytes.Equal(got, payload) {
+		t.Fatal("xz content mismatch")
+	}
+}

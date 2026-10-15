@@ -30,10 +30,12 @@ func FuzzEntries(f *testing.F) {
 	f.Fuzz(func(t *testing.T, b []byte) {
 		r := bytes.NewReader(b)
 		gzipFormat{}.Detect(b)
+		xzFormat{}.Detect(b)
 		bzip2Format{}.Detect(b)
 		tarFormat{}.Detect(b)
 		emlFormat{}.Detect(b)
 		gzipFormat{}.Entries(r, int64(len(b)))
+		xzFormat{}.Entries(r, int64(len(b)))
 		bzip2Format{}.Entries(r, int64(len(b)))
 		tarFormat{}.Entries(r, int64(len(b)))
 		emlFormat{}.Entries(r, int64(len(b)))

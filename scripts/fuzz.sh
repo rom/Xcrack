@@ -13,6 +13,7 @@ pkgs=(
   ./xfileformats/formats/ooxml
   ./xfileformats/formats/pdf
   ./xfileformats/formats/archive
+  ./xfileformats/formats/odf
   ./xcrack/pkg/xcrack
 )
 fail=0
