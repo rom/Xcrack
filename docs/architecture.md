@@ -61,25 +61,45 @@ Driven by the [ASR](asr.md); summarised here because they shape every view:
 
 ## 2. Containers (C4 level 2)
 
-Three deployable/importable units across two Go modules:
+Across **three** Go modules, each lower one reusable on its own (see
+[ADR-0009](adr/0009-extract-xcrypto.md)):
 
 ```
 ┌───────────────────────────── module: github.com/rom/xcrack ─────────────────────────────┐
-│                                                                                          │
-│   ┌────────────────────┐         ┌──────────────────────────────────────────────┐       │
-│   │   cmd/xcrack (CLI)  │ ──────▶ │              pkg/xcrack (Engine)             │       │
-│   │  flag parsing,      │  opts   │  CandidateSource · PatternEngine · Pool/     │       │
-│   │  config load,       │         │  Scheduler · Decomposer (recursion) ·        │       │
-│   │  output rendering   │ ◀────── │  Budget/Limits · Result tree · Reporter      │       │
-│   └────────────────────┘ result  └──────────────────────────────────────────────┘       │
-│                                             │ imports                                     │
-└─────────────────────────────────────────────┼────────────────────────────────────────────┘
-                                              ▼
-┌────────────────────── module: github.com/rom/xfileformats ───────────────────────────────┐
-│   Registry · Detector · Format plugins (Encrypted / Container / Explodable) ·             │
-│   Probe→Challenge · Verify · Decrypt · Entries   —   policy-free, reusable                 │
-└────────────────────────────────────────────────────────────────────────────────────────┘
+│   cmd/xcrack (CLI)  ─opts▶  pkg/xcrack (Engine):                                          │
+│                             Decomposer (recursion) · Result tree · password promotion ·  │
+│                             Budget/Limits · Pool · Reporter                               │
+└───────────────────┬──────────────────────────────────────────────────┬───────────────────┘
+          imports    │                                         imports    │
+                     ▼                                                    ▼
+┌──── module: github.com/rom/xfileformats ────┐      ┌──── module: github.com/rom/xcrypto ─────────┐
+│ Registry · Detector · Format plugins        │────▶ │ prim (PBKDF2/AES/RC4/Office hash) ·          │
+│ (ZIP, OOXML/CFB) · Probe → xcrypto.Challenge │ uses │ scheme/* (zipcrypto, winzipaes, ooxml) ·     │
+│ · Entries   — parsing only, policy-free      │      │ candidates · pattern · attack (search engine)│
+└─────────────────────────────────────────────┘      └──────────────────────────────────────────────┘
 ```
+
+All cryptography and cracking logic lives in **Xcrypto**; **Xfileformats** only
+parses structure and builds an `xcrypto.Challenge`; **Xcrack** only orchestrates
+recursion and results. A tool that already has a challenge can crack it with
+Xcrypto alone; a tool that only needs "what is this / unlock with this password"
+can use Xfileformats alone.
+
+### 2.0 Xcrypto (`github.com/rom/xcrypto`)
+
+The standalone crypto library and cracking engine. No file-format or recursion
+knowledge; zero third-party dependencies.
+
+- **prim** — primitives: PBKDF2, AES (little-endian CTR / CBC / ECB), RC4, the
+  Office agile & standard iterated-hash key derivation, UTF-16LE, constant-time
+  compare.
+- **scheme/** — concrete schemes (`zipcrypto`, `winzipaes`, `ooxml` agile +
+  standard), each turning parameters + password into verify/decrypt.
+- **candidates** — candidate sources (explicit, wordlist, default list, chain).
+- **pattern** — hashcat-compatible mask + mangling-rule candidate generation.
+- **attack** — the crypto/cracking engine: a concurrent search over a `Probe`
+  (single-password test) and a candidate source, bounded by one reusable global
+  semaphore. It is what makes "best-effort attack the encrypted file" reusable.
 
 ### 2.1 Xfileformats (`github.com/rom/xfileformats`)
 
@@ -99,17 +119,19 @@ property, not just a packaging one (see [ADR-0001](adr/0001-pure-go-no-external-
 
 ### 2.2 Engine (`github.com/rom/xcrack`, `pkg/xcrack`)
 
-What Impex embeds. It owns everything *policy*:
+What Impex embeds. It owns the *recursion and orchestration* policy, and
+delegates candidate generation and the password search to Xcrypto:
 
-- **CandidateSource** — unifies explicit passwords, wordlists, built-in default
-  list, and generated candidates into one iterable stream (de-duplicated,
-  ordered, bounded).
-- **PatternEngine** — expands masks and applies mangling rules (hashcat-compatible).
-- **Scheduler / Pool** — the two-axis concurrency model and the reusable, bounded
-  worker pool a long-running Impex service constructs once.
-- **Decomposer** — the recursive algorithm: detect → decrypt → unpack → recurse,
-  producing the result tree, enforcing budgets, and doing password promotion.
+- **Decomposer** — the recursive algorithm: detect (Xfileformats) → decrypt
+  (search via Xcrypto `attack`) → unpack → recurse, producing the result tree,
+  enforcing budgets, and doing password promotion across layers.
+- **Pool** — holds one `xcrypto/attack.Engine`; its global semaphore bounds the
+  total number of concurrent candidate testers across every `Process` call, so a
+  long-running Impex service constructs it once and feeds files through it.
 - **Reporter** — renders results (tree + manifest) and recovered passwords.
+
+Candidate sources, the pattern engine, and the concurrent search itself live in
+Xcrypto (§2.0), not here — so they are reusable without the recursion engine.
 
 ### 2.3 CLI (`github.com/rom/xcrack`, `cmd/xcrack`)
 
@@ -119,41 +141,57 @@ library/CLI parity is a requirement — see [ASR](asr.md) CON-3).
 
 ## 3. Components (C4 level 3)
 
+Status key: ✓ implemented · ◦ designed-for / planned.
+
+### 3.0 Xcrypto components
+
+```
+xcrypto/
+├─ challenge.go       ✓ Challenge, KDFSpec, CipherSpec (the shared contract)
+├─ errors.go          ✓ ErrWrongPassword, ErrUnsupported, ErrMalformed
+├─ prim/              ✓ PBKDF2 · AES CTR/CBC/ECB · RC4 · Office agile+standard hash · UTF16LE
+├─ scheme/
+│   ├─ zipcrypto/     ✓ traditional PKWARE
+│   ├─ winzipaes/     ✓ WinZip AES AE-1/AE-2 (128/192/256)
+│   ├─ ooxml/         ✓ MS Office agile + standard
+│   └─ pdf/           ◦ RC4 40/128, AESV2-128, AESV3-256
+├─ candidates/        ✓ explicit · wordlist(+gzip,+stdin) · default list · chain
+├─ pattern/           ✓ hashcat masks (?l?u?d?s?a?b, ?1-?4) + mangling rules + DSL
+└─ attack/            ✓ concurrent search over a Probe + Source, global semaphore
+```
+
 ### 3.1 Xfileformats components
 
 ```
 xfileformats/
-├─ registry.go        Register(Format) + detection dispatch
-├─ format.go          Format, Encrypted, Container, Explodable interfaces; Caps
-├─ challenge.go       Challenge type (KDF params, salt, verifier, cipher spec)
-├─ detect.go          magic-byte sniffing, bounded peek
-├─ limits.go          reader guards reused by formats (bounded ReaderAt, ratios)
+├─ registry.go        ✓ Register(Format) + recover-guarded detection dispatch
+├─ format.go          ✓ Format, Encrypted, Container interfaces; Caps; Entry
+├─ detect.go          ✓ magic-byte sniffing, bounded peek
+├─ limits.go          ✓ bounded reader helpers
 ├─ formats/
-│   ├─ zipcrypto/     legacy ZIP + WinZip AES
-│   ├─ ooxml/         MS Office agile + standard encryption
-│   ├─ pdf/           RC4 40/128, AESV2-128, AESV3-256 (user + owner pw)
-│   ├─ msoffice/      legacy .doc/.xls/.ppt (CryptoAPI/RC4)
-│   ├─ odf/           ODF (Blowfish-CFB legacy, AES-GCM modern)
-│   └─ archive/       tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME  (unpack-only)
-└─ internal/crypto/   shared KDF/cipher helpers (PBKDF2, AES-CBC/GCM, RC4, ...)
+│   ├─ zip/           ✓ ZIP container; per-entry ZipCrypto/WinZip-AES (via xcrypto)
+│   ├─ ooxml/         ✓ encrypted MS Office (CFB-wrapped; crypto via xcrypto)
+│   ├─ pdf/           ◦ PDF encryption dictionary
+│   ├─ msoffice/      ◦ legacy .doc/.xls/.ppt (CryptoAPI/RC4)
+│   ├─ odf/           ◦ ODF (Blowfish-CFB legacy, AES-GCM modern)
+│   └─ archive/       ◦ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
+└─ internal/cfb/      ✓ bounded OLE2 / compound-file reader (+ writer for fixtures)
 ```
 
-Each format advertises its capabilities via `Caps{Encrypted, Container,
-Explodable}`. A format may be both (an encrypted ZIP is `Encrypted` + `Container`).
+Each format advertises `Caps{Encrypted, Container, Explodable}`. A format may be
+both (an encrypted ZIP is `Container` with per-entry encryption; an encrypted
+OOXML is whole-file `Encrypted` and decrypts to a ZIP the engine re-detects).
 
 ### 3.2 Engine components
 
 ```
 pkg/xcrack/
-├─ engine.go          Engine, Options, Pool; the public embed surface
-├─ decompose.go       recursive walk, node tree, password promotion
-├─ node.go            Node, Result, per-node status/error
-├─ budget.go          Budget + Limits accounting (depth, bytes, nodes, ratio, time)
-├─ candidates/        CandidateSource, wordlist/file/stdin/default readers, dedup
-├─ patterns/          mask expander + rule engine (hashcat-compatible) + YAML wrapper
-├─ sched/             two-axis scheduler, bounded semaphore, throttle
-├─ report/            text / json / jsonl renderers, manifest, redaction
-└─ store/             intermediate materialisation (memory → spill temp)
+├─ engine.go          ✓ Engine, Options, Pool (holds an xcrypto/attack.Engine)
+├─ decompose.go       ✓ recursive walk, node tree, password promotion
+├─ node.go            ✓ Node, Result, per-node status/error, ContentRef
+├─ budget.go          ✓ Budget + Limits accounting (depth, bytes, nodes, time)
+├─ cmd/xcrack/        ✓ CLI: flags/config/output (text/json/jsonl), manifest
+└─ store (spill)      ◦ disk-spill for large intermediates (memory-backed today)
 ```
 
 ## 4. Runtime views

@@ -32,6 +32,7 @@ context, the options weighed, and the consequences.
 | [0006](adr/0006-concurrency-model.md) | Two-axis concurrency model with a shared pool |
 | [0007](adr/0007-documents-as-leaves.md) | Documents treated as leaves; opt-in explosion |
 | [0008](adr/0008-config-and-output.md) | Configuration precedence and output handling |
+| [0009](adr/0009-extract-xcrypto.md) | Extract all crypto + cracking into the standalone Xcrypto module |
 
 ## Terminology
 

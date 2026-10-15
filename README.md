@@ -17,19 +17,29 @@ A standalone **CLI** is also provided for triage, testing, and manual recovery.
 
 ## Repository layout
 
-This repository hosts **two independent Go modules**:
+This repository hosts **three independent Go modules**, layered so each lower
+one is reusable on its own:
 
 | Module | Import path | Purpose |
 | ------ | ----------- | ------- |
-| **Xfileformats** | `github.com/rom/xfileformats` | Standalone, reusable file-format library: detect a format, probe its encryption, verify/decrypt with a given password, and unpack container formats. **Policy-free** — it knows nothing about candidate lists, concurrency, or recursion. Reusable by any tool. |
-| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (candidate generation, pattern/rule engine, concurrency pools, recursive decomposition, resource budgets, result tree) plus the `xcrack` CLI. Imports Xfileformats. |
+| **Xcrypto** | `github.com/rom/xcrypto` | Standalone **crypto library + cracking engine**: cryptographic primitives, the concrete encryption schemes (ZipCrypto, WinZip AES, OOXML agile/standard), candidate generation, the hashcat-compatible pattern engine, and the concurrent password-search engine. Knows nothing about file formats or recursion — any tool can crack a challenge with it alone. Zero third-party dependencies. |
+| **Xfileformats** | `github.com/rom/xfileformats` | Standalone, reusable file-format library: detect a format, parse containers (ZIP, CFB/OLE2), and build an `xcrypto.Challenge`. **Policy-free** — delegates all cryptography to Xcrypto and knows nothing about candidate lists, concurrency, or recursion. |
+| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (recursive decomposition, result tree, password promotion, resource budgets) plus the `xcrack` CLI. Imports Xfileformats and Xcrypto. |
 
 ```
 /
-├─ xfileformats/            module github.com/rom/xfileformats
-│    detect · probe · verify · decrypt · unpack  (reusable, policy-free)
+├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
+│    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml (agile+standard)
+│    ├─ candidates/         candidate sources
+│    ├─ pattern/            hashcat-compatible masks + rules
+│    └─ attack/             concurrent password-search engine
+├─ xfileformats/            module github.com/rom/xfileformats  (parse + detect)
+│    ├─ formats/zip         ZIP container (per-entry encryption)
+│    ├─ formats/ooxml       encrypted MS Office (CFB-wrapped)
+│    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
-│    ├─ pkg/xcrack/         engine: candidates · patterns · pools · recursion
+│    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool
 │    └─ cmd/xcrack/         CLI
 └─ docs/                    architecture, design, ASR, MVP, threat model, ADRs
 ```
@@ -48,12 +58,12 @@ Start with [`docs/README.md`](docs/README.md). Key documents:
 
 ## Building & running
 
-Requires Go 1.25+ (a `go.work` ties the two modules together).
+Requires Go 1.25+ (a `go.work` ties the three modules together).
 
 ```sh
 # build everything, run the full test suite (with the race detector)
-go build ./xfileformats/... ./xcrack/...
-go test -race ./xfileformats/... ./xcrack/...
+go build ./xcrypto/... ./xfileformats/... ./xcrack/...
+go test -race ./xcrypto/... ./xfileformats/... ./xcrack/...
 
 # build the CLI
 go build -o xcrack ./xcrack/cmd/xcrack
@@ -76,29 +86,34 @@ res.Root.Walk(func(n *xcrack.Node) { /* scan n.Content ... */ })
 
 ## Status
 
-Early implementation. Documentation set complete; the first vertical slice is
-working end to end.
+Early but working end to end across all three modules.
 
 **Implemented**
-- `xfileformats`: format/registry/challenge core; **ZIP** container with
-  **ZipCrypto** (traditional PKWARE) and **WinZip AES** (AE-1/AE-2, 128/192/256)
-  decryption — verified against known-answer round-trips and the real `zip` CLI.
+- `xcrypto` (crypto + cracking engine): primitives (PBKDF2, AES-CTR/CBC/ECB,
+  RC4, Office agile/standard key derivation); schemes **ZipCrypto**, **WinZip
+  AES** (AE-1/AE-2, 128/192/256), and **OOXML agile + standard**; candidate
+  sources; a **hashcat-compatible pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4,
+  and a practical rule subset); and the concurrent, globally-bounded **attack**
+  search engine. Zero third-party deps.
+- `xfileformats`: detection + registry; **ZIP** container (per-entry
+  ZipCrypto/AES); **encrypted MS Office** via a bounded **CFB/OLE2** reader;
+  builds `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified
+  against known-answer round-trips and the real `zip` CLI.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
-  nodes / entry-size) and ancestor-based cycle detection, `recover()` guards on
-  every format call, a concurrent candidate search bounded by a reusable global
-  `Pool`, and `context`/budget cancellation.
-- Candidate sources: explicit, wordlist (+gzip, +stdin), built-in default list,
-  de-duplicating chain, in-memory programmatic injection.
-- CLI (`xcrack`, `identify`, `version`) with text/JSON/JSONL output, tree
-  extraction + `manifest.json`, YAML config, and concurrent multi-file scanning.
+  nodes / entry-size) + ancestor cycle detection, `recover()` guards on every
+  format call, `context`/budget cancellation, and a reusable global pool.
+- CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
+  + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
 
 **Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
 [docs/roadmap.md](docs/roadmap.md))
-- Formats: OOXML MS Office (agile + standard) and PDF (RC4 / AESV2 / AESV3).
-- The hashcat-compatible mask/rule pattern engine (`--pattern`).
+- PDF (RC4 / AESV2 / AESV3).
 - Disk-spill for large intermediates; sibling-entry parallelism within one file;
   `--throttle` / `--max-duration` / `--batch-size`; fuzz + bomb corpora in CI.
+
+**Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
+and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).
 
 ## License
 
