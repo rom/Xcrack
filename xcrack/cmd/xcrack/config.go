@@ -11,9 +11,11 @@ import (
 // value is meaningful, so "unset in config" is distinguishable from "set false".
 type fileConfig struct {
 	Concurrency struct {
-		Workers  int `yaml:"workers"`
-		FileJobs int `yaml:"file_jobs"`
-		MaxProcs int `yaml:"max_procs"`
+		Workers   int `yaml:"workers"`
+		FileJobs  int `yaml:"file_jobs"`
+		MaxProcs  int `yaml:"max_procs"`
+		BatchSize int `yaml:"batch_size"`
+		Throttle  int `yaml:"throttle"`
 	} `yaml:"concurrency"`
 	Limits struct {
 		MaxDepth      int   `yaml:"max_depth"`

@@ -63,6 +63,8 @@ type Options struct {
 	Workers         int // candidate-test goroutines within one file (0 => NumCPU)
 	FileConcurrency int // container entries processed concurrently (0 => NumCPU; set 1 to disable)
 	MaxProcs        int // global ceiling on concurrent candidate testers (0 => NumCPU)
+	BatchSize       int // candidates per worker hand-off (0 => 1); amortizes channel overhead
+	ThrottlePercent int // approximate CPU duty cycle 1..99 (0/100 => no throttle)
 
 	// Behavior toggles are phrased so the zero value is the sensible default:
 	// the engine recurses, promotes passwords, and stops on the first match
@@ -149,9 +151,11 @@ type Pool struct {
 func NewPool(opts Options) *Pool {
 	opts.normalize()
 	cr := attack.New(attack.Options{
-		Workers:       opts.Workers,
-		MaxProcs:      opts.MaxProcs,
-		MaxCandidates: opts.Limits.MaxCandidates,
+		Workers:         opts.Workers,
+		MaxProcs:        opts.MaxProcs,
+		MaxCandidates:   opts.Limits.MaxCandidates,
+		BatchSize:       opts.BatchSize,
+		ThrottlePercent: opts.ThrottlePercent,
 	})
 	return &Pool{opts: opts, cracker: cr}
 }

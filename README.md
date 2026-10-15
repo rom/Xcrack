@@ -114,13 +114,13 @@ Early but working end to end across all three modules.
 - CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
   + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
 
-**Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
-[docs/roadmap.md](docs/roadmap.md))
-- `--throttle` / `--max-duration` / `--batch-size`; PDF cross-validation against
-  a reference encoder.
+**MVP complete.** PDF is cross-validated in CI against the real `qpdf` encoder
+(RC4-40/128, AES-128, AES-256); all concurrency flags are wired
+(`--workers` / `--file-jobs` / `--max-procs` / `--batch-size` / `--throttle` /
+`--timeout` / `--max-duration`).
 
-**Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
-and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).
+**Phase 2 formats** (in progress): archive unpackers (tar/gzip/bzip2/xz/7z/rar,
+MIME `.eml`), ODF, and legacy MS Office (`.doc/.xls/.ppt`).
 
 ## License
 

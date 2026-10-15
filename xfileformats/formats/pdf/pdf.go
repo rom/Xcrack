@@ -156,22 +156,9 @@ func parseHandler(data []byte) (*xpdf.Handler, error) {
 		encMeta = b
 	}
 
-	keyLen := 5 // default 40-bit
-	switch {
-	case v >= 5:
-		keyLen = 32
-	case hasLen && lengthBits > 0:
-		keyLen = lengthBits / 8
-	}
-	if v < 5 { // MD5-handler keys are 5..16 bytes; clamp a crafted /Length
-		if keyLen < 5 {
-			keyLen = 5
-		}
-		if keyLen > 16 {
-			keyLen = 16
-		}
-	}
-
+	// Determine the cipher first: for V4/V5 the key length follows the crypt
+	// filter, not /Length. (A V4 dict contains a nested /CF .../Length in BYTES
+	// as well as a top-level /Length in BITS, so a blind /Length scan is wrong.)
 	cipher := xpdf.CipherRC4
 	switch {
 	case v >= 5:
@@ -183,9 +170,25 @@ func parseHandler(data []byte) (*xpdf.Handler, error) {
 				cipher = xpdf.CipherAESV2
 			case "AESV3":
 				cipher = xpdf.CipherAESV3
-				keyLen = 32
 			}
 		}
+	}
+
+	keyLen := 5 // default 40-bit (V1)
+	switch {
+	case cipher == xpdf.CipherAESV3:
+		keyLen = 16 * 2 // AES-256
+	case v == 4:
+		keyLen = 16 // AESV2, or V4 RC4-128 -- crypt-filter based, always 16 here
+	case hasLen && lengthBits > 0:
+		keyLen = lengthBits / 8 // V1/V2 RC4: single top-level /Length in bits
+	}
+	// Sanity clamp; the MD5-handler crypto additionally clamps to 5..16.
+	if keyLen < 5 {
+		keyLen = 5
+	}
+	if keyLen > 32 {
+		keyLen = 32
 	}
 
 	id := parseFirstID(data)

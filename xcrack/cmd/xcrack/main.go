@@ -76,6 +76,8 @@ func runCrack(args []string) int {
 	maxProcs := fs_.Int("max-procs", 0, "global ceiling on concurrent candidate testers (0=NumCPU)")
 	timeout := fs_.Duration("timeout", 0, "per-file time budget (e.g. 30s)")
 	maxDuration := fs_.Duration("max-duration", 0, "whole-run deadline")
+	batchSize := fs_.Int("batch-size", 0, "candidates per worker hand-off (0=auto)")
+	throttle := fs_.Int("throttle", 0, "approximate CPU duty cycle percent 1..99 (0=off)")
 
 	recurse := fs_.Bool("recurse", true, "decompose containers")
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
@@ -129,6 +131,8 @@ func runCrack(args []string) int {
 	opts.Limits.MaxEntrySize = resolveInt64(set["max-entry-size"], *maxEntry, cfgInt64(cfg, func(c *fileConfig) int64 { return c.Limits.MaxEntrySize }), opts.Limits.MaxEntrySize)
 	opts.Limits.MaxCandidates = resolveInt64(set["max-candidates"], *maxCand, cfgInt64(cfg, func(c *fileConfig) int64 { return c.Limits.MaxCandidates }), 0)
 
+	opts.BatchSize = resolveInt(set["batch-size"], *batchSize, "", cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.BatchSize }), 0)
+	opts.ThrottlePercent = resolveInt(set["throttle"], *throttle, env("XCRACK_THROTTLE"), cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.Throttle }), 0)
 	opts.Budget.PerFile = *timeout
 	opts.Budget.Total = *maxDuration
 	if cfg != nil {
@@ -460,7 +464,7 @@ COMMON FLAGS:
   -c, --config FILE         YAML config
       --format text|json|jsonl
       --workers N  --file-jobs N  --max-procs N
-      --timeout D  --max-duration D
+      --timeout D  --max-duration D  --batch-size N  --throttle PCT
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list
