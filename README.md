@@ -91,26 +91,29 @@ Early but working end to end across all three modules.
 **Implemented**
 - `xcrypto` (crypto + cracking engine): primitives (PBKDF2, AES-CTR/CBC/ECB,
   RC4, Office agile/standard key derivation); schemes **ZipCrypto**, **WinZip
-  AES** (AE-1/AE-2, 128/192/256), and **OOXML agile + standard**; candidate
-  sources; a **hashcat-compatible pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4,
-  and a practical rule subset); and the concurrent, globally-bounded **attack**
-  search engine. Zero third-party deps.
+  AES** (AE-1/AE-2, 128/192/256), **OOXML agile + standard**, and **PDF** (RC4 /
+  AESV2 / AESV3, R2-R6, user + owner); candidate sources; a **hashcat-compatible
+  pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4, and a practical rule subset);
+  and the concurrent, globally-bounded **attack** search engine. Zero
+  third-party deps.
 - `xfileformats`: detection + registry; **ZIP** container (per-entry
   ZipCrypto/AES); **encrypted MS Office** via a bounded **CFB/OLE2** reader;
-  builds `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified
-  against known-answer round-trips and the real `zip` CLI.
+  **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF); builds
+  `xcrypto.Challenge` and delegates all crypto to Xcrypto. Verified against
+  known-answer round-trips and the real `zip` CLI.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /
-  nodes / entry-size) + ancestor cycle detection, `recover()` guards on every
-  format call, `context`/budget cancellation, and a reusable global pool.
+  nodes / entry-size) + ancestor cycle detection, **disk-spill** for large
+  intermediates, `recover()` guards on every format call, `context`/budget
+  cancellation, and a reusable global pool.
 - CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
   + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
 
 **Remaining for the MVP** (see [docs/mvp.md](docs/mvp.md) and
 [docs/roadmap.md](docs/roadmap.md))
-- PDF (RC4 / AESV2 / AESV3).
-- Disk-spill for large intermediates; sibling-entry parallelism within one file;
-  `--throttle` / `--max-duration` / `--batch-size`; fuzz + bomb corpora in CI.
+- Sibling-entry parallelism within one file; `--throttle` / `--max-duration` /
+  `--batch-size`; fuzz + bomb corpora in CI; PDF cross-validation against a
+  reference encoder.
 
 **Phase 2 formats** (designed-for): legacy MS Office (`.doc/.xls/.ppt`), ODF,
 and the remaining archive unpackers (tar/gzip/bzip2/xz/7z/rar/eml).

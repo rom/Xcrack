@@ -154,7 +154,7 @@ xcrypto/
 │   ├─ zipcrypto/     ✓ traditional PKWARE
 │   ├─ winzipaes/     ✓ WinZip AES AE-1/AE-2 (128/192/256)
 │   ├─ ooxml/         ✓ MS Office agile + standard
-│   └─ pdf/           ◦ RC4 40/128, AESV2-128, AESV3-256
+│   └─ pdf/           ✓ RC4 40/128, AESV2-128, AESV3-256 (R2-R6, user+owner)
 ├─ candidates/        ✓ explicit · wordlist(+gzip,+stdin) · default list · chain
 ├─ pattern/           ✓ hashcat masks (?l?u?d?s?a?b, ?1-?4) + mangling rules + DSL
 └─ attack/            ✓ concurrent search over a Probe + Source, global semaphore
@@ -171,7 +171,7 @@ xfileformats/
 ├─ formats/
 │   ├─ zip/           ✓ ZIP container; per-entry ZipCrypto/WinZip-AES (via xcrypto)
 │   ├─ ooxml/         ✓ encrypted MS Office (CFB-wrapped; crypto via xcrypto)
-│   ├─ pdf/           ◦ PDF encryption dictionary
+│   ├─ pdf/           ✓ encrypted PDF (parse /Encrypt+/ID; rebuild decrypted)
 │   ├─ msoffice/      ◦ legacy .doc/.xls/.ppt (CryptoAPI/RC4)
 │   ├─ odf/           ◦ ODF (Blowfish-CFB legacy, AES-GCM modern)
 │   └─ archive/       ◦ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
@@ -191,7 +191,7 @@ pkg/xcrack/
 ├─ node.go            ✓ Node, Result, per-node status/error, ContentRef
 ├─ budget.go          ✓ Budget + Limits accounting (depth, bytes, nodes, time)
 ├─ cmd/xcrack/        ✓ CLI: flags/config/output (text/json/jsonl), manifest
-└─ store (spill)      ◦ disk-spill for large intermediates (memory-backed today)
+└─ node.go spill      ✓ disk-spill for large intermediates (threshold-gated)
 ```
 
 ## 4. Runtime views
