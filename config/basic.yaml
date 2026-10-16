@@ -1,0 +1,18 @@
+# Basic: a wordlist plus a couple of known candidates, on top of the built-in
+# common-password list. The simplest useful config.
+#
+#   xcrack --config config/basic.yaml invoice.zip
+
+candidates:
+  wordlists:
+    - /usr/share/wordlists/rockyou.txt   # edit to a list you have
+  passwords:
+    - infected                           # classic malware-sample password
+    - Welcome1
+  use_default_list: true                 # also try the built-in common list
+
+search:
+  promote_passwords: true                # a password that unlocks one layer is tried first on the next
+
+output:
+  format: text

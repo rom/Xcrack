@@ -104,6 +104,7 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 │    ├─ cmd/xcrack/         CLI
 │    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
 ├─ samples/                 encrypted demo files (pw "opensesame") + generate.sh
+├─ config/                  example --config YAML files (basic, mask-rules, hint, …)
 └─ docs/                    usage, architecture, design, ASR, MVP, threat model, ADRs
 ```
 
