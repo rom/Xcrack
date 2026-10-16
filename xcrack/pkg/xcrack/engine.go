@@ -24,6 +24,7 @@ import (
 	"github.com/rom/xfileformats/formats/pdf"
 	fpgp "github.com/rom/xfileformats/formats/pgp"
 	"github.com/rom/xfileformats/formats/privkey"
+	"github.com/rom/xfileformats/formats/puttykey"
 	"github.com/rom/xfileformats/formats/sshkey"
 	"github.com/rom/xfileformats/formats/zip"
 )
@@ -144,6 +145,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	privkey.Register(r)
 	jks.Register(r)
 	fp12.Register(r)
+	puttykey.Register(r)
 	return r
 }
 

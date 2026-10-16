@@ -74,7 +74,8 @@ header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
 | ✅ | **Encrypted PEM / PKCS#8 keys** | Traditional DEK-Info (EVP_BytesToKey) and PBES2 (PBKDF2 / scrypt + AES-CBC); cross-checked against OpenSSL. |
 | ✅ | **JKS (Java KeyStore)** | Store-password recovery via the trailing SHA-1 integrity digest; cross-checked against keytool. |
 | ✅ | **PKCS#12 (.p12/.pfx)** | Password recovery via the PFX MacData MAC (PKCS#12 KDF, RFC 7292 B.2 + HMAC); algorithm-independent of the bag encryption, cross-checked against OpenSSL (modern SHA-256/AES and legacy SHA-1/3DES). |
-| ⬜ | PuTTY `.ppk`, BKS | Remaining key-store formats. |
+| ✅ | **PuTTY `.ppk`** | v3 (Argon2id/i) and v2 (legacy SHA-1); passphrase verified by the Private-MAC after decrypting the private section; cross-checked against puttygen. |
+| ⬜ | BKS, Argon2d-based KDBX | Remaining key stores (KDBX needs in-tree Argon2d). |
 | ⬜ | Disk images: ISO/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack, not always crypto). |
 | ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack. |
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
