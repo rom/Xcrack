@@ -42,7 +42,7 @@ Items marked **[batch]** are the current implementation batch.
 | | Feature | Notes |
 |--|---------|-------|
 | ✅ | **Observability** | `Options.OnAudit` emits a secrets-free `AuditEvent` per node (path, format, status, encrypted, size) for an audit log or trace. |
-| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first) covers statistical generation today. A full PCFG (Weir et al. — learn a probabilistic context-free grammar of structure/segments and enumerate by probability) is a distinct, larger model, staged. |
+| ✅ | **Markov / PCFG generators** | Markov generator (`candidates.MarkovGen`, best-first) for statistical ordering, plus a full Weir-style PCFG (`candidates.TrainPCFG` + `--pcfg`): learns a probabilistic grammar of structure/segments and enumerates guesses in probability order via the pre-terminal priority-queue (pivot-deduped). |
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
 | 🔬 | Adaptive scheduling | Order files/candidates by observed crackability; corpus-wide promotion. |
