@@ -70,6 +70,7 @@ go build -o bin/xcrackd ./xcrack/cmd/xcrackd
 ```
 xcrack [flags] [sources...]      decrypt and recursively decompose sources
 xcrack identify [sources...]     detect format & encryption only (no cracking)
+xcrack hashline [sources...]     emit $office$/$pdf$ hash lines for hashcat / John
 xcrack version
 xcrack help
 ```
@@ -109,6 +110,8 @@ archive that reuses a password is unlocked almost for free.
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
 | `--hint` | derive guesses from a file's embedded password hint (iWork `.iwph`, ZIP comment), tried first (see [Hint candidates](#hint-candidates)) |
 | `--hint-rules FILE` | hashcat-style rule file applied to hint-derived words (implies `--hint`) |
+| `--hybrid-append MASK` | append every expansion of `MASK` to each wordlist word (hashcat dict+mask, `-a 6`) — repeatable |
+| `--hybrid-prepend MASK` | prepend every expansion of `MASK` to each wordlist word (hashcat mask+dict, `-a 7`) — repeatable |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
@@ -390,8 +393,11 @@ xcrack -p 'S3cret!' quarterly.xlsx
 # --- Encrypted PDF (user OR owner password) ---
 xcrack -w rockyou.txt statement.pdf
 
-# --- LibreOffice / OpenOffice (ODF: .odt/.ods/.odp) ---
+# --- LibreOffice / OpenOffice (ODF: .odt/.ods/.odp; AES-256 CBC or GCM) ---
 xcrack -p hunter2 notes.odt
+
+# --- KeePass database (.kdbx, KDBX4: Argon2d/Argon2id/AES-KDF) ---
+xcrack -w rockyou.txt secrets.kdbx    # recovers the master passphrase
 
 # --- Legacy MS Office (.doc/.xls/.ppt: RC4 CryptoAPI / RC4 97-2000 / XOR) ---
 xcrack -p myhovercraftisfullofeels old-memo.doc
@@ -421,6 +427,25 @@ Detect format and encryption **without** attempting any password:
 xcrack identify suspicious.bin mystery.dat
 # suspicious.bin: format=ooxml container=false encrypted=true explodable=false
 # mystery.dat: format=zip container=true encrypted=false explodable=false
+```
+
+### `hashline`
+
+Emit a crackable hash line for an external GPU cracker instead of searching
+in-process — Xcrack probes the file once and prints the `$…$` string that
+hashcat (`-m <mode>`) or John the Ripper (`--format=<name>`) expects. The hash
+line goes to **stdout** (so it pipes cleanly into a cracker); a
+`# <file> (hashcat -m N | john --format=X)` note goes to stderr.
+
+Supported today: encrypted **OOXML** Office documents (`$office$`, `-m
+9400/9500/9600`) and **PDF** (`$pdf$`, `-m 10400/10500/10600/10700`). These
+emitters are cross-validated against real hashcat (see
+`scripts/hashcat-xval.sh`). Other schemes report that no emitter exists yet.
+
+```sh
+xcrack hashline secret.docx > hashes.txt         # $office$*2013*100000*256*...
+xcrack hashline *.pdf 2>/dev/null >> hashes.txt  # append $pdf$ lines
+hashcat -m 9600 hashes.txt rockyou.txt           # crack on the GPU box
 ```
 
 ---
@@ -454,6 +479,19 @@ xcrack -w names.txt --pattern patterns.txt locked.zip
 
 Masks run as their own keyspaces (appended after wordlists); rules expand each
 wordlist entry. Keep mask keyspaces small — this is CPU-only guessing, not GPU.
+
+**Hybrid (wordlist ± mask).** `--hybrid-append MASK` tries `word + maskExpansion`
+for every wordlist word (hashcat's dict+mask, `-a 6`); `--hybrid-prepend MASK`
+tries `maskExpansion + word` (mask+dict, `-a 7`). Both are repeatable and share
+the run's custom charsets.
+
+```sh
+# "Sesame" + two digits (Sesame00..Sesame99), for every word in names.txt:
+xcrack -w names.txt --hybrid-append '?d?d' vault.7z
+
+# a leading symbol in front of each word:
+xcrack -w names.txt --hybrid-prepend '?s' vault.7z
+```
 
 ---
 

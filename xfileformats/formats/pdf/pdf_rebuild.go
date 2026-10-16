@@ -10,7 +10,16 @@ import (
 	xpdf "github.com/rom/xcrypto/scheme/pdf"
 )
 
-const maxObjects = 500_000
+const (
+	maxObjects = 500_000
+	// maxObjNum bounds the object NUMBER we accept. The cross-reference table we
+	// emit spans 0..maxObjNum, so an object carrying an implausibly large number
+	// (far beyond maxObjects distinct objects) must not drive that loop — a
+	// crafted "100000000000000000 0 obj" would otherwise make rebuild write an
+	// exabyte-scale xref table (hang / OOM). Real PDFs number objects densely
+	// from 1, so a number beyond the object-count ceiling is garbage.
+	maxObjNum = maxObjects
+)
 
 var (
 	reRootRef  = regexp.MustCompile(`/Root\s+(\d+\s+\d+\s+R)`)
@@ -40,6 +49,9 @@ func rebuild(data []byte, h *xpdf.Handler, key []byte) ([]byte, error) {
 		}
 		num, _ := strconv.Atoi(string(data[loc[2]:loc[3]]))
 		gen, _ := strconv.Atoi(string(data[loc[4]:loc[5]]))
+		if num < 0 || num > maxObjNum {
+			continue // implausible object number; would blow up the xref table
+		}
 		bodyStart := loc[1]
 		rel := bytes.Index(data[bodyStart:], []byte("endobj"))
 		if rel < 0 {
