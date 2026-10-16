@@ -19,6 +19,7 @@ import (
 	"github.com/rom/xfileformats/formats/archive"
 	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
+	"github.com/rom/xfileformats/formats/keepass"
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
@@ -184,6 +185,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	sshkey.Register(r)
 	privkey.Register(r)
 	jks.Register(r)
+	keepass.Register(r)
 	fp12.Register(r)
 	puttykey.Register(r)
 	return r
