@@ -32,7 +32,7 @@ Items marked **[batch]** are the current implementation batch.
 | ⬜ | **Per-format fast-reject** **[batch]** | A cheap pre-check hook run before the expensive KDF to discard hopeless candidates. |
 | ✅ | **Candidate dedup** | `candidates.Dedup` — bounded dedup wrapper so masks×rules don't retry a string. |
 | ⬜ | **Streaming large inputs** **[batch]** | Avoid materializing whole archives; stream bounded windows. |
-| ⬜ | **Prometheus-format metrics** **[batch]** | Text exposition of `Pool.Metrics()` at `/metrics`. |
+| ✅ | **Prometheus-format metrics** | `Metrics.WritePrometheus` + `GET /metrics` text exposition (alongside JSON `/v1/metrics`). |
 | ✅ | **Combinator attack** | `candidates.Combinator(left, right, sep)` (CLI wiring pending). |
 | ⬜ | **Hybrid attack** | wordlist ± mask (dict+mask / mask+dict). |
 | ⬜ | `*2john` / hashcat hash-line emitters | Per-scheme `$…$` strings to complete the external-GPU bridge. |
@@ -41,7 +41,7 @@ Items marked **[batch]** are the current implementation batch.
 
 | | Feature | Notes |
 |--|---------|-------|
-| ⬜ | **Observability** **[batch]** | Audit log of what was decrypted (no secrets); optional trace spans. |
+| ✅ | **Observability** | `Options.OnAudit` emits a secrets-free `AuditEvent` per node (path, format, status, encrypted, size) for an audit log or trace. |
 | 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first); PCFG/OMEN still 🔬. |
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
