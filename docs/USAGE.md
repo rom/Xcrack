@@ -643,13 +643,14 @@ if ok {
 ```
 
 **This is compute-heavy.** The keystream leaves ~10⁵ internal-key candidates and
-each needs a ~2¹⁶ enumeration, so a full search can take hours in pure Go
-(dedicated C++ tools such as *bkcrack* do the same work in minutes). More known
-plaintext does not shrink the candidate set. Use `RecoverKeysBudget(plain,
-cipher, maxCandidates)` to bound the effort and resume with a larger budget, or
-offload the heavy search to an external engine via the challenge-export bridge
-above. Recovering a running key state from a broken cipher is legitimate
-cryptanalysis — no sound cipher is weakened.
+each needs a ~2¹⁶ enumeration. The search runs across all CPU cores, so
+wall-clock time scales down with core count — tens of minutes on a many-core
+server, longer on a small box (dedicated C++ tools such as *bkcrack* do the same
+work in minutes). More known plaintext does not shrink the candidate set. Use
+`RecoverKeysBudget(plain, cipher, maxCandidates)` to bound the effort and resume
+with a larger budget, or offload the heavy search to an external/GPU engine via
+the challenge-export bridge above. Recovering a running key state from a broken
+cipher is legitimate cryptanalysis — no sound cipher is weakened.
 
 ---
 

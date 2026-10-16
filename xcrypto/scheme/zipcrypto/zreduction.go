@@ -1,5 +1,11 @@
 package zipcrypto
 
+import (
+	"runtime"
+	"sync"
+	"sync/atomic"
+)
+
 // Zreduction — the front half of the Biham–Kocher attack: recover the key2 (Z)
 // value from the keystream alone, with no password. Combined with the verified
 // back half (RecoverInternalState in knownplaintext.go) this makes the
@@ -215,10 +221,12 @@ func recoverKeysFromZWindow(zwin []uint32, base int, plain, ks []byte) (Keys, bo
 //
 // Performance note. This is a correct, self-contained pure-Go implementation of
 // the Biham–Kocher attack. It is COMPUTE-HEAVY: the keystream leaves ~10^5 key2
-// candidates and the per-candidate key1 enumeration is ~2^16, so a full search
-// can take hours in pure Go (optimized C++ tools such as bkcrack do the same work
-// in minutes). More known plaintext does not shrink the candidate set, so for
-// time-sensitive recovery prefer offloading to an external engine via the
+// candidates and the per-candidate key1 enumeration is ~2^16. The candidate
+// search runs across all CPU cores, so wall-clock time scales down with core
+// count — tens of minutes on a many-core server, longer on a small box
+// (optimized C++ tools such as bkcrack do the same work in minutes). More known
+// plaintext does not shrink the candidate set, so for time-sensitive recovery on
+// the heavy backend prefer offloading to an external/GPU engine via the
 // challenge-export bridge. Use RecoverKeysBudget to bound the effort.
 func RecoverKeys(plain, cipher []byte) (Keys, bool) {
 	k, ok, _ := RecoverKeysBudget(plain, cipher, 0)
@@ -254,29 +262,62 @@ func recoverAuto(plain, ks []byte, budget int) (Keys, bool, int) {
 		return Keys{}, false, 0
 	}
 	ksWin := ks[0 : bestIdx+1] // reconstruct key2 over [0, bestIdx]
-	examined := 0
-	for _, zi10 := range best {
-		for _, v := range zi2_16Completions(ks[bestIdx], zi10) {
-			examined++
-			cand := zi10 | (uint32(v) & 0xfffc)
-			var res Keys
-			found := false
-			exploreZ(ksWin, cand, func(zwin []uint32) bool {
-				if keys, ok := recoverKeysFromZWindow(zwin, 0, plain, ks); ok {
-					res, found = keys, true
-					return true
-				}
-				return false
-			})
-			if found {
-				return res, true, examined
-			}
-			if budget > 0 && examined >= budget {
-				return Keys{}, false, examined
-			}
-		}
+
+	// The candidates are independent, so split them across workers. Each worker
+	// runs the stateless exploreZ + recoverKeysFromZWindow on its slice; the first
+	// match stops the rest. This scales recovery with core count.
+	workers := runtime.NumCPU()
+	if workers < 1 {
+		workers = 1
 	}
-	return Keys{}, false, examined
+	var (
+		mu       sync.Mutex
+		result   Keys
+		found    atomic.Bool
+		examined atomic.Int64
+		wg       sync.WaitGroup
+	)
+	chunk := (len(best) + workers - 1) / workers
+	for w := 0; w < workers; w++ {
+		lo := w * chunk
+		hi := lo + chunk
+		if lo >= len(best) {
+			break
+		}
+		if hi > len(best) {
+			hi = len(best)
+		}
+		wg.Add(1)
+		go func(sub []uint32) {
+			defer wg.Done()
+			for _, zi10 := range sub {
+				if found.Load() {
+					return
+				}
+				for _, v := range zi2_16Completions(ks[bestIdx], zi10) {
+					if found.Load() {
+						return
+					}
+					if nn := examined.Add(1); budget > 0 && nn > int64(budget) {
+						return
+					}
+					cand := zi10 | (uint32(v) & 0xfffc)
+					exploreZ(ksWin, cand, func(zwin []uint32) bool {
+						if keys, ok := recoverKeysFromZWindow(zwin, 0, plain, ks); ok {
+							mu.Lock()
+							result = keys
+							mu.Unlock()
+							found.Store(true)
+							return true
+						}
+						return false
+					})
+				}
+			}
+		}(best[lo:hi])
+	}
+	wg.Wait()
+	return result, found.Load(), int(examined.Load())
 }
 
 // reduceKey2 propagates keystream constraints across the window to shrink the
