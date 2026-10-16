@@ -34,6 +34,8 @@ func run(args []string) int {
 			return runIdentify(args[1:])
 		case "kp":
 			return runKP(args[1:])
+		case "hashline":
+			return runHashline(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -614,6 +616,7 @@ USAGE:
   xcrack identify [sources...]     detect format & encryption only
   xcrack kp --plain P --cipher C   ZipCrypto known-plaintext key recovery
                                    (no password; --bkcrack offloads the search)
+  xcrack hashline [sources...]     emit $office$/$pdf$/... lines for hashcat/John
   xcrack version
 
 COMMON FLAGS:
