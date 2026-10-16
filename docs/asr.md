@@ -160,7 +160,7 @@ and the "no GPU in-tree" non-goal intact.
 | CON-2 | **No online/remote attacks; cryptanalysis is offline** | Scope & authorized-use posture: Xcrack only guesses against a submitted file's own KDF, never a remote system. The optional `xcrackd` service (QA-13) is a transport in front of that same offline engine, not a networked attack capability. |
 | CON-3 | **Full CLI/library parity** | Every CLI capability is a library `Options` field; the CLI adds no hidden behaviour. |
 | CON-4 | **Two modules, one repo** | Xfileformats importable alone (QA-4); engine/CLI separate. |
-| CON-5 | **Go 1.25+, MIT, minimal vetted dependencies** (stdlib-first; the embeddable libraries stay zero-dep, `gopkg.in/yaml.v3` is used only by the CLI) | Build simplicity; licence compatibility for embedding. |
+| CON-5 | **Go 1.25+, MIT, minimal vetted dependencies** (stdlib-first; `gopkg.in/yaml.v3` is used only by the CLI). The core crypto schemes stay stdlib-only; **extended** schemes that need primitives absent from the stdlib (scrypt, ChaCha20-Poly1305, Argon2, OpenPGP) may use **`golang.org/x/crypto`** — a BSD-licensed, well-reviewed library — rather than hand-rolling crypto. | Build simplicity; licence compatibility for embedding; vetted primitives over bespoke reimplementation for the extended formats. |
 | CON-6 | **No plaintext spillage** | Decrypted (potentially malicious) content stays in memory or a locked, wiped temp dir; not written unless the caller asks. |
 | CON-7 | **Authorized-use framing in docs & CLI help** | Defensive/recovery tool; operated against owned/authorized data. |
 

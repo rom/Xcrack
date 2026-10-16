@@ -14,6 +14,7 @@ import (
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
+	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
@@ -117,6 +118,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	pdf.Register(r)
 	odf.Register(r)
 	archive.Register(r)
+	age.Register(r)
 	return r
 }
 

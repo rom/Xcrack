@@ -15,6 +15,7 @@ pkgs=(
   ./xfileformats/formats/archive
   ./xfileformats/formats/odf
   ./xfileformats/formats/msoffice
+  ./xfileformats/formats/age
   ./xcrack/pkg/xcrack
 )
 fail=0
