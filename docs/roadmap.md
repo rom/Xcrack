@@ -3,6 +3,10 @@
 Phased plan beyond the [MVP](mvp.md). Phases are ordered by dependency and value;
 they are not date-bound. Each phase leaves `main` releasable.
 
+> For the detailed, checkbox-level backlog of features, cracking approaches, and
+> formats beyond the delivered set, see
+> [**roadmap-enhancements.md**](roadmap-enhancements.md).
+
 ## Phase 0 — Foundations (part of MVP)
 - Two modules scaffolded; `Format`/`Encrypted`/`Container`/`Explodable`
   interfaces; explicit registry; `Challenge`.
