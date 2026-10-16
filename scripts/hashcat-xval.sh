@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Cross-validate the `xcrack hashline` emitters against a REAL cracker: emit a
 # hash line for a known-password file, then have hashcat crack it and confirm it
-# recovers the password. This proves the emitted $office$/$pdf$ strings are
-# exactly what hashcat expects.
+# recovers the password. This proves the emitted $office$/$pdf$/$zip2$ strings
+# are exactly what hashcat expects.
 #
 # Not run in CI (hashcat + an OpenCL backend are not installed there). Locally:
 #   sudo apt-get install -y hashcat pocl-opencl-icd qpdf   # pocl = CPU OpenCL
@@ -71,6 +71,61 @@ qpdf --encrypt "$pw" "$pw" 256 -- "$work/plain.pdf" "$work/aes.pdf"
 "$work/xcrack" hashline "$work/aes.pdf" 2>/dev/null > "$work/aes.hash"
 crack 10500 "$work/rc4.hash" pdf-rc4-128
 crack 10700 "$work/aes.hash" pdf-aes-256
+
+# --- WinZip AES ZIP ($zip2$ -> -m 13600) ---
+# Build an AES-256 WinZip entry straight from the xcrypto scheme (no external
+# zip tool needed), exactly as the zip format's fixtures do.
+cat > "$work/genzip.go" <<'GO'
+package main
+
+import (
+	stdzip "archive/zip"
+	"bytes"
+	"compress/flate"
+	"crypto/rand"
+	"encoding/binary"
+	"os"
+
+	"github.com/rom/xcrypto/scheme/winzipaes"
+)
+
+func main() {
+	pw := []byte("hashcat")
+	plain := []byte("xcrack zip2 cross-validation payload\n")
+	p := winzipaes.Params{Strength: 3, ActualMethod: 8, VendorVer: 2} // AES-256, deflate, AE-2
+	var cb bytes.Buffer
+	fw, _ := flate.NewWriter(&cb, flate.DefaultCompression)
+	fw.Write(plain)
+	fw.Close()
+	salt := make([]byte, p.SaltLen())
+	rand.Read(salt)
+	raw, err := winzipaes.EncryptRaw(pw, p, salt, cb.Bytes())
+	if err != nil {
+		panic(err)
+	}
+	extra := make([]byte, 0, 11)
+	extra = binary.LittleEndian.AppendUint16(extra, 0x9901)
+	extra = binary.LittleEndian.AppendUint16(extra, 7)
+	extra = binary.LittleEndian.AppendUint16(extra, p.VendorVer)
+	extra = binary.LittleEndian.AppendUint16(extra, winzipaes.VendorAE)
+	extra = append(extra, p.Strength)
+	extra = binary.LittleEndian.AppendUint16(extra, p.ActualMethod)
+	var b bytes.Buffer
+	zw := stdzip.NewWriter(&b)
+	fh := &stdzip.FileHeader{Name: "secret.txt", Method: 99}
+	fh.Flags |= 0x1
+	fh.UncompressedSize64 = uint64(len(plain))
+	fh.CompressedSize64 = uint64(len(raw))
+	fh.Extra = extra
+	w, _ := zw.CreateRaw(fh)
+	w.Write(raw)
+	zw.Close()
+	os.WriteFile(os.Args[1], b.Bytes(), 0o644)
+}
+GO
+(cd "$root" && go run "$work/genzip.go" "$work/aes.zip")
+"$work/xcrack" hashline "$work/aes.zip" 2>/dev/null > "$work/zip2.hash"
+crack 13600 "$work/zip2.hash" winzip-aes-256
 
 echo "----"
 echo "$pass passed, $fail failed"

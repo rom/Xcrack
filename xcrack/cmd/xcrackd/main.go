@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrack/pkg/api"
 	"github.com/rom/xcrack/pkg/xcrack"
 )
@@ -33,8 +34,41 @@ func main() {
 		readTimeout   = flag.Duration("read-timeout", 30*time.Second, "HTTP read timeout")
 		writeTimeout  = flag.Duration("write-timeout", 150*time.Second, "HTTP write timeout")
 		shutdownGrace = flag.Duration("shutdown-grace", 20*time.Second, "graceful shutdown grace period")
+		gpu           = flag.Bool("gpu", false, "enable the optional OpenCL GPU acceleration tier (requires a binary built with -tags opencl on a host with OpenCL hardware; the default build is pure-Go)")
+		gpuSelfTest   = flag.Bool("gpu-selftest", false, "validate the OpenCL PBKDF2 kernel against the CPU reference and exit (requires -tags opencl)")
 	)
 	flag.Parse()
+
+	// GPU self-test: prove the OpenCL kernel is byte-for-byte correct on this
+	// host, then exit. Useful before enabling --gpu in production.
+	if *gpuSelfTest {
+		if err := accel.GPUSelfTest(); err != nil {
+			log.Fatalf("GPU self-test FAILED: %v", err)
+		}
+		log.Printf("GPU self-test PASSED: OpenCL PBKDF2-HMAC-SHA1 matches the CPU reference")
+		return
+	}
+
+	// Optional GPU tier. It is opt-in and hardware-gated: without an -tags opencl
+	// build, or without OpenCL hardware, xcrackd logs why and runs the unchanged
+	// pure-Go CPU engine.
+	if *gpu {
+		if !accel.Built() {
+			log.Printf("--gpu requested but this binary is pure-Go; rebuild with -tags opencl. Continuing on CPU.")
+		} else if acc, err := accel.Detect(); err != nil {
+			log.Printf("--gpu requested but no usable OpenCL device: %v. Continuing on CPU.", err)
+		} else {
+			defer acc.Close()
+			if err := accel.GPUSelfTest(); err != nil {
+				log.Printf("GPU self-test failed (%v); not using the GPU tier. Continuing on CPU.", err)
+			} else {
+				for _, d := range acc.Devices() {
+					log.Printf("GPU tier: %s %s (%s, %d compute units)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
+				}
+				log.Printf("GPU tier: PBKDF2-HMAC-SHA1 kernel validated and available")
+			}
+		}
+	}
 
 	pool := xcrack.NewPool(xcrack.Options{
 		Workers:         *workers,

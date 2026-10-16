@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -96,6 +98,19 @@ func runCrack(args []string) int {
 	var hybridAppend, hybridPrepend stringSlice
 	fs_.Var(&hybridAppend, "hybrid-append", "append every expansion of MASK to each wordlist word (hashcat dict+mask; repeatable)")
 	fs_.Var(&hybridPrepend, "hybrid-prepend", "prepend every expansion of MASK to each wordlist word (hashcat mask+dict; repeatable)")
+	toggleF := fs_.Bool("toggle-case", false, "also try case-toggle variants of each wordlist word (hashcat toggle attack)")
+	princeF := fs_.Bool("prince", false, "also try PRINCE chains (length-ordered concatenations of wordlist words)")
+	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
+	shardF := fs_.String("shard", "", "distributed cracking: test only shard I of N of the keyspace, e.g. --shard 0/4 (run 0/4..3/4 on separate machines; promoted/context/hint guesses are tried by every shard)")
+	adaptiveF := fs_.Bool("adaptive", false, "corpus-wide adaptive promotion: try passwords recovered from any file first on the rest (most-successful first), smallest files first")
+	sprayF := fs_.Bool("spray", false, "also try a curated password-spraying set (common + season/year patterns), tried early")
+	var sprayTokens stringSlice
+	fs_.Var(&sprayTokens, "spray-token", "org/product/user token mangled into the spray set (repeatable; implies --spray)")
+	var sprayYears stringSlice
+	fs_.Var(&sprayYears, "spray-year", "year to use in spray patterns (repeatable; default: current and previous)")
+	var breachLists stringSlice
+	fs_.Var(&breachLists, "breach", "frequency-annotated breach corpus FILE (count-prefixed or password:count; gzip ok; repeatable)")
+	breachMinF := fs_.Int64("breach-min-count", 0, "drop breach entries seen fewer than N times (0=keep all)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -142,6 +157,7 @@ func runCrack(args []string) int {
 		opts.NoPromote = !*cfg.Search.Promote
 	}
 	opts.FindAll = *findAll
+	opts.CorpusPromotion = *adaptiveF || (cfg != nil && cfg.Search.Adaptive)
 	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
 	opts.HintCandidates = *hintF || *hintRulesF != "" || (cfg != nil && (cfg.Search.Hint || len(cfg.Search.HintRules) > 0))
 	if opts.HintCandidates {
@@ -228,10 +244,11 @@ func runCrack(args []string) int {
 	if cfg != nil && cfg.Candidates.UseDefaultList != nil {
 		useDefault = *cfg.Candidates.UseDefaultList
 	}
-	cfgPasswords, cfgWordlists := []string(nil), []string(nil)
+	cfgPasswords, cfgWordlists, cfgBreach := []string(nil), []string(nil), []string(nil)
 	if cfg != nil {
 		cfgPasswords = cfg.Candidates.Passwords
 		cfgWordlists = cfg.Candidates.Wordlists
+		cfgBreach = cfg.Candidates.Breach
 	}
 	// Priority passwords (tried first everywhere): the potfile, password files,
 	// and an environment-provided password keep secrets off the command line.
@@ -254,12 +271,66 @@ func runCrack(args []string) int {
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
+	allBreach := append(append([]string{}, breachLists...), cfgBreach...)
+	breachMin := *breachMinF
+	if breachMin == 0 && cfg != nil && cfg.Candidates.BreachMinCount > 0 {
+		breachMin = cfg.Candidates.BreachMinCount
+	}
+	sprayTok := append([]string{}, sprayTokens...)
+	if cfg != nil {
+		sprayTok = append(sprayTok, cfg.Search.SprayTokens...)
+	}
+	var sprayYearInts []int
+	for _, y := range sprayYears {
+		if n, err := strconv.Atoi(strings.TrimSpace(y)); err == nil {
+			sprayYearInts = append(sprayYearInts, n)
+		}
+	}
+	useSpray := *sprayF || len(sprayTok) > 0 || len(sprayYearInts) > 0 || (cfg != nil && cfg.Search.Spray)
+	shardSpec := *shardF
+	if shardSpec == "" && cfg != nil {
+		shardSpec = cfg.Search.Shard
+	}
+	shardIndex, shardCount, serr := parseShard(shardSpec)
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: --shard: %v\n", serr)
+		return 2
+	}
 
 	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
 	// the built-in list, and wordlist files, bounded), then cloned per file.
 	var pcfgModel *candidates.PCFG
 	if *pcfgF {
 		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
+	}
+
+	// Extra generators (flags, or the config's search block).
+	genToggle := *toggleF || (cfg != nil && cfg.Search.ToggleCase)
+	genPrince := *princeF || (cfg != nil && cfg.Search.Prince)
+	genKeyWalk := *keywalkF || (cfg != nil && cfg.Search.KeyboardWalk)
+	const (
+		princeMaxLen   = 32        // drop concatenations longer than this
+		princeMaxWords = 3         // at most this many words per chain
+		princeMax      = 5_000_000 // cap on PRINCE candidates per file
+		keyWalkMin     = 4         // shortest keyboard walk
+		keyWalkMax     = 10        // longest keyboard walk
+		keyWalkCount   = 1_000_000 // cap on generated walks
+	)
+
+	// A fresh, re-iterable chain of the file wordlists (stdin excluded, since it
+	// cannot be re-read). Shared by the hybrid, PRINCE and toggle-case builders.
+	freshWordlist := func() candidates.Source {
+		var ws []candidates.Source
+		for _, wl := range allWordlists {
+			if wl == "-" {
+				continue
+			}
+			ws = append(ws, candidates.File(wl))
+		}
+		if len(ws) == 0 {
+			return nil
+		}
+		return candidates.Chain(ws...)
 	}
 
 	buildCandidates := func(path string) xcrack.CandidateSource {
@@ -280,6 +351,18 @@ func runCrack(args []string) int {
 		if useDefault {
 			srcs = append(srcs, candidates.DefaultList())
 		}
+		// Spray: a compact, high-yield curated/token set, tried early (before the
+		// bulk wordlists). Years default to the current/previous calendar year.
+		if useSpray {
+			srcs = append(srcs, candidates.Spray(sprayTok, sprayYearInts, 0))
+		}
+		// Breach corpora: frequency-ordered real-leak lists, higher yield than a
+		// generic wordlist, so tried ahead of them. Count-annotated lines are
+		// parsed (and optionally prevalence-filtered); rules mangle each entry.
+		for _, bl := range allBreach {
+			base := patternSet.ApplyRules(candidates.BreachFile(bl, breachMin))
+			srcs = append(srcs, base)
+		}
 		for _, wl := range allWordlists {
 			var base candidates.Source
 			if wl == "-" {
@@ -297,19 +380,6 @@ func runCrack(args []string) int {
 		// mask (dict+mask / mask+dict). Built over a fresh file-wordlist chain
 		// (stdin cannot be re-iterated per mask, so it is excluded here).
 		if len(hybridAppendMasks) > 0 || len(hybridPrependMasks) > 0 {
-			freshWordlist := func() candidates.Source {
-				var ws []candidates.Source
-				for _, wl := range allWordlists {
-					if wl == "-" {
-						continue
-					}
-					ws = append(ws, candidates.File(wl))
-				}
-				if len(ws) == 0 {
-					return nil
-				}
-				return candidates.Chain(ws...)
-			}
 			for _, m := range hybridAppendMasks {
 				if w := freshWordlist(); w != nil {
 					srcs = append(srcs, pattern.Hybrid(w, m, true))
@@ -321,7 +391,26 @@ func runCrack(args []string) int {
 				}
 			}
 		}
-		return candidates.Chain(srcs...)
+		// Toggle-case variants of the wordlist words (hashcat toggle attack).
+		if genToggle {
+			if w := freshWordlist(); w != nil {
+				srcs = append(srcs, candidates.ToggleCase(w, 0))
+			}
+		}
+		// PRINCE: length-ordered concatenations of wordlist words.
+		if genPrince {
+			if w := freshWordlist(); w != nil {
+				srcs = append(srcs, candidates.Prince(w, 1, princeMaxLen, princeMaxWords, princeMax))
+			}
+		}
+		// Keyboard-walk: adjacency walks on a QWERTY keyboard (standalone).
+		if genKeyWalk {
+			srcs = append(srcs, candidates.KeyboardWalk(keyWalkMin, keyWalkMax, keyWalkCount))
+		}
+		// Distributed cracking: restrict this worker to its stride of the keyspace.
+		// A no-op when shardCount <= 1. Promoted/context/hint guesses live outside
+		// this base source, so every worker still tries them.
+		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
 	}
 
 	ctx := context.Background()
@@ -339,8 +428,27 @@ func runCrack(args []string) int {
 		prog = newProgress(len(files))
 	}
 	sem := make(chan struct{}, jobs)
+	// Dispatch order: argument order by default. With --adaptive, dispatch the
+	// smallest files first so the cheap, likely wins surface early and seed the
+	// corpus-wide promotion set before the big files run. Results stay indexed by
+	// the original position, so output order is unchanged.
+	dispatch := make([]int, len(files))
+	for i := range files {
+		dispatch[i] = i
+	}
+	if opts.CorpusPromotion {
+		sizes := make([]int64, len(files))
+		for i, path := range files {
+			if fi, err := os.Stat(path); err == nil {
+				sizes[i] = fi.Size()
+			}
+		}
+		sort.SliceStable(dispatch, func(a, b int) bool { return sizes[dispatch[a]] < sizes[dispatch[b]] })
+	}
+
 	var wg sync.WaitGroup
-	for i, path := range files {
+	for _, i := range dispatch {
+		path := files[i]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int, path string) {
@@ -358,7 +466,7 @@ func runCrack(args []string) int {
 			// Resumable single-target run: wrap the candidate source so progress is
 			// persisted and an interrupted run resumes near where it stopped.
 			if *checkpointPath != "" {
-				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, useDefault, []string(patterns)))
+				sig := fmt.Sprintf("%s:%d:%s:shard%d/%d", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok), shardIndex, shardCount)
 				ck, cerr := candidates.Checkpoint(src, *checkpointPath, sig, 0, -1)
 				if cerr != nil {
 					errs[i] = cerr
@@ -633,6 +741,16 @@ COMMON FLAGS:
       --hint-rules FILE          rule file applied to hint-derived words
       --hybrid-append MASK       wordlist word + mask expansion (dict+mask; repeatable)
       --hybrid-prepend MASK      mask expansion + wordlist word (mask+dict; repeatable)
+      --toggle-case              also try case-toggle variants of each wordlist word
+      --prince                   also try PRINCE chains (concatenated wordlist words)
+      --keyboard-walk            also try QWERTY keyboard-adjacency walks
+      --shard I/N                distributed cracking: test only shard I of N of the keyspace
+      --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
+      --spray                    curated spray set (common + season/year), tried early
+      --spray-token STR          org/product/user token mangled into the spray set (repeatable)
+      --spray-year N             year used in spray patterns (repeatable; default current/previous)
+      --breach FILE              frequency-annotated breach corpus (count-prefixed or pw:count; repeatable)
+      --breach-min-count N       drop breach entries seen fewer than N times
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list

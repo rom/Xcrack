@@ -13,6 +13,7 @@ package hashline
 import (
 	"encoding/hex"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/rom/xcrypto"
@@ -27,6 +28,28 @@ type Result struct {
 	John string
 	// Line is the hash string to feed the cracker (one target).
 	Line string
+}
+
+// Labeled is a Result tagged with the entry it was derived from (empty for a
+// whole-file target). It is what LineExporter.HashcatLines returns, one per
+// crackable entry in a container.
+type Labeled struct {
+	// Target is the container-relative entry path, or "" for a whole-file target.
+	Target string
+	Result
+}
+
+// LineExporter is an optional Format capability: emitting external-cracker
+// hash lines for its encrypted entries directly from the raw file, including
+// the bulk ciphertext and authentication tag that the probe-time Challenge
+// deliberately omits (e.g. WinZip AES, where the $zip2$ line a GPU cracker
+// needs carries the whole encrypted stream). The hashline CLI prefers this
+// over Emit when a format implements it, falling back to the Challenge-derived
+// Emit for formats that do not. Keeping the interface here (not in the root
+// xfileformats package) means only the few formats that can export lines take
+// on the hashline dependency.
+type LineExporter interface {
+	HashcatLines(r io.ReaderAt, size int64) ([]Labeled, error)
 }
 
 // Emit derives an external-cracker hash line from a probed Challenge. ok is
@@ -127,6 +150,39 @@ func emitPDF(ch *xcrypto.Challenge) (Result, bool) {
 	line := fmt.Sprintf("%s*%d*%s*%d*%s", prefix,
 		len(h.U), hex.EncodeToString(h.U), len(h.O), hex.EncodeToString(h.O))
 	return Result{Hashcat: mode, John: "PDF", Line: line}, true
+}
+
+// Zip2 builds a WinZip-AES `$zip2$` line (hashcat -m 13600, John `ZIP`) from a
+// raw AES entry's components. The layout, confirmed by cross-validation against
+// hashcat 6.2.6, is
+//
+//	$zip2$*0*<mode>*0*<salt>*<verify>*<dataLen>*<data>*<auth>*$/zip2$
+//
+// where mode is 1/2/3 for AES-128/192/256, salt is the full PBKDF2 salt
+// (keyBits/16 bytes), verify is the 2-byte password-verification value,
+// dataLen is the ciphertext length in bytes (decimal), data is the ciphertext,
+// and auth is the 10-byte truncated HMAC-SHA1 authentication code. The full
+// data and auth are required — an empty-data form does not crack. ok is false
+// for an unknown key size or any missing field.
+func Zip2(keyBits int, salt, verify, ct, auth []byte) (Result, bool) {
+	var mode int
+	switch keyBits {
+	case 128:
+		mode = 1
+	case 192:
+		mode = 2
+	case 256:
+		mode = 3
+	default:
+		return Result{}, false
+	}
+	if len(salt) == 0 || len(verify) == 0 || len(ct) == 0 || len(auth) == 0 {
+		return Result{}, false
+	}
+	line := fmt.Sprintf("$zip2$*0*%d*0*%s*%s*%d*%s*%s*$/zip2$",
+		mode, hex.EncodeToString(salt), hex.EncodeToString(verify),
+		len(ct), hex.EncodeToString(ct), hex.EncodeToString(auth))
+	return Result{Hashcat: 13600, John: "ZIP", Line: line}, true
 }
 
 // padRight zero-pads b on the right to exactly n bytes (truncating if longer).

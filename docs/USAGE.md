@@ -70,7 +70,7 @@ go build -o bin/xcrackd ./xcrack/cmd/xcrackd
 ```
 xcrack [flags] [sources...]      decrypt and recursively decompose sources
 xcrack identify [sources...]     detect format & encryption only (no cracking)
-xcrack hashline [sources...]     emit $office$/$pdf$ hash lines for hashcat / John
+xcrack hashline [sources...]     emit $office$/$pdf$/$zip2$ hash lines for hashcat / John
 xcrack version
 xcrack help
 ```
@@ -95,9 +95,10 @@ xcrack /inbox/                         # every file under a directory, recursive
 ### Candidate passwords
 
 Candidates are tried in this order: explicit passwords, the built-in default
-list, then each wordlist (expanded by any mangling rules), then mask keyspaces.
-A recovered password is **promoted** to the front for inner layers, so a nested
-archive that reuses a password is unlocked almost for free.
+list, the spray set, each breach corpus, then each wordlist (expanded by any
+mangling rules), then mask keyspaces. A recovered password is **promoted** to
+the front for inner layers, so a nested archive that reuses a password is
+unlocked almost for free.
 
 | Flag | Meaning |
 | ---- | ------- |
@@ -112,6 +113,13 @@ archive that reuses a password is unlocked almost for free.
 | `--hint-rules FILE` | hashcat-style rule file applied to hint-derived words (implies `--hint`) |
 | `--hybrid-append MASK` | append every expansion of `MASK` to each wordlist word (hashcat dict+mask, `-a 6`) — repeatable |
 | `--hybrid-prepend MASK` | prepend every expansion of `MASK` to each wordlist word (hashcat mask+dict, `-a 7`) — repeatable |
+| `--breach FILE` | a frequency-annotated breach corpus (`<count> <pw>` or `<pw>:<count>`; gzip auto-detected), tried ahead of plain wordlists — repeatable |
+| `--breach-min-count N` | drop breach entries seen fewer than `N` times (spray only the common ones) |
+| `--adaptive` | corpus-wide promotion across a multi-file run: a password recovered from any file is tried first on all the others (ordered by how often it has worked), and the smallest files are processed first so cheap wins seed the rest |
+| `--shard I/N` | distributed cracking: test only shard `I` of `N` of the keyspace (0-based). Run `0/N`…`N-1/N` on separate machines/processes over the same inputs; each covers a disjoint stride and together they cover everything. Promoted/context/hint guesses are tried by every shard |
+| `--spray` | add a compact curated spray set (globally common passwords + season/year walks), tried early |
+| `--spray-token STR` | an org/product/user token mangled into the spray set (year, `!`/`@`/`#` suffixes, case variants) — repeatable, implies `--spray` |
+| `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
@@ -132,7 +140,27 @@ xcrack quote.pdf
 # A lure archive whose README/body names the password, or an entry named
 # after its own password: let the engine seed guesses from context:
 xcrack --context phishing-email.eml
+
+# Password spraying for an authorized engagement: common + "Acme<year>" patterns:
+xcrack --spray --spray-token Acme protected.docx
+
+# A frequency-ordered breach corpus (HIBP-style "pw:count" or SecLists "count pw"),
+# only trying passwords seen at least 100 times:
+xcrack --breach leaked-passwords.txt.gz --breach-min-count 100 archive.zip
+
+# Distributed cracking: split one big keyspace across four machines. Each runs
+# the same command over the same inputs with a different shard; exactly one
+# finds the password, the rest exhaust their stride.
+xcrack --shard 0/4 -w huge.txt big.zip   # machine 0
+xcrack --shard 1/4 -w huge.txt big.zip   # machine 1  (… 2/4, 3/4 on the others)
 ```
+
+Sharding composes with the challenge envelope (`xcrack hashline` / the
+`xcrackd` service) so a file is probed once and the heavy search is fanned out:
+every worker loads the same inputs and `--shard I/N` restricts it to a disjoint
+1/N stride of the candidate keyspace. The stride (every N-th candidate, not N
+contiguous blocks) keeps a most-likely-first ordering spread across all shards,
+so no single worker gets all the good guesses.
 
 #### Context candidates
 
@@ -325,10 +353,15 @@ search:
   hint_rules:               # hashcat-style rules applied to hint-derived words
     - "c"
     - "$2 $0 $2 $4"
+  spray: true               # curated spray set (common + season/year patterns)
+  spray_tokens: [Acme]      # org/product/user tokens mangled into the spray set
+  adaptive: true            # corpus-wide promotion across files (smallest first)
 
 candidates:
   passwords: [infected, Welcome1]
   wordlists: [rockyou.txt, corp-words.txt.gz]
+  breach: [leaked-passwords.txt.gz]  # frequency-annotated breach corpora
+  breach_min_count: 10               # drop entries seen fewer than N times
   use_default_list: true
 
 patterns:
@@ -437,14 +470,26 @@ hashcat (`-m <mode>`) or John the Ripper (`--format=<name>`) expects. The hash
 line goes to **stdout** (so it pipes cleanly into a cracker); a
 `# <file> (hashcat -m N | john --format=X)` note goes to stderr.
 
-Supported today: encrypted **OOXML** Office documents (`$office$`, `-m
-9400/9500/9600`) and **PDF** (`$pdf$`, `-m 10400/10500/10600/10700`). These
-emitters are cross-validated against real hashcat (see
+Supported today:
+
+| Scheme | Line | hashcat `-m` | John `--format=` |
+| --- | --- | --- | --- |
+| OOXML Office (agile + standard) | `$office$` | 9400 / 9500 / 9600 | `office` |
+| PDF (RC4 / AESV2 / AESV3) | `$pdf$` | 10400 / 10500 / 10600 / 10700 | `PDF` |
+| WinZip AES ZIP entries (per entry) | `$zip2$` | 13600 | `ZIP` |
+
+These emitters are cross-validated against real hashcat (see
 `scripts/hashcat-xval.sh`). Other schemes report that no emitter exists yet.
+For a ZIP, a `$zip2$` line is emitted per WinZip-AES entry (AES-128/192/256);
+ZipCrypto entries are not exported here — they are attacked by the built-in
+known-plaintext path instead. Note the `$zip2$` line embeds the entry's full
+ciphertext and authentication tag, which the lightweight probe-time report
+omits, so `hashline` re-reads the entry to build it.
 
 ```sh
 xcrack hashline secret.docx > hashes.txt         # $office$*2013*100000*256*...
 xcrack hashline *.pdf 2>/dev/null >> hashes.txt  # append $pdf$ lines
+xcrack hashline archive.zip 2>/dev/null >> hashes.txt  # $zip2$ per AES entry
 hashcat -m 9600 hashes.txt rockyou.txt           # crack on the GPU box
 ```
 
@@ -623,6 +668,22 @@ xcrackd -addr :8080 -max-procs 16
 | `-allow-default-list` | off | permit `?defaults=true` to use the embedded wordlist |
 | `-read-timeout` / `-write-timeout` | 30s / 150s | HTTP timeouts |
 | `-shutdown-grace` | 20s | graceful-shutdown window |
+| `-gpu` | off | enable the optional OpenCL GPU tier (needs a `-tags opencl` build + OpenCL hardware; otherwise logs why and runs on CPU) |
+| `-gpu-selftest` | off | validate the OpenCL PBKDF2 kernel against the CPU reference, then exit |
+
+**Optional GPU tier (server only).** The default `xcrackd` is pure-Go and
+CPU-only. On a server with OpenCL hardware you can build an accelerated binary
+and opt in:
+
+```sh
+go build -tags opencl -o bin/xcrackd-gpu ./xcrack/cmd/xcrackd
+bin/xcrackd-gpu -gpu-selftest        # prove the kernel matches the CPU reference
+bin/xcrackd-gpu -gpu -addr :8080     # hardware-gated; falls back to CPU if absent
+```
+
+The GPU tier only accelerates PBKDF2-HMAC-SHA1 key derivation (the shared KDF);
+it never parses or opens file content, and the default build / CI never include
+it (ADR 0001 amendment).
 
 **Endpoints:**
 

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -167,7 +168,33 @@ func (p *potfile) add(pws ...string) {
 // used (with the target file's name and size) to key a resume checkpoint so a
 // changed keyspace is not silently resumed. It is best-effort: it covers the
 // explicit passwords, wordlists, default-list toggle, and pattern files.
-func candidateSig(passwords, wordlists []string, useDefault bool, patternFiles []string) string {
+// parseShard parses a "--shard I/N" spec into a zero-based index and a count.
+// An empty spec means no sharding (index 0, count 1). It rejects malformed
+// specs and an out-of-range index so a mistyped shard can never silently skip
+// part of the keyspace.
+func parseShard(spec string) (index, count int, err error) {
+	if strings.TrimSpace(spec) == "" {
+		return 0, 1, nil
+	}
+	parts := strings.SplitN(spec, "/", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("want I/N (e.g. 0/4), got %q", spec)
+	}
+	i, ierr := strconv.Atoi(strings.TrimSpace(parts[0]))
+	n, nerr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if ierr != nil || nerr != nil {
+		return 0, 0, fmt.Errorf("want integers I/N, got %q", spec)
+	}
+	if n < 1 {
+		return 0, 0, fmt.Errorf("shard count must be >= 1, got %d", n)
+	}
+	if i < 0 || i >= n {
+		return 0, 0, fmt.Errorf("shard index %d out of range for count %d (want 0..%d)", i, n, n-1)
+	}
+	return i, n, nil
+}
+
+func candidateSig(passwords, wordlists, breach []string, useDefault bool, patternFiles []string, spray bool, sprayTokens []string) string {
 	h := sha256.New()
 	writeAll := func(tag string, ss []string) {
 		fmt.Fprintf(h, "%s=%d\n", tag, len(ss))
@@ -177,8 +204,10 @@ func candidateSig(passwords, wordlists []string, useDefault bool, patternFiles [
 	}
 	writeAll("pw", passwords)
 	writeAll("wl", wordlists)
+	writeAll("breach", breach)
 	writeAll("pat", patternFiles)
-	fmt.Fprintf(h, "def=%t\n", useDefault)
+	writeAll("spraytok", sprayTokens)
+	fmt.Fprintf(h, "def=%t\nspray=%t\n", useDefault, spray)
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 

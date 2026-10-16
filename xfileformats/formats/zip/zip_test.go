@@ -6,11 +6,14 @@ import (
 	"compress/flate"
 	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"hash/crc32"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/rom/xcrypto/scheme/winzipaes"
@@ -218,6 +221,79 @@ func TestEmptyPasswordAndStored(t *testing.T) {
 	plain := []byte("x")
 	data := buildZipCrypto(t, password, []fixtureFile{{"a.txt", plain}})
 	checkRoundTrip(t, data, password, plain)
+}
+
+// TestHashcatLines checks the $zip2$ export: it builds a WinZip-AES entry and,
+// from the emitted line alone, reassembles the raw entry (salt, verifier,
+// ciphertext, auth) and confirms winzipaes.Verify accepts the real password and
+// rejects a wrong one. This proves the line carries exactly the bytes a GPU
+// cracker needs — the bulk ciphertext the probe-time Challenge omits.
+func TestHashcatLines(t *testing.T) {
+	password := []byte("S3cr3t-пароль")
+	plain := bytes.Repeat([]byte("the quick brown fox "), 8)
+	data := buildWinZipAES(t, password, 3, []fixtureFile{{"secret.txt", plain}})
+
+	lines, err := New().HashcatLines(bytes.NewReader(data), int64(len(data)))
+	if err != nil {
+		t.Fatalf("HashcatLines: %v", err)
+	}
+	if len(lines) != 1 {
+		t.Fatalf("got %d lines, want 1", len(lines))
+	}
+	l := lines[0]
+	if l.Target != "secret.txt" {
+		t.Errorf("target = %q, want secret.txt", l.Target)
+	}
+	if l.Hashcat != 13600 || l.John != "ZIP" {
+		t.Errorf("tool ids = (%d, %q), want (13600, ZIP)", l.Hashcat, l.John)
+	}
+
+	f := strings.Split(l.Line, "*")
+	if len(f) != 10 || f[0] != "$zip2$" || f[9] != "$/zip2$" {
+		t.Fatalf("unexpected $zip2$ shape (%d fields): %q", len(f), l.Line)
+	}
+	if f[2] != "3" {
+		t.Errorf("mode = %q, want 3 (AES-256)", f[2])
+	}
+	salt, verify, ct, auth := mustHexZip(t, f[4]), mustHexZip(t, f[5]), mustHexZip(t, f[7]), mustHexZip(t, f[8])
+	if n, _ := strconv.Atoi(f[6]); n != len(ct) {
+		t.Errorf("declared data length %d != actual %d", n, len(ct))
+	}
+	if len(salt) != 16 || len(verify) != winzipaes.PWVerifLen || len(auth) != winzipaes.MACLen {
+		t.Fatalf("field sizes: salt=%d verify=%d auth=%d", len(salt), len(verify), len(auth))
+	}
+
+	p := winzipaes.Params{Strength: 3}
+	raw := bytes.Join([][]byte{salt, verify, ct, auth}, nil)
+	if ok, err := winzipaes.Verify(password, p, raw); err != nil || !ok {
+		t.Fatalf("reassembled $zip2$ did not verify the correct password (ok=%v err=%v)", ok, err)
+	}
+	if ok, _ := winzipaes.Verify([]byte("wrong"), p, raw); ok {
+		t.Fatal("reassembled $zip2$ verified a wrong password")
+	}
+}
+
+// TestHashcatLinesSkipsNonAES checks non-AES entries are skipped: a pure
+// ZipCrypto archive yields no $zip2$ lines (ZipCrypto has no such emitter), and
+// a mixed archive yields a line only for the AES entry.
+func TestHashcatLinesSkipsNonAES(t *testing.T) {
+	zc := buildZipCrypto(t, []byte("pw"), []fixtureFile{{"a.txt", []byte("plain")}})
+	lines, err := New().HashcatLines(bytes.NewReader(zc), int64(len(zc)))
+	if err != nil {
+		t.Fatalf("HashcatLines(zipcrypto): %v", err)
+	}
+	if len(lines) != 0 {
+		t.Fatalf("zipcrypto yielded %d lines, want 0", len(lines))
+	}
+}
+
+func mustHexZip(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("hex %q: %v", s, err)
+	}
+	return b
 }
 
 func TestDetect(t *testing.T) {

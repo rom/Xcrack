@@ -17,6 +17,7 @@ import (
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
+	fdmg "github.com/rom/xfileformats/formats/dmg"
 	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/keepass"
@@ -87,6 +88,7 @@ type Options struct {
 	// unless told otherwise.
 	NoRecurse         bool // disable container decomposition (default: recurse)
 	NoPromote         bool // disable password promotion (default: promote)
+	CorpusPromotion   bool // promote recovered passwords across every file in a run (not just inner layers) and try the most repeatedly-successful ones first; requires promotion on (default: off)
 	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
@@ -188,6 +190,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	keepass.Register(r)
 	fp12.Register(r)
 	puttykey.Register(r)
+	fdmg.Register(r)
 	return r
 }
 
@@ -229,6 +232,7 @@ type Pool struct {
 	opts    Options
 	cracker *attack.Engine
 	metrics metrics
+	learned *learnedSet // corpus-wide recovered passwords (used when CorpusPromotion)
 }
 
 // NewPool returns a Pool configured by opts (defaults applied). The cracking
@@ -243,7 +247,7 @@ func NewPool(opts Options) *Pool {
 		BatchSize:       opts.BatchSize,
 		ThrottlePercent: opts.ThrottlePercent,
 	})
-	return &Pool{opts: opts, cracker: cr}
+	return &Pool{opts: opts, cracker: cr, learned: newLearnedSet(0)}
 }
 
 // Close releases the Pool. It is currently a no-op but is part of the stable
@@ -264,7 +268,17 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	}
 	spill := newSpillSet(p.opts.Limits.SpillThreshold, p.opts.Limits.TempDir)
 	e := &engine{opts: p.opts, cracker: p.cracker, spill: spill}
-	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
+	// Stream the input into a source (to disk when large), capping at
+	// MaxEntrySize: the section reader is pre-bounded, so an oversize root file
+	// is truncated to the cap rather than rejected (as the whole-file read was).
+	if size < 0 {
+		size = 0
+	}
+	limit := size
+	if m := p.opts.Limits.MaxEntrySize; m > 0 && limit > m {
+		limit = m
+	}
+	rootSrc, err := spill.materializeReader(io.NewSectionReader(src, 0, limit), 0)
 	if err != nil {
 		p.metrics.processingErrors.Add(1)
 		return nil, err
@@ -275,8 +289,15 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		effective = chainSources(p.opts.CandidateProvider.Candidates(ctx), candidates)
 	}
 	acc := newAccounting(p.opts.Limits)
-	prom := newPromoter(!p.opts.NoPromote)
-	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective, nil)
+	// Corpus-wide promotion threads the Pool's learned-password set through this
+	// run's promoter, so finds cross file boundaries; otherwise promotion stays
+	// per-file (inner layers only).
+	var shared *learnedSet
+	if p.opts.CorpusPromotion && !p.opts.NoPromote {
+		shared = p.learned
+	}
+	prom := newPromoter(!p.opts.NoPromote, shared)
+	root := e.decompose(ctx, "", rootSrc, 0, nil, prom, acc, effective, nil)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
 	res := &Result{Root: root, Stats: stats, spills: spill}
@@ -299,24 +320,6 @@ func Process(ctx context.Context, src io.ReaderAt, size int64, candidates Candid
 	p := NewPool(opts)
 	defer p.Close()
 	return p.Process(ctx, src, size, candidates)
-}
-
-// readAllAt reads up to max+1 bytes from an io.ReaderAt so oversize can be
-// detected, then returns exactly the content or an error if it exceeds max.
-func readAllAt(src io.ReaderAt, size, max int64) ([]byte, error) {
-	if size < 0 {
-		size = 0
-	}
-	limit := size
-	if max > 0 && limit > max {
-		limit = max
-	}
-	buf := make([]byte, limit)
-	n, err := io.ReadFull(io.NewSectionReader(src, 0, limit), buf)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return nil, err
-	}
-	return buf[:n], nil
 }
 
 // tighter returns the smaller positive duration of a and b (0 means "no bound").

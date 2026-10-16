@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"github.com/rom/xcrypto"
+	"github.com/rom/xcrypto/hashline"
 	"github.com/rom/xcrypto/scheme/winzipaes"
 	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
@@ -284,6 +285,52 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) 
 		Path: name, Size: int64(zf.UncompressedSize64),
 		Encrypted: true, Challenge: ch, Verify: verify, Open: open,
 	}, nil
+}
+
+// HashcatLines implements hashline.LineExporter: it emits a crackable $zip2$
+// line (hashcat -m 13600) for every WinZip-AES entry in the archive. Unlike the
+// probe-time Challenge — which carries only the header (salt + 2-byte verifier)
+// so the engine's fast reject stays cheap — this reads the full raw entry and
+// includes the ciphertext and 10-byte authentication code a GPU cracker needs.
+// Unencrypted, ZipCrypto, and otherwise-unsupported entries are skipped; a
+// per-entry read or split failure skips that entry rather than failing the
+// whole file.
+func (f *Format) HashcatLines(r io.ReaderAt, size int64) ([]hashline.Labeled, error) {
+	zr, err := stdzip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", xfileformats.ErrMalformed, err)
+	}
+	if len(zr.File) > maxEntries {
+		return nil, xfileformats.ErrLimitExceeded
+	}
+	var out []hashline.Labeled
+	for _, zf := range zr.File {
+		if strings.HasSuffix(zf.Name, "/") || zf.Flags&0x1 == 0 || zf.Method != methodAES {
+			continue
+		}
+		name := sanitizePath(zf.Name)
+		if name == "" {
+			continue
+		}
+		p, ok := parseAESExtra(zf.Extra)
+		if !ok || p.KeyLen() == 0 {
+			continue
+		}
+		raw, err := readRawBytes(zf, maxEntryRaw)
+		if err != nil {
+			continue
+		}
+		salt, pwv, ct, mac, err := winzipaes.Split(p, raw)
+		if err != nil {
+			continue
+		}
+		res, ok := hashline.Zip2(p.KeyLen()*8, salt, pwv, ct, mac)
+		if !ok {
+			continue
+		}
+		out = append(out, hashline.Labeled{Target: name, Result: res})
+	}
+	return out, nil
 }
 
 // parseAESExtra scans the raw extra-field blob for the 0x9901 WinZip AES header.

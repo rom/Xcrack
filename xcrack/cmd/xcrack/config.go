@@ -36,10 +36,19 @@ type fileConfig struct {
 		HintRules     []string `yaml:"hint_rules"`     // hashcat-style rule lines applied to hint-derived words
 		HybridAppend  []string `yaml:"hybrid_append"`  // masks appended to each wordlist word (dict+mask)
 		HybridPrepend []string `yaml:"hybrid_prepend"` // masks prepended to each wordlist word (mask+dict)
+		ToggleCase    bool     `yaml:"toggle_case"`    // case-toggle variants of each wordlist word
+		Prince        bool     `yaml:"prince"`         // PRINCE chains over the wordlists
+		KeyboardWalk  bool     `yaml:"keyboard_walk"`  // QWERTY keyboard-adjacency walks
+		Spray         bool     `yaml:"spray"`          // curated password-spraying set
+		SprayTokens   []string `yaml:"spray_tokens"`   // org/product/user tokens mangled into the spray set
+		Adaptive      bool     `yaml:"adaptive"`       // corpus-wide adaptive promotion across files
+		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`
 		Passwords      []string `yaml:"passwords"`
+		Breach         []string `yaml:"breach"`           // frequency-annotated breach corpora
+		BreachMinCount int64    `yaml:"breach_min_count"` // drop breach entries below this prevalence
 		UseDefaultList *bool    `yaml:"use_default_list"`
 	} `yaml:"candidates"`
 	Patterns struct {

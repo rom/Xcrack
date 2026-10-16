@@ -33,6 +33,34 @@ file to an application that could interpret it.
 - **+** The crypto surface is fully under test (known-answer + fuzz).
 - **−** Each format's KDF/cipher/container must be implemented and maintained by
   us; breadth grows slower than "shell out" would.
-- **−** No GPU acceleration (pure Go, CPU-only) — accepted (see ASR non-goals).
+- **−** No GPU acceleration in the default build (pure Go, CPU-only) — accepted
+  (see ASR non-goals); relaxed only for the opt-in server tier below.
 - cgo may be revisited *only* for an optional, clearly-isolated performance
   primitive, never for parsing or opening content.
+
+## Amendment (2026) — opt-in server-tier GPU/OpenCL exception
+
+The one sanctioned use of the cgo escape hatch above: an **optional OpenCL
+acceleration tier for the `xcrackd` server**, in `xcrack/pkg/accel`.
+
+- **Default build is unchanged.** Every `go build` / `go test` and all of CI
+  produce a pure-Go, cgo-free binary: the `accel` package's default file
+  (`//go:build !opencl`) has no cgo and reports "not built". The GPU backend
+  (`//go:build opencl`, cgo + `-lOpenCL`) is compiled in only when an operator
+  explicitly builds `xcrackd` with `-tags opencl` on a host with an OpenCL SDK.
+  CI never builds or runs it.
+- **Hardware-gated and verifiable.** `xcrackd --gpu` uses the tier only if a
+  usable OpenCL device is present, and `--gpu-selftest` (or the automatic
+  self-test on `--gpu`) proves the kernel's PBKDF2-HMAC-SHA1 output is
+  byte-for-byte identical to the Go reference before any result is trusted;
+  otherwise it logs why and falls back to the CPU engine.
+- **Scope respects the hard rule.** The accelerator only derives keys
+  (PBKDF2-HMAC-SHA1, the shared KDF); it never parses or opens file content, so
+  QA-2 ("never execute content") is untouched. It lives in the server tier
+  only, never in the embeddable library's default path.
+
+This keeps the pure-Go, non-executing, single-static-binary guarantees for
+every default consumer while letting a dedicated server optionally exploit GPU
+hardware it happens to have. Live per-scheme routing of the crack loop's KDF
+through this primitive is a follow-up; the primitive itself is implemented and
+validated.

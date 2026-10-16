@@ -56,8 +56,10 @@ they are not date-bound. Each phase leaves `main` releasable.
   backend called by an Impex kiosk / DataLock (QA-13).
 - ✅ Metrics/telemetry hooks (`Pool.Metrics()`, `GET /v1/metrics`).
 - ✅ Pluggable live candidate provider (`Options.CandidateProvider`).
-- Optional distributed candidate sharding (coordinator + workers) — still CPU,
-  still offline. (Explicitly a later, opt-in capability, not core.)
+- ✅ Optional distributed candidate sharding (`--shard I/N` / `candidates.Shard`)
+  — a disjoint stride of the keyspace per worker, still CPU, still offline,
+  composed with the challenge envelope. (Opt-in; orchestration is left to any
+  external job runner rather than a built-in network coordinator.)
 
 ## Phase 5 — Extended formats (demand-driven)
 - ✅ **age** (scrypt passphrase) and ✅ **GPG symmetric** (`gpg -c`, SEIPD v1/MDC),
@@ -65,9 +67,14 @@ they are not date-bound. Each phase leaves `main` releasable.
 - ✅ **Header-encrypted 7z/RAR** (`7z -mhe`, `rar -hp`): the whole archive is a
   single password-gated entry that unlocks to a tar the engine re-decomposes,
   cross-validated against the `7z` / `rar` CLIs.
-- KeePass databases; Apple iWork; SQLCipher; encrypted DMG; RAR5 specifics;
-  ODF AES-GCM. (Several need test oracles not present in the build environment;
-  implemented as fixtures become available.)
+- ✅ **KeePass** (KDBX4, in-tree Argon2d), ✅ **Apple iWork**, ✅ **SQLCipher**,
+  ✅ **ODF AES-GCM**.
+- ✅ **Apple encrypted DMG**: v1 (AES-128) and v2 (AES-128/256) password
+  verification, cross-validated against John the Ripper's authoritative `dmg`
+  vectors; consumed via the portable `dmg2john` `$dmg$` line (direct on-disk
+  `encrcdsa` header parsing staged pending a real-image sample).
+- RAR5 specifics remain; the few others need test oracles not present in the
+  build environment and are implemented as fixtures become available.
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate
   effort; gated on real demand and a dedicated threat review.
 
@@ -78,7 +85,9 @@ they are not date-bound. Each phase leaves `main` releasable.
 - Documentation kept in lock-step (ADR per significant decision).
 
 ## Explicitly out (all phases)
-- GPU/OpenCL cracking.
+- GPU/OpenCL cracking in the default build — **except** the opt-in, hardware-gated
+  `xcrackd` server tier (`-tags opencl`, `pkg/accel`), which never ships in the
+  pure-Go default or in CI (see ADR 0001 amendment).
 - Any network/online/remote attack.
 - Cryptographic weakening/exploitation of sound algorithms.
 - Executing or rendering file content.

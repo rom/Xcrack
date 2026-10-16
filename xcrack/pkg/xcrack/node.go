@@ -3,10 +3,13 @@ package xcrack
 import (
 	"bytes"
 	"crypto/sha256"
+	"fmt"
 	"io"
 	"os"
 	"sync"
 	"time"
+
+	"github.com/rom/xfileformats"
 )
 
 // NodeStatus describes the outcome of processing one node in the decomposition
@@ -131,77 +134,183 @@ type ContentRef interface {
 	SHA256() [32]byte
 }
 
-// memContent is an in-memory ContentRef (the MVP backing; a disk-spill backing
-// is planned for large intermediates).
-type memContent struct {
-	data []byte
-	sum  [32]byte
-}
-
-func newMemContent(data []byte) *memContent {
-	return &memContent{data: data, sum: sha256.Sum256(data)}
-}
-
-func (m *memContent) Open() (io.ReadCloser, error) {
-	return io.NopCloser(bytes.NewReader(m.data)), nil
-}
-func (m *memContent) Size() int64      { return int64(len(m.data)) }
-func (m *memContent) SHA256() [32]byte { return m.sum }
-
-// spillContent is a ContentRef backed by a temp file, for intermediates larger
-// than the spill threshold. On Unix the backing file is unlinked at creation so
-// it is anonymous and vanishes when the fd is closed (or at process exit).
-type spillContent struct {
-	f    *os.File
+// source is the content the engine decomposes: either an in-memory byte slice
+// (the common, small case) or a temp-file-backed reader for a large entry that
+// was streamed to disk so it never occupied RAM. It is what decompose operates
+// over, and it implements ContentRef so a leaf node can hold it directly. The
+// SHA-256 is computed once (incrementally while streaming) and the size is the
+// exact byte count. A file-backed source is tracked by the spillSet and closed
+// when the Result is released.
+type source struct {
+	data []byte   // in-memory backing (nil when file-backed)
+	f    *os.File // file backing (nil when in-memory)
 	size int64
 	sum  [32]byte
 }
 
-func (s *spillContent) Open() (io.ReadCloser, error) {
-	return io.NopCloser(io.NewSectionReader(s.f, 0, s.size)), nil
+func newMemSource(data []byte) *source {
+	return &source{data: data, size: int64(len(data)), sum: sha256.Sum256(data)}
 }
-func (s *spillContent) Size() int64      { return s.size }
-func (s *spillContent) SHA256() [32]byte { return s.sum }
-func (s *spillContent) close() error     { return s.f.Close() }
+
+// peek returns the first PeekSize bytes for format detection, without copying
+// the whole content (a file-backed source reads just the prefix).
+func (s *source) peek() []byte {
+	n := int64(xfileformats.PeekSize)
+	if n > s.size {
+		n = s.size
+	}
+	if s.data != nil {
+		return s.data[:n]
+	}
+	buf := make([]byte, n)
+	_, _ = s.f.ReadAt(buf, 0)
+	return buf
+}
+
+// readerAt returns a random-access view for format parsers (archive/zip, PDF,
+// …), which never materializes a file-backed source into RAM.
+func (s *source) readerAt() io.ReaderAt {
+	if s.data != nil {
+		return bytes.NewReader(s.data)
+	}
+	return io.NewSectionReader(s.f, 0, s.size)
+}
+
+// Open, Size, SHA256 implement ContentRef so a source can be a leaf's Content.
+func (s *source) Open() (io.ReadCloser, error) {
+	return io.NopCloser(io.NewSectionReader(s.readerAt(), 0, s.size)), nil
+}
+func (s *source) Size() int64      { return s.size }
+func (s *source) SHA256() [32]byte { return s.sum }
+func (s *source) close() error {
+	if s.f != nil {
+		return s.f.Close()
+	}
+	return nil
+}
 
 // spillSet decides whether a node's bytes stay in memory or spill to disk, and
 // tracks spilled files so a Result can release them. It is safe for concurrent
-// use. A zero or negative threshold disables spilling.
+// use. A zero or negative threshold disables spilling (everything stays in RAM).
 type spillSet struct {
 	mu        sync.Mutex
 	threshold int64
 	tempDir   string
-	files     []*spillContent
+	files     []*source
 }
 
 func newSpillSet(threshold int64, tempDir string) *spillSet {
 	return &spillSet{threshold: threshold, tempDir: tempDir}
 }
 
-// materialize returns a ContentRef for data: a temp-file-backed ref when data is
-// at least the threshold, otherwise an in-memory ref. Any spill failure falls
-// back to memory, so correctness never depends on the filesystem.
-func (s *spillSet) materialize(data []byte) ContentRef {
-	if s == nil || s.threshold <= 0 || int64(len(data)) < s.threshold {
-		return newMemContent(data)
+// streamChunk is the sliding-window buffer size used while spilling a reader to
+// disk, so peak memory for a large entry is this, not the entry size.
+const streamChunk = 1 << 20 // 1 MiB
+
+// materialize returns an in-memory source for data (used where the bytes are
+// already in hand, e.g. a freshly decrypted whole-file payload). Large content
+// should prefer materializeReader so it is never held in RAM in the first place.
+func (s *spillSet) materialize(data []byte) *source { return newMemSource(data) }
+
+// materializeReader drains r into a source, bounding peak memory: it buffers up
+// to the spill threshold, and if the content is larger it spills the rest to a
+// temp file in streamChunk-sized windows, hashing as it goes — so a multi-GiB
+// entry never occupies more than ~threshold+streamChunk of RAM. Small content
+// (under the threshold, or when spilling is disabled or fails) stays in memory,
+// exactly as before. If max > 0 and the content exceeds it, ErrLimitExceeded is
+// returned so oversize entries are reported, not silently truncated.
+func (s *spillSet) materializeReader(r io.Reader, max int64) (*source, error) {
+	// Decide the in-memory cap: the spill threshold when spilling is enabled,
+	// otherwise unbounded (behavior identical to the old read-all path).
+	buffered := int64(-1) // unbounded
+	if s != nil && s.threshold > 0 {
+		buffered = s.threshold
 	}
-	f, err := os.CreateTemp(s.tempDir, "xcrack-spill-*")
+
+	// Read the in-memory prefix (the whole thing when small).
+	var head []byte
+	var err error
+	if buffered < 0 {
+		head, err = readBounded(r, max)
+		if err != nil {
+			return nil, err
+		}
+		return newMemSource(head), nil
+	}
+	head, err = io.ReadAll(io.LimitReader(r, buffered))
 	if err != nil {
-		return newMemContent(data)
+		return nil, err
 	}
-	if _, err := f.Write(data); err != nil {
+	if int64(len(head)) < buffered {
+		// Reader was exhausted within the threshold: keep it in memory.
+		return newMemSource(head), nil
+	}
+
+	// Larger than the threshold: spill to a temp file in bounded windows.
+	f, cerr := os.CreateTemp(s.tempDir, "xcrack-spill-*")
+	if cerr != nil {
+		// No temp file: fall back to reading the rest into memory (still bounded
+		// by max), so correctness never depends on the filesystem.
+		rest, rerr := readBounded(r, remaining(max, int64(len(head))))
+		if rerr != nil {
+			return nil, rerr
+		}
+		return newMemSource(append(head, rest...)), nil
+	}
+	_ = os.Remove(f.Name()) // anonymous, self-cleaning
+
+	h := sha256.New()
+	total := int64(0)
+	write := func(b []byte) error {
+		if max > 0 && total+int64(len(b)) > max {
+			return fmt.Errorf("%w: entry exceeds MaxEntrySize", xfileformats.ErrLimitExceeded)
+		}
+		if _, werr := f.Write(b); werr != nil {
+			return werr
+		}
+		h.Write(b)
+		total += int64(len(b))
+		return nil
+	}
+	if werr := write(head); werr != nil {
 		f.Close()
-		os.Remove(f.Name())
-		return newMemContent(data)
+		return nil, werr
 	}
-	// Unlink now so the file is anonymous and self-cleaning; keep the fd. If the
-	// platform refuses, Close() still removes it by the path we recorded.
-	_ = os.Remove(f.Name())
-	sc := &spillContent{f: f, size: int64(len(data)), sum: sha256.Sum256(data)}
+	buf := make([]byte, streamChunk)
+	for {
+		n, rerr := r.Read(buf)
+		if n > 0 {
+			if werr := write(buf[:n]); werr != nil {
+				f.Close()
+				return nil, werr
+			}
+		}
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			f.Close()
+			return nil, rerr
+		}
+	}
+	src := &source{f: f, size: total}
+	copy(src.sum[:], h.Sum(nil))
 	s.mu.Lock()
-	s.files = append(s.files, sc)
+	s.files = append(s.files, src)
 	s.mu.Unlock()
-	return sc
+	return src, nil
+}
+
+// remaining returns the residual byte budget after already consuming have bytes
+// of a max-byte limit (<=0 means unbounded, preserved as 0 for readBounded).
+func remaining(max, have int64) int64 {
+	if max <= 0 {
+		return 0
+	}
+	if have >= max {
+		return 0
+	}
+	return max - have
 }
 
 func (s *spillSet) closeAll() error {
