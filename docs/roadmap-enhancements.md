@@ -27,7 +27,7 @@ Items marked **[batch]** are the current implementation batch.
 | | Feature | Notes |
 |--|---------|-------|
 | ⬜ | **Checkpoint / resume** **[batch]** | Persist search position for a long single-file run; resume after interruption. |
-| ⬜ | **Full rule engine** **[batch]** | Complete hashcat rule-function set, rule stacking, reject rules, `.rule` files. |
+| ✅ | **Full rule engine** | Broad hashcat function set (case, dup/reflect, rotate/trim, insert/overwrite/swap/extract, ascii±, title, `pN zN ZN yN YN`, …) + reject rules (`<>_ ! / ( ) =`) + stacking; word length capped (bomb-safe). |
 | ⬜ | **Context / association candidates** **[batch]** | Seed candidates from filename, archive comments, document metadata, and strings harvested from already-decrypted siblings. |
 | ⬜ | **Per-format fast-reject** **[batch]** | A cheap pre-check hook run before the expensive KDF to discard hopeless candidates. |
 | ✅ | **Candidate dedup** | `candidates.Dedup` — bounded dedup wrapper so masks×rules don't retry a string. |
@@ -54,7 +54,7 @@ Items marked **[batch]** are the current implementation batch.
 |--|----------|-------|
 | ✅ | Dictionary / wordlist | Implemented. |
 | ✅ | Mask brute-force | Implemented (`?l?u?d?s?a?b` + `?1..?4`). |
-| ✅ | Rule mangling (subset) | Implemented; full set is **[batch]** above. |
+| ✅ | Rule mangling (full) | Broad hashcat function set + reject rules + stacking. |
 | ✅ | Password promotion | Implemented. |
 | ✅ | Statistical **ordering** (Markov) | `candidates.ByScore` + `Markov`. |
 | ✅ | **Combinator** | `candidates.Combinator`. |
