@@ -47,7 +47,7 @@ func buildStoredZipCrypto(t *testing.T, name, pw string, content []byte) (archiv
 // engine re-validates them, so the test still exercises the real validation path.
 type fakeOffloader struct{ keys zipcrypto.Keys }
 
-func (f fakeOffloader) Recover(plain, cipher []byte) (zipcrypto.Keys, bool, error) {
+func (f fakeOffloader) Recover(ctx context.Context, plain, cipher []byte) (zipcrypto.Keys, bool, error) {
 	return f.keys, true, nil
 }
 

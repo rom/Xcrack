@@ -10,6 +10,7 @@ import (
 	stdzip "archive/zip"
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -167,7 +168,7 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 	// recovered state back over the 12-byte header, decrypts the whole entry, and
 	// decompresses. The result's CRC is checked, so a wrong `known` (e.g. for a
 	// DEFLATE entry whose compressed bytes are unknown) cannot yield a false hit.
-	keyRecover := func(known []byte, offload any) (io.Reader, bool, error) {
+	keyRecover := func(ctx context.Context, known []byte, offload any) (io.Reader, bool, error) {
 		raw, err := readRawBytes(zf, maxEntryRaw)
 		if err != nil {
 			return nil, false, err
@@ -188,12 +189,12 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 			ok   bool
 		)
 		if off, _ := offload.(zipcrypto.Offloader); off != nil {
-			keys, ok, err = zipcrypto.RecoverKeysWith(known[:n], data[:n], off)
+			keys, ok, err = zipcrypto.RecoverKeysWith(ctx, known[:n], data[:n], off)
 			if err != nil {
 				return nil, false, err
 			}
 		} else {
-			keys, ok = zipcrypto.RecoverKeys(known[:n], data[:n])
+			keys, ok = zipcrypto.RecoverKeysCtx(ctx, known[:n], data[:n])
 		}
 		if !ok {
 			return nil, false, nil

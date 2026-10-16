@@ -29,7 +29,7 @@ import (
 // ran but did not find the keys; a non-nil error means the engine could not be
 // run or produced output that could not be parsed.
 type Offloader interface {
-	Recover(plain, cipher []byte) (keys Keys, ok bool, err error)
+	Recover(ctx context.Context, plain, cipher []byte) (keys Keys, ok bool, err error)
 }
 
 // RecoverKeysWith runs the known-plaintext attack through an external Offloader
@@ -37,15 +37,16 @@ type Offloader interface {
 // locally by replaying the keystream over the whole known window, so a buggy or
 // hostile engine can never produce a false positive: a result that does not
 // reproduce the keystream is reported as not-found. On success the Keys are the
-// state just before plain[0], identical to RecoverKeys.
-func RecoverKeysWith(plain, cipher []byte, off Offloader) (Keys, bool, error) {
+// state just before plain[0], identical to RecoverKeys. ctx is passed to the
+// Offloader so a caller can bound or cancel the external run.
+func RecoverKeysWith(ctx context.Context, plain, cipher []byte, off Offloader) (Keys, bool, error) {
 	if off == nil {
 		return Keys{}, false, errors.New("zipcrypto: nil Offloader")
 	}
 	if len(plain) != len(cipher) || len(plain) < MinKnownPlaintext {
 		return Keys{}, false, nil
 	}
-	keys, ok, err := off.Recover(plain, cipher)
+	keys, ok, err := off.Recover(ctx, plain, cipher)
 	if err != nil || !ok {
 		return Keys{}, false, err
 	}
@@ -97,9 +98,12 @@ var bkcrackKeysRe = regexp.MustCompile(`([0-9a-fA-F]{8})[ \t]+([0-9a-fA-F]{8})[ 
 // Recover implements Offloader. A non-nil error is returned only when bkcrack
 // could not be executed or timed out; a clean run that found nothing (bkcrack
 // exits non-zero in that case) is reported as ok=false, err=nil.
-func (b ExternalBkcrack) Recover(plain, cipher []byte) (Keys, bool, error) {
+func (b ExternalBkcrack) Recover(ctx context.Context, plain, cipher []byte) (Keys, bool, error) {
 	if b.Bin == "" {
 		return Keys{}, false, errors.New("zipcrypto: ExternalBkcrack.Bin is empty")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	dir, err := os.MkdirTemp(b.Dir, "xcrack-bkcrack-")
 	if err != nil {
@@ -118,7 +122,6 @@ func (b ExternalBkcrack) Recover(plain, cipher []byte) (Keys, bool, error) {
 		return Keys{}, false, err
 	}
 
-	ctx := context.Background()
 	if b.Timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, b.Timeout)

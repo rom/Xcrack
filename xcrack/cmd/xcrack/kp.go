@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"flag"
 	"fmt"
 	"os"
@@ -90,7 +91,7 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 	)
 	if *bkcrackF != "" {
 		fmt.Fprintf(os.Stderr, "xcrack kp: offloading to %s\n", *bkcrackF)
-		keys, ok, rderr = zipcrypto.RecoverKeysWith(plain, cipher, zipcrypto.ExternalBkcrack{Bin: *bkcrackF, Timeout: *bkTimeout})
+		keys, ok, rderr = zipcrypto.RecoverKeysWith(context.Background(), plain, cipher, zipcrypto.ExternalBkcrack{Bin: *bkcrackF, Timeout: *bkTimeout})
 	} else {
 		fmt.Fprintln(os.Stderr, "xcrack kp: running in-process Biham-Kocher attack (compute-heavy; --bkcrack offloads it)")
 		keys, ok = zipcrypto.RecoverKeys(plain, cipher)

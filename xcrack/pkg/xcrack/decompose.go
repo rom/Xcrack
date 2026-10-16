@@ -255,7 +255,7 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 // falls back to the password search. The key-recovery closure re-validates its
 // result, so a wrong `known` cannot yield a false positive.
 func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, entry *xfileformats.Entry, known []byte, offload any, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (*Node, bool) {
-	r, ok, err := entry.KeyRecover(known, offload)
+	r, ok, err := entry.KeyRecover(ctx, known, offload)
 	if err != nil || !ok {
 		return nil, false
 	}

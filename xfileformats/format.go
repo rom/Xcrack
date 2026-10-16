@@ -10,6 +10,7 @@
 package xfileformats
 
 import (
+	"context"
 	"io"
 
 	"github.com/rom/xcrypto"
@@ -104,5 +105,6 @@ type Entry struct {
 	// content on success, ok=false when the known plaintext does not fit the
 	// scheme (so the caller falls back to a password search). The recovered state
 	// is always re-validated, so a wrong `known` cannot yield a false positive.
-	KeyRecover func(known []byte, offload any) (content io.Reader, ok bool, err error)
+	// ctx bounds the (compute-heavy) in-process search.
+	KeyRecover func(ctx context.Context, known []byte, offload any) (content io.Reader, ok bool, err error)
 }

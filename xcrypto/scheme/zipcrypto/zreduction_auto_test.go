@@ -1,8 +1,32 @@
 package zipcrypto
 
 import (
+	"context"
 	"testing"
+	"time"
 )
+
+// TestRecoverKeysCtxCancel proves the compute-heavy in-process attack honors
+// context cancellation: with an already-cancelled context it returns promptly
+// (after the one-time reduction) instead of grinding through the full keyspace.
+func TestRecoverKeysCtxCancel(t *testing.T) {
+	plain := []byte("the quick brown fox jumps over the lazy dog 0123456789")
+	cipher := append([]byte(nil), plain...)
+	ek := NewKeys([]byte("hunter2"))
+	ek.Encrypt(cipher)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel before starting
+
+	start := time.Now()
+	_, ok := RecoverKeysCtx(ctx, plain, cipher)
+	if ok {
+		t.Fatal("cancelled attack must not report success")
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Fatalf("cancelled attack did not stop promptly: %v", d)
+	}
+}
 
 // TestAutoPipelineRecovers proves the automatic attack is correct end to end:
 // reduceKey2 keeps the true key2, and feeding the true candidate through

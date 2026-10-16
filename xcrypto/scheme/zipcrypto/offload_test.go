@@ -1,6 +1,7 @@
 package zipcrypto
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -51,7 +52,7 @@ func TestExternalBkcrackOffload(t *testing.T) {
 	body := fmt.Sprintf("#!/bin/sh\necho '[12:00:00] Keys'\necho '%s'\n", bkHex(want))
 	bin := writeStub(t, "bkcrack-stub.sh", body)
 
-	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+	keys, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: bin})
 	if err != nil {
 		t.Fatalf("RecoverKeysWith: %v", err)
 	}
@@ -74,7 +75,7 @@ func TestExternalBkcrackOneLine(t *testing.T) {
 	body := fmt.Sprintf("#!/bin/sh\necho 'Keys: %s'\n", bkHex(want))
 	bin := writeStub(t, "bkcrack-oneline.sh", body)
 
-	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+	keys, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: bin})
 	if err != nil || !ok {
 		t.Fatalf("RecoverKeysWith: ok=%v err=%v", ok, err)
 	}
@@ -93,7 +94,7 @@ func TestExternalBkcrackWrongKeysRejected(t *testing.T) {
 	body := fmt.Sprintf("#!/bin/sh\necho 'Keys'\necho '%s'\n", bkHex(bad))
 	bin := writeStub(t, "bkcrack-wrong.sh", body)
 
-	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+	keys, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: bin})
 	if err != nil {
 		t.Fatalf("RecoverKeysWith: %v", err)
 	}
@@ -108,7 +109,7 @@ func TestExternalBkcrackMiss(t *testing.T) {
 	plain, cipher, _ := kpVector("hunter2", "the quick brown fox jumps over the lazy dog 0123456789")
 	bin := writeStub(t, "bkcrack-miss.sh", "#!/bin/sh\necho 'Could not find the keys.' >&2\nexit 1\n")
 
-	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+	keys, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: bin})
 	if err != nil {
 		t.Fatalf("a clean miss should not error, got %v", err)
 	}
@@ -120,7 +121,7 @@ func TestExternalBkcrackMiss(t *testing.T) {
 // TestExternalBkcrackBinaryMissing surfaces an unrunnable binary as an error.
 func TestExternalBkcrackBinaryMissing(t *testing.T) {
 	plain, cipher, _ := kpVector("hunter2", "the quick brown fox jumps over the lazy dog 0123456789")
-	_, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: filepath.Join(t.TempDir(), "does-not-exist")})
+	_, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: filepath.Join(t.TempDir(), "does-not-exist")})
 	if ok {
 		t.Fatal("unexpected success")
 	}
@@ -132,7 +133,7 @@ func TestExternalBkcrackBinaryMissing(t *testing.T) {
 // TestRecoverKeysWithNilOffloader guards the nil case.
 func TestRecoverKeysWithNilOffloader(t *testing.T) {
 	plain, cipher, _ := kpVector("hunter2", "the quick brown fox jumps over the lazy dog 0123456789")
-	if _, ok, err := RecoverKeysWith(plain, cipher, nil); ok || err == nil {
+	if _, ok, err := RecoverKeysWith(context.Background(), plain, cipher, nil); ok || err == nil {
 		t.Fatalf("nil offloader: ok=%v err=%v", ok, err)
 	}
 }
@@ -181,7 +182,7 @@ func TestExternalBkcrackReal(t *testing.T) {
 	}
 	for _, pw := range []string{"hunter2", "S3cr3t!", "correct horse battery staple"} {
 		plain, cipher, want := kpVector(pw, "the quick brown fox jumps over the lazy dog 0123456789 and then some")
-		keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+		keys, ok, err := RecoverKeysWith(context.Background(), plain, cipher, ExternalBkcrack{Bin: bin})
 		if err != nil {
 			t.Fatalf("pw=%q: real bkcrack: %v", pw, err)
 		}

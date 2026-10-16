@@ -1,6 +1,7 @@
 package zipcrypto
 
 import (
+	"context"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -287,7 +288,15 @@ func ensureU32(b []uint32, n int) []uint32 {
 // the heavy backend prefer offloading to an external/GPU engine via the
 // challenge-export bridge. Use RecoverKeysBudget to bound the effort.
 func RecoverKeys(plain, cipher []byte) (Keys, bool) {
-	k, ok, _ := RecoverKeysBudget(plain, cipher, 0)
+	k, ok, _ := RecoverKeysBudgetCtx(context.Background(), plain, cipher, 0)
+	return k, ok
+}
+
+// RecoverKeysCtx is RecoverKeys that stops early when ctx is cancelled (the
+// compute-heavy search can run for minutes to hours, so a caller embedding it in
+// a request should bound it with a context deadline).
+func RecoverKeysCtx(ctx context.Context, plain, cipher []byte) (Keys, bool) {
+	k, ok, _ := RecoverKeysBudgetCtx(ctx, plain, cipher, 0)
 	return k, ok
 }
 
@@ -295,6 +304,11 @@ func RecoverKeys(plain, cipher []byte) (Keys, bool) {
 // examined (0 = unlimited). It also returns how many were examined, so a caller
 // can report progress or resume with a larger budget.
 func RecoverKeysBudget(plain, cipher []byte, budget int) (Keys, bool, int) {
+	return RecoverKeysBudgetCtx(context.Background(), plain, cipher, budget)
+}
+
+// RecoverKeysBudgetCtx is RecoverKeysBudget that also stops when ctx is cancelled.
+func RecoverKeysBudgetCtx(ctx context.Context, plain, cipher []byte, budget int) (Keys, bool, int) {
 	if len(plain) != len(cipher) || len(plain) < MinKnownPlaintext {
 		return Keys{}, false, 0
 	}
@@ -302,15 +316,15 @@ func RecoverKeysBudget(plain, cipher []byte, budget int) (Keys, bool, int) {
 	for i := range plain {
 		ks[i] = plain[i] ^ cipher[i]
 	}
-	return recoverAuto(plain, ks, budget)
+	return recoverAuto(ctx, plain, ks, budget)
 }
 
 // recoverAuto runs the full automatic attack: reduce the key2 candidates, and
 // for each, reconstruct the key2 window and attempt full key recovery. budget
 // caps the number of generate candidates examined (0 = unlimited); it returns the
-// number examined so callers can report progress. On success the Keys are the
-// internal state just before plain[0].
-func recoverAuto(plain, ks []byte, budget int) (Keys, bool, int) {
+// number examined so callers can report progress. It stops early when ctx is
+// cancelled. On success the Keys are the internal state just before plain[0].
+func recoverAuto(ctx context.Context, plain, ks []byte, budget int) (Keys, bool, int) {
 	n := len(ks)
 	if n < contiguousWindow+1 {
 		return Keys{}, false, 0
@@ -349,11 +363,11 @@ func recoverAuto(plain, ks []byte, budget int) (Keys, bool, int) {
 		go func(sub []uint32) {
 			defer wg.Done()
 			for _, zi10 := range sub {
-				if found.Load() {
+				if found.Load() || ctx.Err() != nil {
 					return
 				}
 				for _, v := range zi2_16Completions(ks[bestIdx], zi10) {
-					if found.Load() {
+					if found.Load() || ctx.Err() != nil {
 						return
 					}
 					if nn := examined.Add(1); budget > 0 && nn > int64(budget) {
@@ -400,8 +414,13 @@ func reduceKey2(ks []byte) (bestIdx int, best []uint32) {
 	if floor > n-1 {
 		floor = n - 1
 	}
+	// Dedup set for the propagation, reused across window indices via an epoch
+	// counter so each pass neither reallocates nor zeroes a 2^22 buffer (that
+	// alloc+memclr otherwise dominated the front-half reduction).
+	seen := make([]uint32, 1<<22)
+	var epoch uint32
 	for i := L; i > floor; i-- {
-		present := make([]bool, 1<<22)
+		epoch++
 		var newS []uint32
 		for _, zi10 := range S {
 			for _, v := range zi2_16Completions(ks[i], zi10) {
@@ -411,10 +430,10 @@ func reduceKey2(ks []byte) (bestIdx int, best []uint32) {
 					continue
 				}
 				idx := zim1 >> 10
-				if present[idx] {
+				if seen[idx] == epoch {
 					continue
 				}
-				present[idx] = true
+				seen[idx] = epoch
 				newS = append(newS, zim1)
 			}
 		}
