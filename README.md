@@ -114,6 +114,7 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 ## Documentation
 
 - **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples.
+- **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
 - [Architecture](docs/architecture.md) — system context, containers, components, data flow.
 - [Design](docs/design.md) — public APIs, the recursion algorithm, the pattern engine, concurrency, error model.
 - [ASR](docs/asr.md) — quality attributes and constraints that shape the architecture.
