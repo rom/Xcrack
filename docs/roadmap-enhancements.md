@@ -58,7 +58,7 @@ Items marked **[batch]** are the current implementation batch.
 | ✅ | Password promotion | Implemented. |
 | ✅ | Statistical **ordering** (Markov) | `candidates.ByScore` + `Markov`. |
 | ✅ | **Combinator** | `candidates.Combinator`. |
-| 🚧 | **Markov/PCFG generation** | Markov ✅ (`MarkovGen`); PCFG planned. |
+| ✅ | **Markov/PCFG generation** | Markov ✅ (`MarkovGen`); PCFG ✅ (`candidates.TrainPCFG` + `--pcfg`) — Weir-style grammar, guesses emitted in probability order via the pre-terminal priority-queue enumeration (pivot-deduped). |
 | ✅ | **Known-plaintext attack on ZipCrypto** | Full Biham–Kocher key recovery (bkcrack-style), implemented from the algorithm with this package's own verified primitives — no third-party code. `RecoverKeys(plain, cipher)` recovers the 96-bit internal state with **no password and no external reducer**: a keystream-only *Zreduction* of the key2 candidates (`reduceKey2`), full key2-window reconstruction (`exploreZ`), a fiber-accelerated key1 enumeration, and the verified key0 reconstruction + full re-encryption check. Correctness is proven end-to-end (`TestAutoPipelineRecovers`); the primitives are unit-tested as exact inverses. **Performance:** compute-heavy in pure Go — the keystream leaves ~10⁵ key2 candidates and the per-candidate key1 enumeration is ~2¹⁶, so a full search can take hours (optimized C++ like bkcrack does the same work in minutes). `RecoverKeysBudget` bounds the effort; for time-sensitive recovery the key2 sequence can be offloaded to an external engine via the challenge-export bridge. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). |
 | 🔬 | Hybrid, PRINCE, toggle/keyboard-walk | Additional generators. |
 

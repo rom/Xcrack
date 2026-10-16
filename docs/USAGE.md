@@ -107,6 +107,7 @@ archive that reuses a password is unlocked almost for free.
 | `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
 | `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
