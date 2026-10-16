@@ -38,6 +38,9 @@ func (f *Format) Detect(peek []byte) (float64, bool) {
 	if len(peek) >= 2 && (peek[0] == 0x8c || peek[0] == 0xc3) {
 		return 0.6, true
 	}
+	if bytes.Contains(peek, []byte(xpgp.ArmorBegin)) {
+		return 0.9, true
+	}
 	return 0, false
 }
 

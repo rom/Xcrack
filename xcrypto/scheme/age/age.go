@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"strings"
 
 	"github.com/rom/xcrypto"
 	"golang.org/x/crypto/chacha20poly1305"
@@ -49,6 +50,7 @@ type Params struct {
 // ErrNotAge for non-age input and ErrUnsupported for age files without a scrypt
 // (passphrase) recipient.
 func Parse(data []byte) (*Params, error) {
+	data = dearmor(data)
 	if !bytes.HasPrefix(data, []byte(Magic+"\n")) {
 		return nil, ErrNotAge
 	}
@@ -239,6 +241,37 @@ func atoiBounded(s string) (int, error) {
 		n = n*10 + int(c-'0')
 	}
 	return n, nil
+}
+
+// ArmorBegin is the age ASCII-armor header line.
+const ArmorBegin = "-----BEGIN AGE ENCRYPTED FILE-----"
+
+const armorEnd = "-----END AGE ENCRYPTED FILE-----"
+
+// dearmor decodes age ASCII armor to the binary file, or returns data unchanged
+// if it is not armored.
+func dearmor(data []byte) []byte {
+	if !strings.HasPrefix(strings.TrimLeft(string(data), "\r\n "), ArmorBegin) {
+		return data
+	}
+	var b strings.Builder
+	in := false
+	for _, ln := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(strings.TrimRight(ln, "\r"))
+		switch {
+		case t == ArmorBegin:
+			in = true
+		case t == armorEnd:
+			dec, err := base64.StdEncoding.DecodeString(b.String())
+			if err != nil {
+				return data
+			}
+			return dec
+		case in:
+			b.WriteString(t)
+		}
+	}
+	return data
 }
 
 // Errors.

@@ -14,7 +14,7 @@ Items marked **[batch]** are the current implementation batch.
 
 | | Feature | Notes |
 |--|---------|-------|
-| ⬜ | **ASCII-armored input** **[batch]** | Decode age armor (`-----BEGIN AGE ENCRYPTED FILE-----`) and OpenPGP armor (`-----BEGIN PGP MESSAGE-----`, base64 + CRC-24) before parsing. |
+| ✅ | **ASCII-armored input** | age armor and OpenPGP armor (base64 + CRC-24) are de-armored transparently in `Parse`; both formats detect armored input. Cross-validated against `age -a` / `gpg -a`. |
 | ✅ | **Mask length incrementing** | `pattern.ExpandIncrement(mask, min, max)` expands a mask over a length range (CLI wiring pending). |
 | ⬜ | **Live progress / rate / ETA (CLI)** **[batch]** | Opt-in `--progress`; candidates/sec and keyspace ETA to stderr via the existing `OnProgress` hook. |
 | ⬜ | **Potfile** **[batch]** | Record `digest → password`; skip already-cracked inputs (`--potfile`). |
