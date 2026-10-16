@@ -17,9 +17,11 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/binary"
 	"errors"
 	"hash"
+	"strings"
 
 	"github.com/rom/xcrypto"
 )
@@ -45,6 +47,7 @@ const (
 
 // Parse reads a symmetric OpenPGP message (binary, not ASCII-armored).
 func Parse(data []byte) (*Message, error) {
+	data = dearmor(data)
 	if len(data) == 0 || len(data) > maxMessage {
 		return nil, ErrNotPGP
 	}
@@ -435,6 +438,49 @@ func readPacket(data []byte, pos int) (tag int, body []byte, next int, ok bool) 
 		return 0, nil, 0, false
 	}
 	return tag, data[pos : pos+length], pos + length, true
+}
+
+// ArmorBegin is the OpenPGP ASCII-armor header for a message.
+const ArmorBegin = "-----BEGIN PGP MESSAGE-----"
+
+// dearmor decodes OpenPGP ASCII armor to the binary packet stream, or returns
+// data unchanged if it is not armored. The CRC-24 checksum line is skipped.
+func dearmor(data []byte) []byte {
+	if !strings.Contains(string(data), ArmorBegin) {
+		return data
+	}
+	const ( // de-armor state
+		before = iota
+		headers
+		body
+	)
+	state := before
+	var b strings.Builder
+	for _, ln := range strings.Split(string(data), "\n") {
+		t := strings.TrimSpace(strings.TrimRight(ln, "\r"))
+		switch state {
+		case before:
+			if t == ArmorBegin {
+				state = headers
+			}
+		case headers:
+			if t == "" {
+				state = body // a blank line ends the armor headers
+			}
+		case body:
+			if strings.HasPrefix(t, "-----END") {
+				if dec, err := base64.StdEncoding.DecodeString(b.String()); err == nil {
+					return dec
+				}
+				return data
+			}
+			if strings.HasPrefix(t, "=") { // CRC-24 checksum line
+				continue
+			}
+			b.WriteString(t)
+		}
+	}
+	return data
 }
 
 // ErrNotPGP indicates the input is not a recognizable symmetric OpenPGP message.

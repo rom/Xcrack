@@ -35,7 +35,8 @@ func (f *Format) Caps() xfileformats.Caps { return xfileformats.Caps{Encrypted: 
 
 // Detect recognizes the age v1 header line.
 func (f *Format) Detect(peek []byte) (float64, bool) {
-	if bytes.HasPrefix(peek, []byte(xage.Magic+"\n")) {
+	if bytes.HasPrefix(peek, []byte(xage.Magic+"\n")) ||
+		bytes.HasPrefix(bytes.TrimLeft(peek, "\r\n "), []byte(xage.ArmorBegin)) {
 		return 0.95, true
 	}
 	return 0, false

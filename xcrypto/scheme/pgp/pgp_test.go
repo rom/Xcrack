@@ -58,3 +58,21 @@ func TestPGPParseRejectsNonPGP(t *testing.T) {
 		t.Fatal("expected an error for non-PGP input")
 	}
 }
+
+func TestPGPDecryptsArmoredFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "hello.asc"))
+	if err != nil {
+		t.Skipf("armored fixture unavailable: %v", err)
+	}
+	m, err := Parse(data) // Parse de-armors transparently
+	if err != nil {
+		t.Fatalf("Parse(armored): %v", err)
+	}
+	plain, err := Decrypt([]byte(fixturePass), m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plain, []byte(fixturePlain)) {
+		t.Fatalf("armored decrypt = %q, want %q", plain, fixturePlain)
+	}
+}

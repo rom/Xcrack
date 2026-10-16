@@ -21,7 +21,9 @@ Xcrack and its standalone formats library, **Xfileformats**.
    error/result model.
 5. **[Threat Model](threat-model.md)** — trust boundaries and how Xcrack
    survives hostile input (its normal diet, as a malware pre-processor).
-6. **[Roadmap](roadmap.md)** — phased delivery plan beyond the MVP.
+6. **[Roadmap](roadmap.md)** — phased delivery plan beyond the MVP, with a
+   detailed [enhancement backlog](roadmap-enhancements.md) (features, cracking
+   approaches, formats — tracked with checkboxes).
 
 ## Architecture Decision Records
 

@@ -70,3 +70,25 @@ func TestAgeChallenge(t *testing.T) {
 		t.Fatalf("wrapped_key length = %d, want 32", len(ch.Extra["wrapped_key"]))
 	}
 }
+
+func TestAgeDecryptsArmoredFixture(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "hello.age.asc"))
+	if err != nil {
+		t.Skipf("armored fixture unavailable: %v", err)
+	}
+	p, err := Parse(data) // Parse de-armors transparently
+	if err != nil {
+		t.Fatalf("Parse(armored): %v", err)
+	}
+	key, ok, err := FileKey([]byte(fixturePass), p)
+	if err != nil || !ok {
+		t.Fatalf("FileKey = %v, %v", ok, err)
+	}
+	plain, err := Decrypt(key, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(plain, []byte(fixturePlain)) {
+		t.Fatalf("armored decrypt = %q, want %q", plain, fixturePlain)
+	}
+}
