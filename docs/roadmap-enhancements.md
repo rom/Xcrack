@@ -72,7 +72,8 @@ header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
 |--|-----------|-------|
 | ✅ | **OpenSSH private keys** | bcrypt-pbkdf + aes-ctr; verified via x/crypto/ssh, cross-checked against ssh-keygen. |
 | ✅ | **Encrypted PEM / PKCS#8 keys** | Traditional DEK-Info (EVP_BytesToKey) and PBES2 (PBKDF2 / scrypt + AES-CBC); cross-checked against OpenSSL. |
-| ⬜ | PuTTY `.ppk`, PKCS#12 `.p12`, JKS/BKS | Remaining key-store formats. |
+| ✅ | **JKS (Java KeyStore)** | Store-password recovery via the trailing SHA-1 integrity digest; cross-checked against keytool. |
+| ⬜ | PuTTY `.ppk`, PKCS#12 `.p12`, BKS | Remaining key-store formats. |
 | ⬜ | Disk images: ISO/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack, not always crypto). |
 | ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack. |
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
