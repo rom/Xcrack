@@ -30,7 +30,7 @@ one is reusable on its own:
 /
 ├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
 │    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
-│    ├─ scheme/…            zipcrypto · winzipaes · ooxml · pdf · odf · officebinary (legacy Office)
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml · pdf · odf · officebinary · age · pgp
 │    ├─ candidates/         candidate sources
 │    ├─ pattern/            hashcat-compatible masks + rules
 │    └─ attack/             concurrent password-search engine
@@ -40,6 +40,8 @@ one is reusable on its own:
 │    ├─ formats/pdf         encrypted PDF (rebuild a decrypted copy)
 │    ├─ formats/odf         encrypted LibreOffice/OpenOffice (ODF)
 │    ├─ formats/msoffice    legacy MS Office (.doc/.xls/.ppt, RC4/XOR)
+│    ├─ formats/age         age (age-encryption.org, scrypt passphrase)
+│    ├─ formats/pgp         symmetric OpenPGP (gpg -c)
 │    ├─ formats/archive     tar · gzip · bzip2 · xz · 7z · rar · MIME (.eml)
 │    └─ internal/cfb        OLE2 / compound-file reader
 ├─ xcrack/                  module github.com/rom/xcrack
@@ -132,10 +134,11 @@ Early but working end to end across all three modules.
   ZipCrypto/AES); **encrypted OOXML MS Office** via a bounded **CFB/OLE2**
   reader; **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
   **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); **legacy MS Office**
-  (`.doc/.xls/.ppt` — decrypts each OLE stream); and **archive unpackers**
-  (tar, gzip, bzip2, xz, **7z**, **rar**, MIME `.eml`). Builds `xcrypto.Challenge`
-  and delegates all crypto to Xcrypto. Verified against known-answer round-trips,
-  the real `zip` / `qpdf` / `7z` / `rar` CLIs, and byte-for-byte against
+  (`.doc/.xls/.ppt` — decrypts each OLE stream); **age** (scrypt passphrase) and
+  **symmetric OpenPGP** (`gpg -c`); and **archive unpackers** (tar, gzip, bzip2,
+  xz, **7z**, **rar**, MIME `.eml`). Builds `xcrypto.Challenge` and delegates all
+  crypto to Xcrypto. Verified against known-answer round-trips, the real
+  `zip` / `qpdf` / `7z` / `rar` / `age` / `gpg` CLIs, and byte-for-byte against
   gold-standard decrypted legacy-Office documents.
 - `xcrack` engine: recursive decomposition into a result tree, per-node password
   **and** content, password promotion, resource budgets (depth / total-bytes /

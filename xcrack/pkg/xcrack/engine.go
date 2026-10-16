@@ -20,6 +20,7 @@ import (
 	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
 	"github.com/rom/xfileformats/formats/pdf"
+	fpgp "github.com/rom/xfileformats/formats/pgp"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -119,6 +120,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	odf.Register(r)
 	archive.Register(r)
 	age.Register(r)
+	fpgp.Register(r)
 	return r
 }
 

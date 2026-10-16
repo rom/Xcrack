@@ -42,18 +42,25 @@ they are not date-bound. Each phase leaves `main` releasable.
 ## Phase 3 — Smarter search
 - Combinator and hybrid attack modes.
 - Markov / statistical candidate ordering; frequency-weighted wordlists.
-- Challenge export/import (interop with `*2john`-style workflows) so probing and
-  testing can be split across processes/machines.
-- Per-format "fast reject" heuristics to skip hopeless candidates cheaply.
+- ✅ Statistical (Markov) candidate ordering (`candidates.ByScore` + `Markov`).
+- ✅ Challenge export/import (portable JSON envelope) so probing and heavy
+  cracking can be split across processes/machines (and offloaded to a GPU tier).
+- Combinator/hybrid modes; per-format "fast reject" heuristics.
 
 ## Phase 4 — Scale & operations
+- ✅ **HTTP service tier** (`xcrackd` + `pkg/api`) so the engine runs on a
+  backend called by an Impex kiosk / DataLock (QA-13).
+- ✅ Metrics/telemetry hooks (`Pool.Metrics()`, `GET /v1/metrics`).
+- ✅ Pluggable live candidate provider (`Options.CandidateProvider`).
 - Optional distributed candidate sharding (coordinator + workers) — still CPU,
   still offline. (Explicitly a later, opt-in capability, not core.)
-- Metrics endpoint/hooks (Prometheus-style counters) for embedding telemetry.
-- Pluggable candidate providers (e.g. Impex supplies a live per-scan provider).
 
 ## Phase 5 — Extended formats (demand-driven)
-- KeePass databases; age; GPG symmetric; Apple iWork; RAR5 specifics.
+- ✅ **age** (scrypt passphrase) and ✅ **GPG symmetric** (`gpg -c`, SEIPD v1/MDC),
+  cross-validated against the `age` / `gpg` CLIs.
+- KeePass databases; Apple iWork; SQLCipher; encrypted DMG; header-encrypted
+  7z/RAR; RAR5 specifics. (Several need test oracles not present in the build
+  environment; implemented as fixtures become available.)
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate
   effort; gated on real demand and a dedicated threat review.
 
