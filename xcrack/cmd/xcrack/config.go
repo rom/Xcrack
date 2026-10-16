@@ -39,10 +39,14 @@ type fileConfig struct {
 		ToggleCase    bool     `yaml:"toggle_case"`    // case-toggle variants of each wordlist word
 		Prince        bool     `yaml:"prince"`         // PRINCE chains over the wordlists
 		KeyboardWalk  bool     `yaml:"keyboard_walk"`  // QWERTY keyboard-adjacency walks
+		Spray         bool     `yaml:"spray"`          // curated password-spraying set
+		SprayTokens   []string `yaml:"spray_tokens"`   // org/product/user tokens mangled into the spray set
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`
 		Passwords      []string `yaml:"passwords"`
+		Breach         []string `yaml:"breach"`           // frequency-annotated breach corpora
+		BreachMinCount int64    `yaml:"breach_min_count"` // drop breach entries below this prevalence
 		UseDefaultList *bool    `yaml:"use_default_list"`
 	} `yaml:"candidates"`
 	Patterns struct {

@@ -95,9 +95,10 @@ xcrack /inbox/                         # every file under a directory, recursive
 ### Candidate passwords
 
 Candidates are tried in this order: explicit passwords, the built-in default
-list, then each wordlist (expanded by any mangling rules), then mask keyspaces.
-A recovered password is **promoted** to the front for inner layers, so a nested
-archive that reuses a password is unlocked almost for free.
+list, the spray set, each breach corpus, then each wordlist (expanded by any
+mangling rules), then mask keyspaces. A recovered password is **promoted** to
+the front for inner layers, so a nested archive that reuses a password is
+unlocked almost for free.
 
 | Flag | Meaning |
 | ---- | ------- |
@@ -112,6 +113,11 @@ archive that reuses a password is unlocked almost for free.
 | `--hint-rules FILE` | hashcat-style rule file applied to hint-derived words (implies `--hint`) |
 | `--hybrid-append MASK` | append every expansion of `MASK` to each wordlist word (hashcat dict+mask, `-a 6`) — repeatable |
 | `--hybrid-prepend MASK` | prepend every expansion of `MASK` to each wordlist word (hashcat mask+dict, `-a 7`) — repeatable |
+| `--breach FILE` | a frequency-annotated breach corpus (`<count> <pw>` or `<pw>:<count>`; gzip auto-detected), tried ahead of plain wordlists — repeatable |
+| `--breach-min-count N` | drop breach entries seen fewer than `N` times (spray only the common ones) |
+| `--spray` | add a compact curated spray set (globally common passwords + season/year walks), tried early |
+| `--spray-token STR` | an org/product/user token mangled into the spray set (year, `!`/`@`/`#` suffixes, case variants) — repeatable, implies `--spray` |
+| `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
@@ -132,6 +138,13 @@ xcrack quote.pdf
 # A lure archive whose README/body names the password, or an entry named
 # after its own password: let the engine seed guesses from context:
 xcrack --context phishing-email.eml
+
+# Password spraying for an authorized engagement: common + "Acme<year>" patterns:
+xcrack --spray --spray-token Acme protected.docx
+
+# A frequency-ordered breach corpus (HIBP-style "pw:count" or SecLists "count pw"),
+# only trying passwords seen at least 100 times:
+xcrack --breach leaked-passwords.txt.gz --breach-min-count 100 archive.zip
 ```
 
 #### Context candidates
@@ -325,10 +338,14 @@ search:
   hint_rules:               # hashcat-style rules applied to hint-derived words
     - "c"
     - "$2 $0 $2 $4"
+  spray: true               # curated spray set (common + season/year patterns)
+  spray_tokens: [Acme]      # org/product/user tokens mangled into the spray set
 
 candidates:
   passwords: [infected, Welcome1]
   wordlists: [rockyou.txt, corp-words.txt.gz]
+  breach: [leaked-passwords.txt.gz]  # frequency-annotated breach corpora
+  breach_min_count: 10               # drop entries seen fewer than N times
   use_default_list: true
 
 patterns:

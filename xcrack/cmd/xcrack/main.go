@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -99,6 +100,14 @@ func runCrack(args []string) int {
 	toggleF := fs_.Bool("toggle-case", false, "also try case-toggle variants of each wordlist word (hashcat toggle attack)")
 	princeF := fs_.Bool("prince", false, "also try PRINCE chains (length-ordered concatenations of wordlist words)")
 	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
+	sprayF := fs_.Bool("spray", false, "also try a curated password-spraying set (common + season/year patterns), tried early")
+	var sprayTokens stringSlice
+	fs_.Var(&sprayTokens, "spray-token", "org/product/user token mangled into the spray set (repeatable; implies --spray)")
+	var sprayYears stringSlice
+	fs_.Var(&sprayYears, "spray-year", "year to use in spray patterns (repeatable; default: current and previous)")
+	var breachLists stringSlice
+	fs_.Var(&breachLists, "breach", "frequency-annotated breach corpus FILE (count-prefixed or password:count; gzip ok; repeatable)")
+	breachMinF := fs_.Int64("breach-min-count", 0, "drop breach entries seen fewer than N times (0=keep all)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -231,10 +240,11 @@ func runCrack(args []string) int {
 	if cfg != nil && cfg.Candidates.UseDefaultList != nil {
 		useDefault = *cfg.Candidates.UseDefaultList
 	}
-	cfgPasswords, cfgWordlists := []string(nil), []string(nil)
+	cfgPasswords, cfgWordlists, cfgBreach := []string(nil), []string(nil), []string(nil)
 	if cfg != nil {
 		cfgPasswords = cfg.Candidates.Passwords
 		cfgWordlists = cfg.Candidates.Wordlists
+		cfgBreach = cfg.Candidates.Breach
 	}
 	// Priority passwords (tried first everywhere): the potfile, password files,
 	// and an environment-provided password keep secrets off the command line.
@@ -257,6 +267,22 @@ func runCrack(args []string) int {
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
+	allBreach := append(append([]string{}, breachLists...), cfgBreach...)
+	breachMin := *breachMinF
+	if breachMin == 0 && cfg != nil && cfg.Candidates.BreachMinCount > 0 {
+		breachMin = cfg.Candidates.BreachMinCount
+	}
+	sprayTok := append([]string{}, sprayTokens...)
+	if cfg != nil {
+		sprayTok = append(sprayTok, cfg.Search.SprayTokens...)
+	}
+	var sprayYearInts []int
+	for _, y := range sprayYears {
+		if n, err := strconv.Atoi(strings.TrimSpace(y)); err == nil {
+			sprayYearInts = append(sprayYearInts, n)
+		}
+	}
+	useSpray := *sprayF || len(sprayTok) > 0 || len(sprayYearInts) > 0 || (cfg != nil && cfg.Search.Spray)
 
 	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
 	// the built-in list, and wordlist files, bounded), then cloned per file.
@@ -311,6 +337,18 @@ func runCrack(args []string) int {
 		}
 		if useDefault {
 			srcs = append(srcs, candidates.DefaultList())
+		}
+		// Spray: a compact, high-yield curated/token set, tried early (before the
+		// bulk wordlists). Years default to the current/previous calendar year.
+		if useSpray {
+			srcs = append(srcs, candidates.Spray(sprayTok, sprayYearInts, 0))
+		}
+		// Breach corpora: frequency-ordered real-leak lists, higher yield than a
+		// generic wordlist, so tried ahead of them. Count-annotated lines are
+		// parsed (and optionally prevalence-filtered); rules mangle each entry.
+		for _, bl := range allBreach {
+			base := patternSet.ApplyRules(candidates.BreachFile(bl, breachMin))
+			srcs = append(srcs, base)
 		}
 		for _, wl := range allWordlists {
 			var base candidates.Source
@@ -393,7 +431,7 @@ func runCrack(args []string) int {
 			// Resumable single-target run: wrap the candidate source so progress is
 			// persisted and an interrupted run resumes near where it stopped.
 			if *checkpointPath != "" {
-				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, useDefault, []string(patterns)))
+				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok))
 				ck, cerr := candidates.Checkpoint(src, *checkpointPath, sig, 0, -1)
 				if cerr != nil {
 					errs[i] = cerr
@@ -671,6 +709,11 @@ COMMON FLAGS:
       --toggle-case              also try case-toggle variants of each wordlist word
       --prince                   also try PRINCE chains (concatenated wordlist words)
       --keyboard-walk            also try QWERTY keyboard-adjacency walks
+      --spray                    curated spray set (common + season/year), tried early
+      --spray-token STR          org/product/user token mangled into the spray set (repeatable)
+      --spray-year N             year used in spray patterns (repeatable; default current/previous)
+      --breach FILE              frequency-annotated breach corpus (count-prefixed or pw:count; repeatable)
+      --breach-min-count N       drop breach entries seen fewer than N times
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list

@@ -46,7 +46,7 @@ Items marked **[batch]** are the current implementation batch.
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
 | 🔬 | Adaptive scheduling | Order files/candidates by observed crackability; corpus-wide promotion. |
-| 🔬 | Breach-corpus / spray sources | HIBP-style and org leak lists as first-class candidate sources. |
+| ✅ | Breach-corpus / spray sources | `candidates.BreachCorpus`/`BreachFile` ingest frequency-annotated leak lists (SecLists `<count> <pw>` and HIBP-style `<pw>:<count>`, gzip auto-detected) most-common-first, with a `--breach-min-count` prevalence floor. `candidates.Spray`/`SprayCommon` build a compact spraying set — curated globally-common passwords plus org/product/user tokens mangled the way people pick (case, trailing year, `!`/`@`/`#` suffixes) and season+year / month+year walks. Wired as `--breach`/`--breach-min-count` and `--spray`/`--spray-token`/`--spray-year` (and the `candidates.breach*` / `search.spray*` config keys); spray is tried early, breach ahead of generic wordlists. Note: HIBP distributes *hashes*, not plaintext, so the online API stays out of scope (ADR); these sources consume local plaintext corpora only. |
 
 ## 4. Cracking approaches
 

@@ -167,7 +167,7 @@ func (p *potfile) add(pws ...string) {
 // used (with the target file's name and size) to key a resume checkpoint so a
 // changed keyspace is not silently resumed. It is best-effort: it covers the
 // explicit passwords, wordlists, default-list toggle, and pattern files.
-func candidateSig(passwords, wordlists []string, useDefault bool, patternFiles []string) string {
+func candidateSig(passwords, wordlists, breach []string, useDefault bool, patternFiles []string, spray bool, sprayTokens []string) string {
 	h := sha256.New()
 	writeAll := func(tag string, ss []string) {
 		fmt.Fprintf(h, "%s=%d\n", tag, len(ss))
@@ -177,8 +177,10 @@ func candidateSig(passwords, wordlists []string, useDefault bool, patternFiles [
 	}
 	writeAll("pw", passwords)
 	writeAll("wl", wordlists)
+	writeAll("breach", breach)
 	writeAll("pat", patternFiles)
-	fmt.Fprintf(h, "def=%t\n", useDefault)
+	writeAll("spraytok", sprayTokens)
+	fmt.Fprintf(h, "def=%t\nspray=%t\n", useDefault, spray)
 	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
