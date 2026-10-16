@@ -78,7 +78,8 @@ header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
 | ⬜ | Disk images: ISO/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack, not always crypto). |
 | ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack. |
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
-| ⬜ | KeePass `.kdbx`, SQLCipher | Staged pending test fixtures. |
+| ✅ | **SQLCipher** | Passphrase recovery via the page-1 HMAC (PBKDF2 → HMAC subkey → HMAC-SHA512/SHA1 over page 1), SQLCipher v4 and v3 profiles; cross-checked against the sqlcipher CLI. Library-only (`xcrypto/scheme/sqlcipher`) — SQLCipher files have no cleartext magic, so a caller must target them explicitly (not engine-autodetected). |
+| 🔬 | KeePass `.kdbx` | KDBX4's default KDF is **Argon2d**, which `golang.org/x/crypto` does not expose (only Argon2i/id); needs an in-tree Argon2d. The MAC-based verifier is otherwise ready. Staged. |
 | ⬜ | Apple iWork, ODF AES-GCM, Hangul HWP | Document suites. |
 | 🔬 | Full-volume: BitLocker, VeraCrypt, LUKS, FileVault | Large, separate effort + threat review. |
 | ⬜ | More codecs: zstd, lz4, brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth. |
