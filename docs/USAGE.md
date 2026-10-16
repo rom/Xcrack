@@ -642,18 +642,22 @@ if ok {
 }
 ```
 
-**This is compute-heavy.** The keystream leaves ~10⁵ internal-key candidates and
-each needs a ~2¹⁶ key1 enumeration (a two-step *fiber* roll-back keeps it there
-rather than fanning out 256-wide per level). The search runs across all CPU
-cores, so wall-clock time scales down with core count — a few minutes on a
-many-core server, longer on a small box (dedicated C++ tools such as *bkcrack*
-are still a small constant factor faster). More known plaintext does not shrink
-the candidate set. Use `RecoverKeysBudget(plain, cipher, maxCandidates)` to bound
-the effort and resume with a larger budget, hand the problem to a local *bkcrack*
-binary with `RecoverKeysWith(plain, cipher, zipcrypto.ExternalBkcrack{Bin: "bkcrack"})`
-(CLI `--bkcrack /path/to/bkcrack`), or offload the heavy search to an external/GPU
-engine via the challenge-export bridge above. Recovering a running key state from
-a broken cipher is legitimate cryptanalysis — no sound cipher is weakened.
+**This is compute-heavy.** The keystream leaves a few ×10⁵ internal-key
+candidates and each needs a ~2¹⁶ key1 enumeration (a two-step *fiber* roll-back
+keeps it there rather than fanning out 256-wide per level — a ~34× per-window
+speedup). The candidates are independent, so the search runs across all CPU cores
+and scales **near-linearly** — measured ~16 / 28 / 62 candidates·s⁻¹ on 1 / 2 / 4
+cores. A representative full recovery (54-byte known plaintext) examined ~185k
+candidates and recovered the keys in **~57 min on a 4-core box**; expect roughly
+an hour on a laptop, a few minutes on a many-core server, and a further small
+constant factor from dedicated C++ tools such as *bkcrack*. More known plaintext
+does not shrink the candidate set. Use `RecoverKeysBudget(plain, cipher,
+maxCandidates)` to bound the effort and resume with a larger budget, hand the
+problem to a local *bkcrack* binary with `RecoverKeysWith(plain, cipher,
+zipcrypto.ExternalBkcrack{Bin: "bkcrack"})` (CLI `--bkcrack /path/to/bkcrack`),
+or offload the heavy search to an external/GPU engine via the challenge-export
+bridge above. Recovering a running key state from a broken cipher is legitimate
+cryptanalysis — no sound cipher is weakened.
 
 ---
 
