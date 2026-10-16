@@ -643,14 +643,17 @@ if ok {
 ```
 
 **This is compute-heavy.** The keystream leaves ~10⁵ internal-key candidates and
-each needs a ~2¹⁶ enumeration. The search runs across all CPU cores, so
-wall-clock time scales down with core count — tens of minutes on a many-core
-server, longer on a small box (dedicated C++ tools such as *bkcrack* do the same
-work in minutes). More known plaintext does not shrink the candidate set. Use
-`RecoverKeysBudget(plain, cipher, maxCandidates)` to bound the effort and resume
-with a larger budget, or offload the heavy search to an external/GPU engine via
-the challenge-export bridge above. Recovering a running key state from a broken
-cipher is legitimate cryptanalysis — no sound cipher is weakened.
+each needs a ~2¹⁶ key1 enumeration (a two-step *fiber* roll-back keeps it there
+rather than fanning out 256-wide per level). The search runs across all CPU
+cores, so wall-clock time scales down with core count — a few minutes on a
+many-core server, longer on a small box (dedicated C++ tools such as *bkcrack*
+are still a small constant factor faster). More known plaintext does not shrink
+the candidate set. Use `RecoverKeysBudget(plain, cipher, maxCandidates)` to bound
+the effort and resume with a larger budget, hand the problem to a local *bkcrack*
+binary with `RecoverKeysWith(plain, cipher, zipcrypto.ExternalBkcrack{Bin: "bkcrack"})`
+(CLI `--bkcrack /path/to/bkcrack`), or offload the heavy search to an external/GPU
+engine via the challenge-export bridge above. Recovering a running key state from
+a broken cipher is legitimate cryptanalysis — no sound cipher is weakened.
 
 ---
 

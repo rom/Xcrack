@@ -32,6 +32,8 @@ func run(args []string) int {
 			return 0
 		case "identify":
 			return runIdentify(args[1:])
+		case "kp":
+			return runKP(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -551,6 +553,8 @@ func usage() {
 USAGE:
   xcrack [flags] [sources...]      decrypt and recursively decompose sources
   xcrack identify [sources...]     detect format & encryption only
+  xcrack kp --plain P --cipher C   ZipCrypto known-plaintext key recovery
+                                   (no password; --bkcrack offloads the search)
   xcrack version
 
 COMMON FLAGS:

@@ -59,6 +59,11 @@ func zi2_16Completions(k byte, z uint32) []uint16 {
 // enumeration ~2^16 instead of ~2^24 per candidate.
 var msbProdFiber3 [256][]byte
 
+// msbProdFiber2[t] holds every byte x whose msb(x*multInv) is t or t-1. It drives
+// the two-step key1 roll-back (ffy), filtering the low byte at every level so the
+// search never fans out 256-wide.
+var msbProdFiber2 [256][]byte
+
 // multInvStep == multInv*256 as a runtime value (a constant expression would
 // overflow uint32 at compile time, so it is built from a non-constant var).
 var (
@@ -70,12 +75,35 @@ func init() {
 	prodinv := uint32(0)
 	for x := 0; x < 256; x++ {
 		m := byte(prodinv >> 24)
+		// fiber3: x lands in buckets {m-1, m, m+1} (a ±1 msb window).
 		msbProdFiber3[(m-1)&0xff] = append(msbProdFiber3[(m-1)&0xff], byte(x))
 		msbProdFiber3[m] = append(msbProdFiber3[m], byte(x))
 		msbProdFiber3[(m+1)&0xff] = append(msbProdFiber3[(m+1)&0xff], byte(x))
+		// fiber2: x lands in buckets {m, m+1}, so msbProdFiber2[t] == {x :
+		// msb(x*multInv) in {t-1, t}} — the tight set the two-step roll-back needs.
+		msbProdFiber2[m] = append(msbProdFiber2[m], byte(x))
+		msbProdFiber2[(m+1)&0xff] = append(msbProdFiber2[(m+1)&0xff], byte(x))
 		prodinv += multInvConst
 	}
 }
+
+// ywork holds the per-window key1/key0 search state. Using a struct with direct
+// methods (rather than closures) keeps the ~2^16-per-window recursion a sequence
+// of direct, inlinable calls with no closure-environment indirection — the main
+// constant-factor win over the previous version.
+type ywork struct {
+	zwin   []uint32
+	plain  []byte
+	ks     []byte
+	msbY   []byte
+	y      []uint32
+	lsbX   []byte
+	base   int
+	top    int
+	result Keys
+}
+
+var yworkPool = sync.Pool{New: func() any { return &ywork{} }}
 
 // recoverKeysFromZWindow recovers the full internal state from a reconstructed
 // 8-index key2 window and the known plaintext. It enumerates key1 at the window
@@ -90,127 +118,157 @@ func recoverKeysFromZWindow(zwin []uint32, base int, plain, ks []byte) (Keys, bo
 	if base+top >= len(plain) || base < 0 || W < 5 {
 		return Keys{}, false
 	}
-	// msb of key1 at window index w (global base+w), for w in [1,top].
-	msbY := make([]byte, W)
-	for w := 1; w < W; w++ {
-		msbY[w] = byte(crc32inv(zwin[w], 0) ^ zwin[w-1])
-	}
-
-	y := make([]uint32, W)
-	lsbX := make([]byte, W)
-
-	// Build a full key0 from the four consecutive recovered low bytes lsbX[top-3..top]
-	// and the plaintext, assemble the state at global index base+top-3, roll it back
-	// to plain[0], and verify by re-encrypting the whole window.
-	buildAndVerify := func() (Keys, bool) {
-		w0 := top - 3
-		p := func(w int) byte { return plain[base+w] }
-		b1 := func(w int) byte { return lsbX[w+1] ^ byte(crcTab[lsbX[w]^p(w)]) }
-		b2 := func(w int) byte { return b1(w+1) ^ byte(crcTab[lsbX[w]^p(w)]>>8) }
-		b3 := func(w int) byte { return b2(w+1) ^ byte(crcTab[lsbX[w]^p(w)]>>16) }
-		x := uint32(lsbX[w0]) | uint32(b1(w0))<<8 | uint32(b2(w0))<<16 | uint32(b3(w0))<<24
-
-		state := Keys{k0: x, k1: y[w0], k2: zwin[w0]} // state before plain[base+w0]
-		for g := base + w0; g > 0; g-- {
-			state = invStep(state, plain[g-1])
-		}
-		chk := state
-		for i := 0; i < len(plain); i++ {
-			if chk.streamByte() != ks[i] {
-				return Keys{}, false
-			}
-			chk.update(plain[i])
-		}
-		return state, true
-	}
-
-	// exploreY rolls key1 backward from the top, branching on each possible low
-	// byte of key0 (those whose msb matches the next msb(key1)); on reaching four
-	// consecutive recovered low bytes it hands off to buildAndVerify. The low-byte
-	// range is inlined (no per-call closure) because this runs ~2^16 times per
-	// window and closure allocation would dominate.
-	var result Keys
-	var rec func(w int) bool
-	rec = func(w int) bool {
-		if w == top-4 {
-			if keys, ok := buildAndVerify(); ok {
-				result = keys
-				return true
-			}
-			return false
-		}
-		P := (y[w] - 1) * multInvConst // = y[w-1] + lsb(x[w])
-		if w-1 == top-4 {
-			// Base-adjacent level: the next call verifies, so select lsb(x[w]) by
-			// this level's msb(key1) alone (full matching range).
-			want := byte(msbY[w-1])
-			band := byte(P >> 24)
-			lowbits := P & 0xffffff
-			switch want {
-			case band:
-				hi := lowbits
-				if hi > 255 {
-					hi = 255
-				}
-				for a := uint32(0); a <= hi; a++ {
-					y[w-1] = P - a
-					lsbX[w] = byte(a)
-					if rec(w - 1) {
-						return true
-					}
-				}
-			case band - 1:
-				for a := lowbits + 1; a <= 255; a++ {
-					y[w-1] = P - a
-					lsbX[w] = byte(a)
-					if rec(w - 1) {
-						return true
-					}
-				}
-			}
-			return false
-		}
-		// Fiber lookahead: pick the few low bytes that make the NEXT level fire on
-		// msb(key1[w-2]), then keep only those satisfying this level's msb(key1[w-1]).
-		// This replaces a 256-way scan with ~3 candidates — the main speedup.
-		pbase := (P - 1) * multInvConst
-		target := byte(pbase>>24) - byte(msbY[w-2])
-		want := byte(msbY[w-1])
-		for _, a := range msbProdFiber3[target] {
-			yim1 := P - uint32(a)
-			if byte(yim1>>24) != want {
-				continue
-			}
-			y[w-1] = yim1
-			lsbX[w] = a
-			if rec(w - 1) {
-				return true
-			}
-		}
-		return false
+	w := yworkPool.Get().(*ywork)
+	defer yworkPool.Put(w)
+	w.zwin, w.plain, w.ks, w.base, w.top = zwin, plain, ks, base, top
+	w.msbY = ensure(w.msbY, W)
+	w.y = ensureU32(w.y, W)
+	w.lsbX = ensure(w.lsbX, W)
+	// msb of key1 at window index i (global base+i), for i in [1,top].
+	for i := 1; i < W; i++ {
+		w.msbY[i] = byte(crc32inv(zwin[i], 0) ^ zwin[i-1])
 	}
 
 	// Enumerate full key1 at the window top: top byte known, middle 16 bits looped,
 	// low byte supplied by the fiber and checked against an exact range.
-	m7 := msbY[top]
-	m6 := msbY[top-1]
+	m7 := w.msbY[top]
+	m6 := w.msbY[top-1]
 	y7base := uint32(m7) << 24
-	P0 := (y7base - 1) * multInvConst // (y7-1)*multInv with mid=low=0
-	step := multInvStep               // multInv*256, a package var (avoids constant overflow)
-	const maxYDiff = (1 << 24) + 256  // lower24(y6)+lsb(x) is always below this
+	P0 := (y7base - 1) * multInvConst
+	step := multInvStep
+	const maxYDiff = (1 << 24) + 256 // lower24(y6)+lsb(x) is always below this
 	for mid := uint32(0); mid < (1 << 16); mid++ {
 		target := m6 - byte(P0>>24)
 		for _, low := range msbProdFiber3[target] {
 			if P0+uint32(low)*multInvConst-(uint32(m6)<<24) < maxYDiff {
-				y[top] = y7base | (mid << 8) | uint32(low)
-				if rec(top) {
-					return result, true
+				w.y[top] = y7base | (mid << 8) | uint32(low)
+				if w.rec(top) {
+					return w.result, true
 				}
 			}
 		}
 		P0 += step
 	}
 	return Keys{}, false
+}
+
+// rec rolls key1 backward from level using the two-step fiber (ffy), which pins
+// the candidate low byte of key0 at EVERY level to the ~2 values consistent with
+// msb(key1) two indices down, then keeps those matching this level's msb(key1).
+// The search therefore never fans out 256-wide — the single change that drops the
+// per-window cost from ~2^24 buildAndVerify calls to ~2^16. When four consecutive
+// low bytes of key0 are known it hands off to buildAndVerify.
+func (w *ywork) rec(level int) bool {
+	if level == w.top-4 {
+		if keys, ok := w.buildAndVerify(); ok {
+			w.result = keys
+			return true
+		}
+		return false
+	}
+	P := (w.y[level] - 1) * multInvConst // fy = y[level-1] + lsb(x[level])
+	want := byte(w.msbY[level-1])
+	if level >= 3 {
+		// Two-step fiber. ffy = (fy-1)*multInv = y[level-2] + lsb(x[level-1]) +
+		// lsb(x[level])*multInv, so msb(ffy)-msb(y[level-2]) pins msb(lsb(x[level])*
+		// multInv) to {t-1, t} (the top-byte carry of the two low addends is 0 or 1).
+		// msbProdFiber2[t] lists exactly those low bytes; the msb(key1[level-1]) test
+		// keeps the survivors. ~2 candidates per level instead of ~128.
+		ffy := (P - 1) * multInvConst
+		target := byte(ffy>>24) - w.msbY[level-2]
+		for _, a := range msbProdFiber2[target] {
+			yim1 := P - uint32(a)
+			if byte(yim1>>24) != want {
+				continue
+			}
+			w.y[level-1] = yim1
+			w.lsbX[level] = a
+			if w.rec(level - 1) {
+				return true
+			}
+		}
+		return false
+	}
+	// Shallow window (no key1 two indices down to drive the fiber): fall back to an
+	// exact one-step scan selecting lsb(x[level]) by this level's msb(key1). Only
+	// reachable for tiny windows; the real attack always uses windows >= 9.
+	band := byte(P >> 24)
+	lowbits := P & 0xffffff
+	switch want {
+	case band:
+		hi := lowbits
+		if hi > 255 {
+			hi = 255
+		}
+		for a := uint32(0); a <= hi; a++ {
+			w.y[level-1] = P - a
+			w.lsbX[level] = byte(a)
+			if w.rec(level - 1) {
+				return true
+			}
+		}
+	case band - 1:
+		for a := lowbits + 1; a <= 255; a++ {
+			w.y[level-1] = P - a
+			w.lsbX[level] = byte(a)
+			if w.rec(level - 1) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// buildAndVerify rebuilds a full key0 from the four consecutive recovered low
+// bytes, assembles the state, rolls it to plain[0], and re-encrypts to confirm.
+func (w *ywork) buildAndVerify() (Keys, bool) {
+	w0 := w.top - 3
+	k := w.lsbX[w0] ^ w.plain[w.base+w0]
+	k1 := w.lsbX[w0+1] ^ w.plain[w.base+w0+1]
+	k2 := w.lsbX[w0+2] ^ w.plain[w.base+w0+2]
+	// byte1..3 of key0 at w0 (see the verified reconstruction derivation).
+	b1 := w.lsbX[w0+1] ^ byte(crcTab[k])
+	b1n := w.lsbX[w0+2] ^ byte(crcTab[k1])
+	b2n := w.lsbX[w0+3] ^ byte(crcTab[k2])
+	b2 := b1n ^ byte(crcTab[k]>>8)
+	b1nn := b2n ^ byte(crcTab[k1]>>8)
+	b3 := b1nn ^ byte(crcTab[k]>>16)
+	x := uint32(w.lsbX[w0]) | uint32(b1)<<8 | uint32(b2)<<16 | uint32(b3)<<24
+
+	state := Keys{k0: x, k1: w.y[w0], k2: w.zwin[w0]} // state before plain[base+w0]
+	// Verify FORWARD from w0 first. A wrong candidate's key2 diverges after one
+	// update, so this rejects almost all candidates within two keystream bytes —
+	// far cheaper than rolling the state back to plain[0] first (which the earlier
+	// version did for every candidate). Only a surviving candidate is rolled back.
+	chk := state
+	for i := w.base + w0; i < len(w.plain); i++ {
+		if chk.streamByte() != w.ks[i] {
+			return Keys{}, false
+		}
+		chk.update(w.plain[i])
+	}
+	// Forward half holds; roll back to plain[0], validating the backward half too.
+	for g := w.base + w0; g > 0; g-- {
+		state = invStep(state, w.plain[g-1])
+		if state.streamByte() != w.ks[g-1] {
+			return Keys{}, false
+		}
+	}
+	return state, true
+}
+
+func ensure(b []byte, n int) []byte {
+	if cap(b) >= n {
+		return b[:n]
+	}
+	return make([]byte, n)
+}
+
+func ensureU32(b []uint32, n int) []uint32 {
+	if cap(b) >= n {
+		return b[:n]
+	}
+	return make([]uint32, n)
 }
 
 // RecoverKeys runs the fully automatic known-plaintext attack: given the known
