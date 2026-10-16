@@ -83,6 +83,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/healthz", s.handleHealth)
 	mux.HandleFunc("/v1/metrics", s.handleMetrics)
+	mux.HandleFunc("/metrics", s.handlePrometheus)
 	mux.HandleFunc("/v1/identify", s.handleIdentify)
 	mux.HandleFunc("/v1/decrypt", s.handleDecrypt)
 	return mux
@@ -96,6 +97,16 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, s.pool.Metrics())
+}
+
+// handlePrometheus serves Pool metrics in Prometheus text exposition format.
+func (s *Server) handlePrometheus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+	_, _ = s.pool.Metrics().WritePrometheus(w)
 }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {

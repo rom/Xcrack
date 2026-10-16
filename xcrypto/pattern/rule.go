@@ -7,8 +7,9 @@ import (
 	"github.com/rom/xcrypto/candidates"
 )
 
-// A ruleOp transforms a word in place-ish, returning the new word.
-type ruleOp func([]byte) []byte
+// A ruleOp transforms a word, returning the new word and whether to keep it.
+// A reject rule returns keep=false, which drops the whole rule's output.
+type ruleOp func([]byte) ([]byte, bool)
 
 // Rule is a compiled sequence of mangling operations.
 type Rule struct {
@@ -17,14 +18,20 @@ type Rule struct {
 }
 
 // RuleSet is an ordered list of rules. Applying it to a word yields one
-// candidate per rule, in order.
+// candidate per rule that is not rejected, in order.
 type RuleSet struct {
 	rules []Rule
 }
 
 // CompileRules compiles a hashcat-style rule per non-empty, non-comment line.
-// Supported functions (a practical subset): : l u c C t TN r d f { } $X ^X sXY
-// @X [ ] DN.
+//
+// Supported functions:
+//
+//	Nop/case:  : l u c C t TN
+//	Reverse/dup: r d pN f q zN ZN yN YN
+//	Rotate/trim: { } [ ] 'N xNM
+//	Edit:       $X ^X @X sXY iNX oNX *NM k K DN +N -N .N ,N LN RN eX
+//	Reject:     <N >N _N !X /X (X )X =NX
 func CompileRules(lines []string) (*RuleSet, error) {
 	rs := &RuleSet{}
 	for n, line := range lines {
@@ -43,17 +50,19 @@ func CompileRules(lines []string) (*RuleSet, error) {
 func compileRule(line string) (Rule, error) {
 	r := Rule{src: line}
 	b := []byte(line)
-	for i := 0; i < len(b); i++ {
+	i := 0
+	arg := func() (byte, bool) {
+		if i+1 < len(b) {
+			i++
+			return b[i], true
+		}
+		return 0, false
+	}
+	need := func(c byte, n int) error { return fmt.Errorf("'%c' needs %d argument(s)", c, n) }
+	for ; i < len(b); i++ {
 		c := b[i]
 		if c == ' ' || c == '\t' {
 			continue
-		}
-		arg := func() (byte, bool) {
-			if i+1 < len(b) {
-				i++
-				return b[i], true
-			}
-			return 0, false
 		}
 		switch c {
 		case ':':
@@ -63,62 +72,228 @@ func compileRule(line string) (Rule, error) {
 		case 'u':
 			r.ops = append(r.ops, opMap(toUpper))
 		case 'c':
-			r.ops = append(r.ops, opCapitalize)
+			r.ops = append(r.ops, opKeep(opCapitalize))
 		case 'C':
-			r.ops = append(r.ops, opInvCapitalize)
+			r.ops = append(r.ops, opKeep(opInvCapitalize))
 		case 't':
 			r.ops = append(r.ops, opMap(toggle))
 		case 'r':
-			r.ops = append(r.ops, opReverse)
+			r.ops = append(r.ops, opKeep(opReverse))
 		case 'd':
-			r.ops = append(r.ops, opDuplicate)
+			r.ops = append(r.ops, opKeep(opDuplicate))
 		case 'f':
-			r.ops = append(r.ops, opReflect)
+			r.ops = append(r.ops, opKeep(opReflect))
+		case 'q':
+			r.ops = append(r.ops, opKeep(opDupEachChar))
 		case '{':
-			r.ops = append(r.ops, opRotLeft)
+			r.ops = append(r.ops, opKeep(opRotLeft))
 		case '}':
-			r.ops = append(r.ops, opRotRight)
+			r.ops = append(r.ops, opKeep(opRotRight))
 		case '[':
-			r.ops = append(r.ops, opDelFirst)
+			r.ops = append(r.ops, opKeep(opDelFirst))
 		case ']':
-			r.ops = append(r.ops, opDelLast)
+			r.ops = append(r.ops, opKeep(opDelLast))
+		case 'k':
+			r.ops = append(r.ops, opKeep(opSwapFront))
+		case 'K':
+			r.ops = append(r.ops, opKeep(opSwapBack))
 		case '$':
 			x, ok := arg()
 			if !ok {
-				return r, fmt.Errorf("'$' needs a char")
+				return r, need(c, 1)
 			}
-			r.ops = append(r.ops, opAppend(x))
+			r.ops = append(r.ops, opKeep(opAppend(x)))
 		case '^':
 			x, ok := arg()
 			if !ok {
-				return r, fmt.Errorf("'^' needs a char")
+				return r, need(c, 1)
 			}
-			r.ops = append(r.ops, opPrepend(x))
+			r.ops = append(r.ops, opKeep(opPrepend(x)))
 		case '@':
 			x, ok := arg()
 			if !ok {
-				return r, fmt.Errorf("'@' needs a char")
+				return r, need(c, 1)
 			}
-			r.ops = append(r.ops, opPurge(x))
+			r.ops = append(r.ops, opKeep(opPurge(x)))
 		case 's':
 			x, ok1 := arg()
 			y, ok2 := arg()
 			if !ok1 || !ok2 {
-				return r, fmt.Errorf("'s' needs two chars")
+				return r, need(c, 2)
 			}
-			r.ops = append(r.ops, opSub(x, y))
+			r.ops = append(r.ops, opKeep(opSub(x, y)))
+		case 'e':
+			x, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opTitleSep(x)))
 		case 'T':
 			p, ok := arg()
 			if !ok {
-				return r, fmt.Errorf("'T' needs a position")
+				return r, need(c, 1)
 			}
-			r.ops = append(r.ops, opToggleAt(decodePos(p)))
+			r.ops = append(r.ops, opKeep(opAt(decodePos(p), toggleByte)))
 		case 'D':
 			p, ok := arg()
 			if !ok {
-				return r, fmt.Errorf("'D' needs a position")
+				return r, need(c, 1)
 			}
-			r.ops = append(r.ops, opDeleteAt(decodePos(p)))
+			r.ops = append(r.ops, opKeep(opDeleteAt(decodePos(p))))
+		case 'p':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opDupWordN(decodePos(p))))
+		case 'z':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opDupFirstN(decodePos(p))))
+		case 'Z':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opDupLastN(decodePos(p))))
+		case 'y':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opDupBlockFront(decodePos(p))))
+		case 'Y':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opDupBlockBack(decodePos(p))))
+		case '\'':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opTruncate(decodePos(p))))
+		case 'x':
+			n, ok1 := arg()
+			m, ok2 := arg()
+			if !ok1 || !ok2 {
+				return r, need(c, 2)
+			}
+			r.ops = append(r.ops, opKeep(opExtract(decodePos(n), decodePos(m))))
+		case 'i':
+			n, ok1 := arg()
+			x, ok2 := arg()
+			if !ok1 || !ok2 {
+				return r, need(c, 2)
+			}
+			r.ops = append(r.ops, opKeep(opInsert(decodePos(n), x)))
+		case 'o':
+			n, ok1 := arg()
+			x, ok2 := arg()
+			if !ok1 || !ok2 {
+				return r, need(c, 2)
+			}
+			r.ops = append(r.ops, opKeep(opAt(decodePos(n), func(byte) byte { return x })))
+		case '*':
+			n, ok1 := arg()
+			m, ok2 := arg()
+			if !ok1 || !ok2 {
+				return r, need(c, 2)
+			}
+			r.ops = append(r.ops, opKeep(opSwap(decodePos(n), decodePos(m))))
+		case '+':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opAt(decodePos(p), func(b byte) byte { return b + 1 })))
+		case '-':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opAt(decodePos(p), func(b byte) byte { return b - 1 })))
+		case 'L':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opAt(decodePos(p), func(b byte) byte { return b << 1 })))
+		case 'R':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opAt(decodePos(p), func(b byte) byte { return b >> 1 })))
+		case '.':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opReplaceWithNeighbor(decodePos(p), +1)))
+		case ',':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, opKeep(opReplaceWithNeighbor(decodePos(p), -1)))
+		// --- rejection rules ---
+		case '<':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			n := decodePos(p)
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, len(w) < n })
+		case '>':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			n := decodePos(p)
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, len(w) > n })
+		case '_':
+			p, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			n := decodePos(p)
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, len(w) == n })
+		case '!':
+			x, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, !contains(w, x) })
+		case '/':
+			x, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, contains(w, x) })
+		case '(':
+			x, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, len(w) > 0 && w[0] == x })
+		case ')':
+			x, ok := arg()
+			if !ok {
+				return r, need(c, 1)
+			}
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, len(w) > 0 && w[len(w)-1] == x })
+		case '=':
+			n, ok1 := arg()
+			x, ok2 := arg()
+			if !ok1 || !ok2 {
+				return r, need(c, 2)
+			}
+			pos := decodePos(n)
+			r.ops = append(r.ops, func(w []byte) ([]byte, bool) { return w, pos >= 0 && pos < len(w) && w[pos] == x })
 		default:
 			return r, fmt.Errorf("unsupported rule function %q", string(c))
 		}
@@ -126,15 +301,36 @@ func compileRule(line string) (Rule, error) {
 	return r, nil
 }
 
-// Apply returns the word as transformed by each rule, one output per rule.
+// maxRuleWordLen caps a mangled word's length (matching hashcat's password
+// cap). Duplication functions (d, p, f, z, …) can otherwise be chained to grow a
+// word exponentially; the word is truncated to this length after each op so rule
+// application stays memory-bounded on hostile rule input.
+const maxRuleWordLen = 256
+
+// Apply returns the word as transformed by each rule, one output per rule that
+// is not rejected, in order.
 func (rs *RuleSet) Apply(word []byte) [][]byte {
 	out := make([][]byte, 0, len(rs.rules))
 	for _, r := range rs.rules {
 		w := append([]byte(nil), word...)
-		for _, op := range r.ops {
-			w = op(w)
+		if len(w) > maxRuleWordLen {
+			w = w[:maxRuleWordLen]
 		}
-		out = append(out, w)
+		keep := true
+		for _, op := range r.ops {
+			var ok bool
+			w, ok = op(w)
+			if !ok {
+				keep = false
+				break
+			}
+			if len(w) > maxRuleWordLen {
+				w = w[:maxRuleWordLen]
+			}
+		}
+		if keep {
+			out = append(out, w)
+		}
 	}
 	return out
 }
@@ -164,13 +360,7 @@ func (s *ruleSource) Next() ([]byte, error) {
 	return v, nil
 }
 
-func (s *ruleSource) Len() int64 {
-	bl := s.base.Len()
-	if bl < 0 {
-		return -1
-	}
-	return bl * int64(len(s.rs.rules))
-}
+func (s *ruleSource) Len() int64 { return -1 } // rejects make the count non-trivial
 
 func (s *ruleSource) Reset() error {
 	s.queue = nil
@@ -181,12 +371,17 @@ var _ = io.EOF // ruleSource surfaces base's io.EOF via Next
 
 // --- op implementations ---
 
+// opKeep lifts a never-rejecting transform into a ruleOp.
+func opKeep(f func([]byte) []byte) ruleOp {
+	return func(w []byte) ([]byte, bool) { return f(w), true }
+}
+
 func opMap(f func(byte) byte) ruleOp {
-	return func(w []byte) []byte {
+	return func(w []byte) ([]byte, bool) {
 		for i := range w {
 			w[i] = f(w[i])
 		}
-		return w
+		return w, true
 	}
 }
 func toLower(b byte) byte {
@@ -201,7 +396,8 @@ func toUpper(b byte) byte {
 	}
 	return b
 }
-func toggle(b byte) byte {
+func toggle(b byte) byte { return toggleByte(b) }
+func toggleByte(b byte) byte {
 	switch {
 	case b >= 'a' && b <= 'z':
 		return b - 32
@@ -230,6 +426,20 @@ func opInvCapitalize(w []byte) []byte {
 	}
 	return w
 }
+func opTitleSep(sep byte) func([]byte) []byte {
+	return func(w []byte) []byte {
+		upNext := true
+		for i := range w {
+			if upNext {
+				w[i] = toUpper(w[i])
+			} else {
+				w[i] = toLower(w[i])
+			}
+			upNext = w[i] == sep
+		}
+		return w
+	}
+}
 func opReverse(w []byte) []byte {
 	for i, j := 0, len(w)-1; i < j; i, j = i+1, j-1 {
 		w[i], w[j] = w[j], w[i]
@@ -237,10 +447,74 @@ func opReverse(w []byte) []byte {
 	return w
 }
 func opDuplicate(w []byte) []byte { return append(w, w...) }
+func opDupEachChar(w []byte) []byte {
+	out := make([]byte, 0, len(w)*2)
+	for _, b := range w {
+		out = append(out, b, b)
+	}
+	return out
+}
 func opReflect(w []byte) []byte {
 	r := append([]byte(nil), w...)
 	opReverse(r)
 	return append(w, r...)
+}
+func opDupWordN(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		orig := append([]byte(nil), w...)
+		for k := 0; k < n; k++ {
+			w = append(w, orig...)
+		}
+		return w
+	}
+}
+func opDupFirstN(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if len(w) == 0 || n <= 0 {
+			return w
+		}
+		pre := make([]byte, n)
+		for i := range pre {
+			pre[i] = w[0]
+		}
+		return append(pre, w...)
+	}
+}
+func opDupLastN(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if len(w) == 0 {
+			return w
+		}
+		for k := 0; k < n; k++ {
+			w = append(w, w[len(w)-1])
+		}
+		return w
+	}
+}
+func opDupBlockFront(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		k := n
+		if k <= 0 {
+			return w
+		}
+		if k > len(w) {
+			k = len(w)
+		}
+		pre := append([]byte(nil), w[:k]...)
+		return append(pre, w...)
+	}
+}
+func opDupBlockBack(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		k := n
+		if k <= 0 {
+			return w
+		}
+		if k > len(w) {
+			k = len(w)
+		}
+		return append(w, w[len(w)-k:]...)
+	}
 }
 func opRotLeft(w []byte) []byte {
 	if len(w) < 2 {
@@ -266,9 +540,68 @@ func opDelLast(w []byte) []byte {
 	}
 	return w[:len(w)-1]
 }
-func opAppend(x byte) ruleOp  { return func(w []byte) []byte { return append(w, x) } }
-func opPrepend(x byte) ruleOp { return func(w []byte) []byte { return append([]byte{x}, w...) } }
-func opPurge(x byte) ruleOp {
+func opSwapFront(w []byte) []byte {
+	if len(w) >= 2 {
+		w[0], w[1] = w[1], w[0]
+	}
+	return w
+}
+func opSwapBack(w []byte) []byte {
+	if n := len(w); n >= 2 {
+		w[n-1], w[n-2] = w[n-2], w[n-1]
+	}
+	return w
+}
+func opTruncate(n int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if n >= 0 && n < len(w) {
+			return w[:n]
+		}
+		return w
+	}
+}
+func opExtract(n, m int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if n < 0 || m < 0 || n+m > len(w) {
+			return w
+		}
+		return append([]byte(nil), w[n:n+m]...)
+	}
+}
+func opInsert(n int, x byte) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if n < 0 || n > len(w) {
+			return w
+		}
+		out := make([]byte, 0, len(w)+1)
+		out = append(out, w[:n]...)
+		out = append(out, x)
+		out = append(out, w[n:]...)
+		return out
+	}
+}
+func opSwap(n, m int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		if n >= 0 && m >= 0 && n < len(w) && m < len(w) {
+			w[n], w[m] = w[m], w[n]
+		}
+		return w
+	}
+}
+func opReplaceWithNeighbor(n, delta int) func([]byte) []byte {
+	return func(w []byte) []byte {
+		j := n + delta
+		if n >= 0 && n < len(w) && j >= 0 && j < len(w) {
+			w[n] = w[j]
+		}
+		return w
+	}
+}
+func opAppend(x byte) func([]byte) []byte { return func(w []byte) []byte { return append(w, x) } }
+func opPrepend(x byte) func([]byte) []byte {
+	return func(w []byte) []byte { return append([]byte{x}, w...) }
+}
+func opPurge(x byte) func([]byte) []byte {
 	return func(w []byte) []byte {
 		out := w[:0]
 		for _, b := range w {
@@ -279,7 +612,7 @@ func opPurge(x byte) ruleOp {
 		return out
 	}
 }
-func opSub(x, y byte) ruleOp {
+func opSub(x, y byte) func([]byte) []byte {
 	return func(w []byte) []byte {
 		for i := range w {
 			if w[i] == x {
@@ -289,21 +622,30 @@ func opSub(x, y byte) ruleOp {
 		return w
 	}
 }
-func opToggleAt(n int) ruleOp {
+func opAt(n int, f func(byte) byte) func([]byte) []byte {
 	return func(w []byte) []byte {
 		if n >= 0 && n < len(w) {
-			w[n] = toggle(w[n])
+			w[n] = f(w[n])
 		}
 		return w
 	}
 }
-func opDeleteAt(n int) ruleOp {
+func opDeleteAt(n int) func([]byte) []byte {
 	return func(w []byte) []byte {
 		if n >= 0 && n < len(w) {
 			return append(w[:n], w[n+1:]...)
 		}
 		return w
 	}
+}
+
+func contains(w []byte, x byte) bool {
+	for _, b := range w {
+		if b == x {
+			return true
+		}
+	}
+	return false
 }
 
 // decodePos decodes a hashcat position char: '0'-'9' => 0-9, 'A'-'Z' => 10-35.

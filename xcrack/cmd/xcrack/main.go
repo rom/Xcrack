@@ -83,7 +83,15 @@ func runCrack(args []string) int {
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
 	explode := fs_.Bool("explode-documents", false, "decompose documents into internal parts")
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
-	findAll := fs_.Bool("find-all", false, "keep searching after first match (phase 2; ignored)")
+	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
+	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
+
+	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
+	var passwordFiles stringSlice
+	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
+	passwordEnv := fs_.String("password-env", "", "read a candidate password from this environment variable")
+	potfilePath := fs_.String("potfile", "", "load recovered passwords from, and append new ones to, this file")
+	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
 
 	maxDepth := fs_.Int("max-depth", 0, "max nesting depth (0=default 32)")
 	maxTotal := fs_.Int64("max-total-bytes", 0, "cumulative decompressed byte budget")
@@ -123,6 +131,7 @@ func runCrack(args []string) int {
 		opts.NoPromote = !*cfg.Search.Promote
 	}
 	opts.FindAll = *findAll
+	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
 
 	opts.Limits = xcrack.DefaultLimits()
 	opts.Limits.MaxDepth = resolveInt(set["max-depth"], *maxDepth, "", cfgInt(cfg, func(c *fileConfig) int { return c.Limits.MaxDepth }), opts.Limits.MaxDepth)
@@ -146,7 +155,8 @@ func runCrack(args []string) int {
 
 	outFormat := firstNonEmpty(flagIf(set["format"], *format), env("XCRACK_FORMAT_STR"), cfgStr(cfg, func(c *fileConfig) string { return c.Output.Format }), "text")
 	resFile := firstNonEmpty(flagIf(set["results-file"], *resultsFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.ResultsFile }), "")
-	_ = logLevel // reserved: structured logging wiring is phase 2
+	logLvl := firstNonEmpty(flagIf(set["log-level"], *logLevel), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogLevel }), "info")
+	opts.Logger = newLogger(logLvl)
 
 	// Build the pattern set from --pattern files and the config's patterns block.
 	patternSet, err := buildPatternSet(patterns, cfg)
@@ -171,6 +181,10 @@ func runCrack(args []string) int {
 		fmt.Fprintln(os.Stderr, "xcrack: no matching source files")
 		return 2
 	}
+	if *checkpointPath != "" && len(files) != 1 {
+		fmt.Fprintln(os.Stderr, "xcrack: --checkpoint requires exactly one source (single-target resume)")
+		return 2
+	}
 
 	// candidate builder (fresh per file; sources are stateful and used concurrently)
 	useDefault := !*noDefault
@@ -182,10 +196,36 @@ func runCrack(args []string) int {
 		cfgPasswords = cfg.Candidates.Passwords
 		cfgWordlists = cfg.Candidates.Wordlists
 	}
-	allPasswords := append(append([]string{}, passwords...), cfgPasswords...)
+	// Priority passwords (tried first everywhere): the potfile, password files,
+	// and an environment-provided password keep secrets off the command line.
+	var priorityPW []string
+	var pot *potfile
+	if *potfilePath != "" {
+		pot = loadPotfile(*potfilePath)
+		priorityPW = append(priorityPW, pot.passwords()...)
+	}
+	if len(passwordFiles) > 0 {
+		pf, err := passwordsFromFiles(passwordFiles)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: password-file: %v\n", err)
+			return 2
+		}
+		priorityPW = append(priorityPW, pf...)
+	}
+	if v, ok := passwordFromEnv(*passwordEnv); ok {
+		priorityPW = append(priorityPW, v)
+	}
+	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
-	buildCandidates := func() xcrack.CandidateSource {
+	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
+		// Root-name context: the engine derives name candidates for every nested
+		// node, but the top-level file's name is only known here, so seed it first.
+		if opts.ContextCandidates {
+			if names := candidates.FromName(filepath.Base(path)); len(names) > 0 {
+				srcs = append(srcs, candidates.Explicit(names...))
+			}
+		}
 		if len(allPasswords) > 0 {
 			srcs = append(srcs, candidates.Explicit(allPasswords...))
 		}
@@ -218,6 +258,10 @@ func runCrack(args []string) int {
 	if jobs < 1 {
 		jobs = 1
 	}
+	var prog *progress
+	if *progressF {
+		prog = newProgress(len(files))
+	}
 	sem := make(chan struct{}, jobs)
 	var wg sync.WaitGroup
 	for i, path := range files {
@@ -226,21 +270,61 @@ func runCrack(args []string) int {
 		go func(i int, path string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			if prog != nil {
+				defer prog.fileDone()
+			}
 			data, err := os.ReadFile(path)
 			if err != nil {
 				errs[i] = err
 				return
 			}
-			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), buildCandidates())
+			src := buildCandidates(path)
+			// Resumable single-target run: wrap the candidate source so progress is
+			// persisted and an interrupted run resumes near where it stopped.
+			if *checkpointPath != "" {
+				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, useDefault, []string(patterns)))
+				ck, cerr := candidates.Checkpoint(src, *checkpointPath, sig, 0, -1)
+				if cerr != nil {
+					errs[i] = cerr
+					return
+				}
+				if rf := ck.(candidates.Resumable).ResumeFrom(); rf > 0 {
+					fmt.Fprintf(os.Stderr, "xcrack: resuming from candidate %d (checkpoint %s)\n", rf, *checkpointPath)
+				}
+				src = ck
+			}
+			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), src)
 			if err != nil {
 				errs[i] = err
 				return
 			}
+			// The target was searched to completion (found or exhausted): persist the
+			// final position and clear the checkpoint so a re-run starts fresh.
+			if *checkpointPath != "" {
+				if s, ok := src.(candidates.Saver); ok {
+					s.Save()
+				}
+				os.Remove(*checkpointPath)
+			}
 			res.Root.Path = filepath.Base(path)
 			results[i] = res
+			if prog != nil {
+				prog.addCandidates(res.Stats.CandidatesTried)
+			}
 		}(i, path)
 	}
 	wg.Wait()
+	if prog != nil {
+		prog.close()
+	}
+	// Persist newly recovered passwords to the potfile.
+	if pot != nil {
+		for _, r := range results {
+			if r != nil {
+				pot.add(r.Passwords()...)
+			}
+		}
+	}
 
 	return render(files, results, errs, outFormat, *out, resFile)
 }

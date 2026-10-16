@@ -26,7 +26,7 @@ type engine struct {
 // a Node. It is the single node factory: callers that have already decrypted an
 // entry still route its plaintext bytes through here so nested containers are
 // handled uniformly.
-func (e *engine) decompose(ctx context.Context, path string, data []byte, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource) *Node {
+func (e *engine) decompose(ctx context.Context, path string, data []byte, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
 	n := &Node{Path: path}
 
 	if err := ctx.Err(); err != nil {
@@ -113,7 +113,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
 		}
-		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base)
+		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
@@ -173,7 +173,14 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		}
 		childAnc := append(append([][32]byte{}, ancestors...), sum)
 		n.Children = make([]*Node, len(entries))
-		e.processEntries(ctx, path, entries, depth+1, childAnc, prom, acc, base, n.Children)
+		// Seed children with plaintext harvested from this container's own plain
+		// entries (e.g. a readme or an email body that names the password), plus
+		// any text inherited from ancestors.
+		childCtx := ctxText
+		if e.opts.ContextCandidates {
+			childCtx = e.harvestText(entries, ctxText)
+		}
+		e.processEntries(ctx, path, entries, depth+1, childAnc, prom, acc, base, childCtx, n.Children)
 		return n
 	}
 
@@ -188,13 +195,13 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 // processEntry handles one container entry: find its password if encrypted,
 // read its plaintext, and route it back through decompose so nested layers are
 // handled. It then annotates the child node with the encryption outcome.
-func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource) *Node {
+func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
 	if entry.Encrypted {
 		verify := entry.Verify
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
-		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base)
+		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText)
 		if !found {
 			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
 			if !acc.addNode() {
@@ -212,7 +219,7 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if rerr != nil {
 			return e.errNode(childPath, rerr, acc)
 		}
-		child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base)
+		child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
 		child.WasEncrypted = true
 		child.Password = pw
 		if child.Status == StatusPlain {
@@ -229,13 +236,15 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 	if rerr != nil {
 		return e.errNode(childPath, rerr, acc)
 	}
-	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base)
+	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
 }
 
 // searchTarget finds a password that satisfies verify: it tries promoted
 // (ancestor) passwords first (cheap, usually hits for nested archives), then
 // runs a concurrent search over the base candidate source.
-func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource) (string, bool) {
+func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (string, bool) {
+	// Proven passwords from outer layers are tried first; FastReject is NOT
+	// applied to them (they are evidence, not guesses).
 	for _, pw := range prom.snapshot() {
 		if ctx.Err() != nil {
 			return "", false
@@ -247,10 +256,35 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 			return pw, true
 		}
 	}
+	reject := e.opts.FastReject
+	// Context/association candidates: derived from the node name and any text
+	// harvested from plain sibling entries. Tried after promotion, before the
+	// general keyspace. Subject to FastReject like any other guess.
+	if e.opts.ContextCandidates {
+		for _, pw := range e.contextCandidates(path, ctxText) {
+			if ctx.Err() != nil {
+				return "", false
+			}
+			if reject != nil && reject(path, []byte(pw)) {
+				continue
+			}
+			ok, err := safeVerify(verify, []byte(pw))
+			acc.addCandidates(1)
+			if err == nil && ok {
+				e.found(path, pw)
+				return pw, true
+			}
+		}
+	}
 	if base == nil {
 		return "", false
 	}
-	probe := func(pw []byte) (bool, error) { return safeVerify(verify, pw) }
+	probe := func(pw []byte) (bool, error) {
+		if reject != nil && reject(path, pw) {
+			return false, nil // cheaply rejected: definitely not the password
+		}
+		return safeVerify(verify, pw)
+	}
 	pw, found, tried, err := e.cracker.Crack(ctx, probe, base)
 	acc.addCandidates(tried)
 	if e.opts.OnProgress != nil {
@@ -305,12 +339,12 @@ func (p *promoter) add(s string) {
 // goroutines. Result order is preserved by writing to out by index. The attack
 // engine's global semaphore still bounds total candidate testers, so this only
 // adds parallelism to unpacking/decompression and overlaps independent searches.
-func (e *engine) processEntries(ctx context.Context, parent string, entries []*xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, out []*Node) {
+func (e *engine) processEntries(ctx context.Context, parent string, entries []*xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte, out []*Node) {
 	jobs := e.opts.FileConcurrency
 	_, cloneable := cloneBase(base)
 	if jobs <= 1 || len(entries) <= 1 || !cloneable {
 		for i, entry := range entries {
-			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, base)
+			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, base, ctxText)
 		}
 		return
 	}
@@ -326,7 +360,7 @@ func (e *engine) processEntries(ctx context.Context, parent string, entries []*x
 			defer wg.Done()
 			defer func() { <-sem }()
 			b, _ := cloneBase(base) // independent iterator for this sibling
-			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, b)
+			out[i] = e.processEntry(ctx, joinPath(parent, entry.Path), entry, depth, ancestors, prom, acc, b, ctxText)
 		}(i, entry)
 	}
 	wg.Wait()
@@ -354,6 +388,68 @@ func cloneBase(base CandidateSource) (CandidateSource, bool) {
 		return nil, false
 	}
 	return cl, true
+}
+
+// Context-candidate harvesting bounds. The harvested text is auxiliary (it only
+// seeds guesses), so reads here are capped independently of the content budget.
+const (
+	harvestPerEntry = 64 << 10  // bytes read per plain entry
+	harvestTotal    = 256 << 10 // total harvested-text budget per container
+	harvestMaxHint  = 4 << 20   // skip entries whose declared size hint exceeds this
+	contextTextMax  = 64        // max text-derived candidates per search
+)
+
+// contextCandidates returns the de-duplicated association guesses for a node:
+// strings derived from its name, then any extracted from harvested sibling text.
+func (e *engine) contextCandidates(path string, ctxText []byte) []string {
+	pws := candidates.FromName(path)
+	if len(ctxText) > 0 {
+		pws = append(pws, candidates.FromText(ctxText, contextTextMax)...)
+	}
+	seen := make(map[string]bool, len(pws))
+	out := pws[:0]
+	for _, p := range pws {
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		out = append(out, p)
+	}
+	return out
+}
+
+// harvestText concatenates incoming (ancestor) context with plaintext read from
+// the container's own plain entries -- e.g. a README or an email body that names
+// the password for an encrypted sibling. Reads are bounded per entry and in
+// total; encrypted entries cannot be harvested (chicken-and-egg).
+func (e *engine) harvestText(entries []*xfileformats.Entry, incoming []byte) []byte {
+	buf := make([]byte, 0, len(incoming)+1024)
+	buf = append(buf, incoming...)
+	budget := harvestTotal - len(incoming)
+	for _, en := range entries {
+		if budget <= 0 {
+			break
+		}
+		if en == nil || en.Encrypted || en.Open == nil || en.Size > harvestMaxHint {
+			continue
+		}
+		r, err := safeOpen(en, nil)
+		if err != nil {
+			continue
+		}
+		lim := harvestPerEntry
+		if lim > budget {
+			lim = budget
+		}
+		chunk, _ := io.ReadAll(io.LimitReader(r, int64(lim)))
+		if len(chunk) == 0 {
+			continue
+		}
+		buf = append(buf, ' ')
+		buf = append(buf, chunk...)
+		budget -= len(chunk)
+	}
+	return buf
 }
 
 func (e *engine) found(path, pw string) {

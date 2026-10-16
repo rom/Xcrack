@@ -2,6 +2,8 @@ package xcrack
 
 import (
 	"context"
+	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -94,6 +96,46 @@ func (m *metrics) snapshot() Metrics {
 
 // Metrics returns the Pool's aggregate counters. Safe to call concurrently.
 func (p *Pool) Metrics() Metrics { return p.metrics.snapshot() }
+
+// WritePrometheus writes the metrics in Prometheus text exposition format. All
+// values are cumulative counters; processing time is exposed in seconds.
+func (m Metrics) WritePrometheus(w io.Writer) (int, error) {
+	rows := []struct {
+		name, help string
+		val        float64
+	}{
+		{"xcrack_files_processed_total", "Files processed.", float64(m.FilesProcessed)},
+		{"xcrack_candidates_tried_total", "Candidate passwords tested.", float64(m.CandidatesTried)},
+		{"xcrack_bytes_extracted_total", "Plaintext bytes extracted.", float64(m.BytesExtracted)},
+		{"xcrack_nodes_total", "Nodes produced in result trees.", float64(m.NodesTotal)},
+		{"xcrack_nodes_decrypted_total", "Nodes successfully decrypted.", float64(m.NodesDecrypted)},
+		{"xcrack_nodes_locked_total", "Nodes left locked (no candidate worked).", float64(m.NodesLocked)},
+		{"xcrack_nodes_error_total", "Nodes that errored.", float64(m.NodesError)},
+		{"xcrack_limit_hits_total", "Resource-limit/bomb-guard hits.", float64(m.LimitHits)},
+		{"xcrack_processing_seconds_total", "Total processing time in seconds.", float64(m.ProcessingNanos) / 1e9},
+		{"xcrack_processing_errors_total", "Process calls that failed.", float64(m.ProcessingErrors)},
+	}
+	total := 0
+	for _, r := range rows {
+		n, err := fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s counter\n%s %g\n", r.name, r.help, r.name, r.name, r.val)
+		total += n
+		if err != nil {
+			return total, err
+		}
+	}
+	return total, nil
+}
+
+// AuditEvent describes one node for observability/audit purposes. It carries no
+// password and no content — only what was seen and what happened — so it is safe
+// to emit to an audit log or a trace.
+type AuditEvent struct {
+	Path      string // lineage, e.g. "invoice.zip!/report.docx"
+	Format    string // detected format name
+	Status    string // "plain" | "decrypted" | "locked" | "limit-exceeded" | "error"
+	Encrypted bool   // whether this node required a password
+	Size      int64  // content size, or 0
+}
 
 // CandidateProvider supplies candidates for a Process call. It lets an embedder
 // (or the HTTP service) plug in a live source -- e.g. per-scan passwords pulled

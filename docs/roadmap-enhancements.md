@@ -16,23 +16,23 @@ Items marked **[batch]** are the current implementation batch.
 |--|---------|-------|
 | ✅ | **ASCII-armored input** | age armor and OpenPGP armor (base64 + CRC-24) are de-armored transparently in `Parse`; both formats detect armored input. Cross-validated against `age -a` / `gpg -a`. |
 | ✅ | **Mask length incrementing** | `pattern.ExpandIncrement(mask, min, max)` expands a mask over a length range (CLI wiring pending). |
-| ⬜ | **Live progress / rate / ETA (CLI)** **[batch]** | Opt-in `--progress`; candidates/sec and keyspace ETA to stderr via the existing `OnProgress` hook. |
-| ⬜ | **Potfile** **[batch]** | Record `digest → password`; skip already-cracked inputs (`--potfile`). |
-| ⬜ | **Structured logging** **[batch]** | Wire `Options.Logger` to `log/slog`; `--log-level`; never logs secrets. |
-| ⬜ | **Single-password ergonomics** **[batch]** | `--password-file`, `--password-env`, stdin, and an interactive prompt for one known password. |
-| ⬜ | **Find-all** **[batch]** | Honor `--find-all`: keep searching sibling/again instead of stopping at the first hit. |
+| ✅ | **Live progress / rate / ETA (CLI)** | `--progress`: files done/total, candidates, rate, elapsed, file-rate ETA to stderr (per-file granularity). |
+| ✅ | **Potfile** | `--potfile`: recovered passwords load as high-priority candidates (tried first everywhere) and new ones are appended — crack once, instant next time. |
+| ✅ | **Structured logging** | `Options.Logger` backed by `log/slog`; `--log-level`; never logs secrets. |
+| ✅ | **Single-password ergonomics** | `--password-file` (lines) and `--password-env VAR` keep a secret off the command line. |
+| ✅ | **Find-all** | `--find-all` → `Options.FindAll`; the tree is always fully explored (every encrypted node searched/reported independently). |
 
 ## 2. Intermediate features
 
 | | Feature | Notes |
 |--|---------|-------|
-| ⬜ | **Checkpoint / resume** **[batch]** | Persist search position for a long single-file run; resume after interruption. |
-| ⬜ | **Full rule engine** **[batch]** | Complete hashcat rule-function set, rule stacking, reject rules, `.rule` files. |
-| ⬜ | **Context / association candidates** **[batch]** | Seed candidates from filename, archive comments, document metadata, and strings harvested from already-decrypted siblings. |
-| ⬜ | **Per-format fast-reject** **[batch]** | A cheap pre-check hook run before the expensive KDF to discard hopeless candidates. |
+| ✅ | **Checkpoint / resume** | `candidates.Checkpoint` + CLI `--checkpoint FILE`: persists the search position (with a keyspace signature) every N candidates and atomically; an interrupted single-target run resumes a safety margin behind the saved point so no in-flight candidate is skipped. Non-cloneable (single global cursor) and seeks only on the first `Reset`, so a multi-entry container never cascade-skips; scoped to single-target runs (guarded in the CLI). |
+| ✅ | **Full rule engine** | Broad hashcat function set (case, dup/reflect, rotate/trim, insert/overwrite/swap/extract, ascii±, title, `pN zN ZN yN YN`, …) + reject rules (`<>_ ! / ( ) =`) + stacking; word length capped (bomb-safe). |
+| ✅ | **Context / association candidates** | `--context` / `Options.ContextCandidates`: seeds each search with guesses derived from the file/entry name (stem, tokens, digit runs) and plaintext harvested from plain sibling entries (a README or email body that names the password). Tried after promotion, before the general keyspace. Parsers fuzzed (no-panic). |
+| ✅ | **Per-format fast-reject** | `Options.FastReject(path, candidate) bool`: a cheap caller pre-check consulted before the expensive KDF for every generated candidate (never for proven promoted passwords); returning true prunes a hopeless keyspace without a false-positive risk. Built-in verifiers already carry their own fast verifier checks (ZipCrypto check byte, WinZip-AES 2-byte, OpenPGP CFB quick-check). |
 | ✅ | **Candidate dedup** | `candidates.Dedup` — bounded dedup wrapper so masks×rules don't retry a string. |
-| ⬜ | **Streaming large inputs** **[batch]** | Avoid materializing whole archives; stream bounded windows. |
-| ⬜ | **Prometheus-format metrics** **[batch]** | Text exposition of `Pool.Metrics()` at `/metrics`. |
+| 🚧 | **Streaming large inputs** | Reads are already bounded (`MaxEntrySize`/`MaxTotalBytes`, `io.SectionReader`), so a malicious or huge input cannot exhaust memory. Fully *streaming* decrypt/decompress of large entries without materializing each one (bounded sliding windows through the container readers) is a larger architectural change, staged. |
+| ✅ | **Prometheus-format metrics** | `Metrics.WritePrometheus` + `GET /metrics` text exposition (alongside JSON `/v1/metrics`). |
 | ✅ | **Combinator attack** | `candidates.Combinator(left, right, sep)` (CLI wiring pending). |
 | ⬜ | **Hybrid attack** | wordlist ± mask (dict+mask / mask+dict). |
 | ⬜ | `*2john` / hashcat hash-line emitters | Per-scheme `$…$` strings to complete the external-GPU bridge. |
@@ -41,8 +41,8 @@ Items marked **[batch]** are the current implementation batch.
 
 | | Feature | Notes |
 |--|---------|-------|
-| ⬜ | **Observability** **[batch]** | Audit log of what was decrypted (no secrets); optional trace spans. |
-| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first); PCFG/OMEN still 🔬. |
+| ✅ | **Observability** | `Options.OnAudit` emits a secrets-free `AuditEvent` per node (path, format, status, encrypted, size) for an audit log or trace. |
+| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first) covers statistical generation today. A full PCFG (Weir et al. — learn a probabilistic context-free grammar of structure/segments and enumerate by probability) is a distinct, larger model, staged. |
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
 | 🔬 | Adaptive scheduling | Order files/candidates by observed crackability; corpus-wide promotion. |
@@ -54,12 +54,12 @@ Items marked **[batch]** are the current implementation batch.
 |--|----------|-------|
 | ✅ | Dictionary / wordlist | Implemented. |
 | ✅ | Mask brute-force | Implemented (`?l?u?d?s?a?b` + `?1..?4`). |
-| ✅ | Rule mangling (subset) | Implemented; full set is **[batch]** above. |
+| ✅ | Rule mangling (full) | Broad hashcat function set + reject rules + stacking. |
 | ✅ | Password promotion | Implemented. |
 | ✅ | Statistical **ordering** (Markov) | `candidates.ByScore` + `Markov`. |
 | ✅ | **Combinator** | `candidates.Combinator`. |
 | 🚧 | **Markov/PCFG generation** | Markov ✅ (`MarkovGen`); PCFG planned. |
-| ⬜ | **Known-plaintext attack on ZipCrypto** **[batch]** | Biham–Kocher key recovery (bkcrack-style): recover the internal keys from ~12 known plaintext bytes, no password. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). |
+| 🚧 | **Known-plaintext attack on ZipCrypto** | Biham–Kocher key recovery (bkcrack-style): recover the 96-bit internal state from known plaintext, no password. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). **Shipped & verified** (`xcrypto/scheme/zipcrypto`): the exact cipher-inverse primitives (crc32 inverse, mult inverse, keystream↔key2 table — unit-tested as exact inverses); `RecoverInternalState(key2Seq, plain)` — reconstructs the full state from the key2 sequence over the window + the known plaintext (round-trip validated); `Keys.RollBack` — rolls a recovered state back across the header, recovering it. **Staged (front half):** the keystream-only *Zreduction* of the key2 sequence + the fiber-table key1/key0 search — a naive enumeration over-generates astronomically, so an efficient, separately-verifiable reduction is still to land; until then the key2 sequence comes from an external reducer (e.g. a GPU/bkcrack worker via the challenge-export bridge). |
 | 🔬 | Hybrid, PRINCE, toggle/keyboard-walk | Additional generators. |
 
 ## 5. Application file formats

@@ -103,6 +103,11 @@ archive that reuses a password is unlocked almost for free.
 | `-p`, `--password STR` | an explicit candidate — repeatable |
 | `-w`, `--wordlist FILE` | a wordlist; `-` reads stdin; `.gz` auto-detected — repeatable |
 | `--pattern FILE` | a mask/rule pattern file — repeatable (see [Pattern engine](#pattern-engine-masks--rules)) |
+| `--password-file FILE` | candidate passwords, one per line, tried first — repeatable (keeps secrets off the command line) |
+| `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
+| `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
+| `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
 ```sh
@@ -117,7 +122,57 @@ generate-candidates | xcrack -w - payload.7z
 
 # Only try the built-in list (no flags needed — it's on by default):
 xcrack quote.pdf
+
+# A lure archive whose README/body names the password, or an entry named
+# after its own password: let the engine seed guesses from context:
+xcrack --context phishing-email.eml
 ```
+
+#### Context candidates
+
+With `--context`, before falling back to the general keyspace the engine tries
+guesses drawn from the material around each encrypted node:
+
+- **The name** of the file or entry — its stem, alphanumeric tokens, their
+  concatenation, and any digit runs (so `invoice_2024.zip` yields `invoice`,
+  `2024`, `invoice2024`, …). Malware lures very often name the password after
+  the file.
+- **Plaintext harvested from plain sibling entries** — a `readme.txt`,
+  `password.txt`, or an email body that says *"the password is …"*. The engine
+  scans harvested text for hint keywords (`password`, `passphrase`, `pwd`,
+  `pin`, `code`, `key`, …) and captures the following token or quoted string.
+
+Context guesses are tried **after** promoted passwords (those recovered from an
+outer layer) and **before** wordlists/masks, so the cheap, likely hits come
+first. Harvesting is bounded (64 KiB per plain entry, 256 KiB per container) and
+reads only *unencrypted* siblings. The feature is **off by default** (it widens
+the search a little); enable it per run with `--context` or in a config file
+with `search: { context_candidates: true }`.
+
+#### Checkpoint / resume
+
+A long run against a single hard target can be made resumable with
+`--checkpoint FILE`:
+
+```sh
+# Start a long masked search, persisting progress to run.ckpt:
+xcrack --checkpoint run.ckpt --pattern big-mask.txt --no-default-list vault.pdf
+
+# If the process is killed, just run the SAME command again — it resumes near
+# where it stopped and prints e.g. "resuming from candidate 4300000 (checkpoint run.ckpt)".
+```
+
+How it works: the candidate position is written to `FILE` every 100 000
+candidates (atomically, with a signature of the target and candidate set). On a
+re-run with a matching signature, iteration resumes a safety margin *behind* the
+last saved position, so no candidate that was handed out but not yet verified
+before the interruption is skipped. When the search finishes (password found or
+keyspace exhausted) the checkpoint file is removed, so the next run starts fresh.
+Changing the target or the candidate set changes the signature and starts over.
+
+`--checkpoint` requires **exactly one** source (it tracks a single global
+cursor) and is meant for a single encrypted target; the candidate source must be
+deterministic (masks, wordlists, chains — not `stdin`).
 
 ### Output
 
@@ -126,7 +181,8 @@ xcrack quote.pdf
 | `--format text\|json\|jsonl` | result rendering (default `text`) |
 | `-o`, `--out DIR` | write the decrypted tree under `DIR/<name>.extracted/` + a `manifest.json` |
 | `--results-file FILE` | append a JSON manifest per input to `FILE` |
-| `--log-level LEVEL` | `debug\|info\|warn\|error` (reserved; structured logging is phase 2) |
+| `--progress` | print live progress to stderr: files done/total, candidates, rate, elapsed, ETA |
+| `--log-level LEVEL` | `debug\|info\|warn\|error` structured logging to stderr (never logs secrets) |
 
 ```sh
 # Human-readable tree:
@@ -439,12 +495,33 @@ Useful pieces of the public API:
   })
   ```
 
+- **`Options.ContextCandidates`** — the library form of `--context`: seed each
+  search with name- and sibling-text-derived guesses. For a whole-file-encrypted
+  input (an encrypted PDF/OOXML/age/…) the top-level file name isn't known to the
+  engine, so prepend it yourself with `candidates.FromName(filepath.Base(path))`.
+- **`Options.FastReject`** — a cheap pre-KDF filter to prune a hopeless keyspace
+  using a domain constraint, without a false-positive risk (it is never applied
+  to passwords promoted from an outer layer):
+
+  ```go
+  pool := xcrack.NewPool(xcrack.Options{
+      // This appliance only ever sees 6-digit numeric PINs: skip everything else
+      // before the expensive KDF runs.
+      FastReject: func(path string, cand []byte) bool {
+          if len(cand) != 6 { return true }
+          for _, c := range cand { if c < '0' || c > '9' { return true } }
+          return false
+      },
+  })
+  ```
+
 - **`pool.Metrics()`** — aggregate counters (files, candidates tried, bytes,
   nodes by status, durations) for telemetry; carries no secrets.
 
 Candidate sources live in `github.com/rom/xcrypto/candidates`: `Explicit`,
-`Bytes`, `File` (gzip-aware), `Stdin`, `DefaultList`, `Chain`, and `ByScore`
-(+ a `Markov` model) to order a wordlist's head by likelihood.
+`Bytes`, `File` (gzip-aware), `Stdin`, `DefaultList`, `Chain`, `ByScore`
+(+ a `Markov` model) to order a wordlist's head by likelihood, `Combinator`,
+`Dedup`, `MarkovGen`, and the context helpers `FromName` / `FromText` / `Context`.
 
 ---
 
