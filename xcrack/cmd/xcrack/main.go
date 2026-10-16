@@ -84,6 +84,7 @@ func runCrack(args []string) int {
 	explode := fs_.Bool("explode-documents", false, "decompose documents into internal parts")
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
+	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -129,6 +130,7 @@ func runCrack(args []string) int {
 		opts.NoPromote = !*cfg.Search.Promote
 	}
 	opts.FindAll = *findAll
+	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
 
 	opts.Limits = xcrack.DefaultLimits()
 	opts.Limits.MaxDepth = resolveInt(set["max-depth"], *maxDepth, "", cfgInt(cfg, func(c *fileConfig) int { return c.Limits.MaxDepth }), opts.Limits.MaxDepth)
@@ -210,8 +212,15 @@ func runCrack(args []string) int {
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
-	buildCandidates := func() xcrack.CandidateSource {
+	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
+		// Root-name context: the engine derives name candidates for every nested
+		// node, but the top-level file's name is only known here, so seed it first.
+		if opts.ContextCandidates {
+			if names := candidates.FromName(filepath.Base(path)); len(names) > 0 {
+				srcs = append(srcs, candidates.Explicit(names...))
+			}
+		}
 		if len(allPasswords) > 0 {
 			srcs = append(srcs, candidates.Explicit(allPasswords...))
 		}
@@ -264,7 +273,7 @@ func runCrack(args []string) int {
 				errs[i] = err
 				return
 			}
-			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), buildCandidates())
+			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), buildCandidates(path))
 			if err != nil {
 				errs[i] = err
 				return

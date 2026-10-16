@@ -31,6 +31,7 @@ type fileConfig struct {
 	} `yaml:"recursion"`
 	Search struct {
 		Promote *bool `yaml:"promote_passwords"`
+		Context bool  `yaml:"context_candidates"`
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`

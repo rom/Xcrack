@@ -74,10 +74,11 @@ type Options struct {
 	// Behavior toggles are phrased so the zero value is the sensible default:
 	// the engine recurses, promotes passwords, and stops on the first match
 	// unless told otherwise.
-	NoRecurse        bool // disable container decomposition (default: recurse)
-	NoPromote        bool // disable password promotion (default: promote)
-	FindAll          bool // reserved: keep searching after the first match (phase 2)
-	ExplodeDocuments bool // decompose documents into parts (default false, opt-in)
+	NoRecurse         bool // disable container decomposition (default: recurse)
+	NoPromote         bool // disable password promotion (default: promote)
+	FindAll           bool // reserved: keep searching after the first match (phase 2)
+	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
+	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
 
 	Limits Limits
 	Budget Budget
@@ -97,6 +98,16 @@ type Options struct {
 	// per-call source on every Process call (a pluggable live provider). nil
 	// disables it.
 	CandidateProvider CandidateProvider
+
+	// FastReject, when set, is a cheap per-format pre-check consulted before the
+	// expensive KDF for every generated candidate (context- and brute-force-
+	// derived): returning true discards the candidate without running Verify. It
+	// lets an embedder encode a domain constraint (e.g. "the PIN is 6 digits") to
+	// prune a hopeless keyspace. It is NOT applied to passwords promoted from an
+	// outer layer (those are already proven), and it must be side-effect-free and
+	// safe for concurrent use. A FastReject that is too aggressive only slows or
+	// misses a crack; it can never cause a false positive.
+	FastReject func(path string, candidate []byte) bool
 }
 
 // DefaultOptions returns Options with explicit, conservative defaults. The zero
@@ -213,7 +224,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	}
 	acc := newAccounting(p.opts.Limits)
 	prom := newPromoter(!p.opts.NoPromote)
-	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective)
+	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective, nil)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
 	res := &Result{Root: root, Stats: stats, spills: spill}
