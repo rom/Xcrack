@@ -13,14 +13,22 @@ import (
 
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
+	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
+	"github.com/rom/xfileformats/formats/iwork"
+	"github.com/rom/xfileformats/formats/jks"
+	"github.com/rom/xfileformats/formats/keepass"
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
+	fp12 "github.com/rom/xfileformats/formats/p12"
 	"github.com/rom/xfileformats/formats/pdf"
 	fpgp "github.com/rom/xfileformats/formats/pgp"
+	"github.com/rom/xfileformats/formats/privkey"
+	"github.com/rom/xfileformats/formats/puttykey"
+	"github.com/rom/xfileformats/formats/sshkey"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -60,6 +68,9 @@ type Found struct {
 	Path     string
 	Format   string
 	Password string
+	// KeyRecovered reports that the node was unlocked by a known-plaintext key
+	// recovery (ZipCrypto) rather than a password; Password is then "".
+	KeyRecovered bool
 }
 
 // Options configures an engine/Pool. Every CLI flag maps to a field here, so
@@ -79,6 +90,14 @@ type Options struct {
 	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
+	HintCandidates    bool // seed each search with candidates derived from a format's embedded password hint (e.g. iWork .iwph, ZIP comment), tried right after promoted passwords (default: off)
+
+	// HintRules, when set, expands each hint-derived base word into variants
+	// (case/leet/append-digits/…) to also try. It is a word->variants function so
+	// the engine stays decoupled from the rule compiler; the CLI builds it from a
+	// hashcat-style rule file via --hint-rules. Applied only when HintCandidates
+	// is on. nil => try the hint-derived base words only.
+	HintRules func(base string) []string
 
 	Limits Limits
 	Budget Budget
@@ -99,6 +118,11 @@ type Options struct {
 	// disables it.
 	CandidateProvider CandidateProvider
 
+	// KnownPlaintext, when enabled, lets the engine recover a ZipCrypto entry via a
+	// known-plaintext key-recovery attack (no password) before falling back to the
+	// password search. It is opt-in: the zero value disables it.
+	KnownPlaintext KnownPlaintext
+
 	// FastReject, when set, is a cheap per-format pre-check consulted before the
 	// expensive KDF for every generated candidate (context- and brute-force-
 	// derived): returning true discards the candidate without running Verify. It
@@ -108,6 +132,24 @@ type Options struct {
 	// safe for concurrent use. A FastReject that is too aggressive only slows or
 	// misses a crack; it can never cause a false positive.
 	FastReject func(path string, candidate []byte) bool
+}
+
+// KnownPlaintext configures an opt-in known-plaintext key-recovery attack for
+// ZipCrypto entries. When a plaintext fragment of an encrypted entry is known
+// (e.g. a STORED file whose content the embedder already has, or a known magic),
+// the internal key can be recovered directly — no password. The zero value is
+// disabled (For == nil).
+type KnownPlaintext struct {
+	// For returns known plaintext for the entry at path, aligned to the start of
+	// its encrypted data stream (for a STORED entry, the file's own leading
+	// bytes), or nil when none is available. At least zipcrypto.MinKnownPlaintext
+	// contiguous bytes are needed; more recovers faster.
+	For func(path string) []byte
+	// Offload, if non-nil, runs the search on an external engine (e.g.
+	// zipcrypto.ExternalBkcrack) instead of the compute-heavy in-process attack.
+	// The engine re-validates whatever it returns, so a faulty engine cannot
+	// cause a false positive.
+	Offload zipcrypto.Offloader
 }
 
 // DefaultOptions returns Options with explicit, conservative defaults. The zero
@@ -133,9 +175,19 @@ func DefaultRegistry() *xfileformats.Registry {
 	msoffice.Register(r)
 	pdf.Register(r)
 	odf.Register(r)
+	// iWork documents (.pages/.numbers/.key) are ZIP archives; iwork outranks the
+	// generic zip format in Detect and declines non-iWork zips in Probe, so it
+	// must be registered alongside zip (ranking is by Detect confidence).
+	iwork.Register(r)
 	archive.Register(r)
 	age.Register(r)
 	fpgp.Register(r)
+	sshkey.Register(r)
+	privkey.Register(r)
+	jks.Register(r)
+	keepass.Register(r)
+	fp12.Register(r)
+	puttykey.Register(r)
 	return r
 }
 

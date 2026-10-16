@@ -49,19 +49,20 @@ type Info struct {
 }
 
 type agileInfo struct {
-	keySalt   []byte
-	keyBlock  int // keyData keyBits/8 (package secret key length)
-	keyBlkSz  int // keyData blockSize
-	keyHash   func() hash.Hash
-	spinCount int
-	pwSalt    []byte
-	pwKeyLen  int // pwKey keyBits/8
-	pwBlkSz   int
-	pwHash    func() hash.Hash
-	pwHashSz  int
-	encVerIn  []byte
-	encVerVal []byte
-	encKeyVal []byte
+	keySalt    []byte
+	keyBlock   int // keyData keyBits/8 (package secret key length)
+	keyBlkSz   int // keyData blockSize
+	keyHash    func() hash.Hash
+	spinCount  int
+	pwSalt     []byte
+	pwKeyLen   int // pwKey keyBits/8
+	pwBlkSz    int
+	pwHash     func() hash.Hash
+	pwHashName string
+	pwHashSz   int
+	encVerIn   []byte
+	encVerVal  []byte
+	encKeyVal  []byte
 }
 
 type stdInfo struct {
@@ -104,12 +105,22 @@ func (i *Info) Challenge() *xcrypto.Challenge {
 			Scheme: "ooxml-agile",
 			KDF:    xcrypto.KDFSpec{Algo: "office-agile", Iterations: i.ag.spinCount, Salt: i.ag.pwSalt, KeyLen: i.ag.pwKeyLen},
 			Cipher: xcrypto.CipherSpec{Algo: "aes-cbc", KeyBits: i.ag.pwKeyLen * 8},
+			Extra: map[string][]byte{
+				"encVerifier":     i.ag.encVerIn,
+				"encVerifierHash": i.ag.encVerVal,
+				"hashAlgo":        []byte(i.ag.pwHashName),
+			},
 		}
 	}
 	return &xcrypto.Challenge{
 		Scheme: "ooxml-standard",
 		KDF:    xcrypto.KDFSpec{Algo: "office-standard-sha1", Iterations: i.std.iterations, Salt: i.std.salt, KeyLen: i.std.keyLen},
 		Cipher: xcrypto.CipherSpec{Algo: "aes-ecb", KeyBits: i.std.keyLen * 8},
+		Extra: map[string][]byte{
+			"encVerifier":     i.std.encVerifier,
+			"encVerifierHash": i.std.encVerifierHash,
+			"hashAlgo":        []byte("SHA1"),
+		},
 	}
 }
 
@@ -180,19 +191,20 @@ func parseAgile(xmlBytes []byte) (*Info, error) {
 		pwHashSz = ke.HashSize
 	}
 	return &Info{agile: true, ag: agileInfo{
-		keySalt:   keySalt,
-		keyBlock:  doc.KeyData.KeyBits / 8,
-		keyBlkSz:  doc.KeyData.BlockSize,
-		keyHash:   keyHash,
-		spinCount: ke.SpinCount,
-		pwSalt:    pwSalt,
-		pwKeyLen:  ke.KeyBits / 8,
-		pwBlkSz:   ke.BlockSize,
-		pwHash:    pwHash,
-		pwHashSz:  pwHashSz,
-		encVerIn:  encVerIn,
-		encVerVal: encVerVal,
-		encKeyVal: encKeyVal,
+		keySalt:    keySalt,
+		keyBlock:   doc.KeyData.KeyBits / 8,
+		keyBlkSz:   doc.KeyData.BlockSize,
+		keyHash:    keyHash,
+		spinCount:  ke.SpinCount,
+		pwSalt:     pwSalt,
+		pwKeyLen:   ke.KeyBits / 8,
+		pwBlkSz:    ke.BlockSize,
+		pwHash:     pwHash,
+		pwHashName: strings.ToUpper(strings.ReplaceAll(ke.HashAlgorithm, "-", "")),
+		pwHashSz:   pwHashSz,
+		encVerIn:   encVerIn,
+		encVerVal:  encVerVal,
+		encKeyVal:  encKeyVal,
 	}}, nil
 }
 

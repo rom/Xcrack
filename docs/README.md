@@ -8,6 +8,9 @@ Xcrack and its standalone formats library, **Xfileformats**.
 - **[Usage](USAGE.md)** — how to build (`make`), run the CLI and the `xcrackd`
   service, embed the library, and configure everything, with many examples.
   Start here if you just want to run it.
+- **[File formats & variants](FILEFORMATS.md)** — every format Xcrack
+  recognizes, which variants of each, how each is detected and verified, and the
+  oracle it is cross-validated against.
 
 ## Reading order (design & architecture)
 

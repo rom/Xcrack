@@ -44,12 +44,17 @@ jobs:
           for m in xcrypto xfileformats xcrack; do (cd "$m" && "$(go env GOPATH)/bin/govulncheck" ./...); done
 
   fuzz:
-    name: fuzz (bounded smoke)
+    name: fuzz corpus (deterministic)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: "1.25.5"
-      - name: Fuzz each target briefly
-        run: ./scripts/fuzz.sh 25s
+      - name: Replay committed fuzz seed corpora
+        # Deterministic: runs every Fuzz* target over its seed corpus (f.Add
+        # seeds + committed testdata/fuzz regression crashers) with NO random
+        # exploration, so this gate cannot flake. Time-bounded exploratory
+        # fuzzing (which can find new crashers, non-deterministically) runs in
+        # the separate, non-blocking fuzz-nightly workflow.
+        run: go test -run='^Fuzz' ./xcrypto/... ./xfileformats/... ./xcrack/...

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"strings"
@@ -13,7 +14,59 @@ import (
 	"time"
 
 	"github.com/rom/xcrack/pkg/xcrack"
+	"github.com/rom/xcrypto/candidates"
 )
+
+// collectTrainingWords gathers a bounded corpus to train the PCFG on: the
+// explicit passwords, the built-in common-password list (if enabled), and the
+// lines of each wordlist file (stdin "-" is skipped — it is consumed by the
+// search itself). At most max words are returned.
+func collectTrainingWords(explicit []string, useDefault bool, wordlists []string, max int) []string {
+	out := make([]string, 0, len(explicit))
+	add := func(s string) bool {
+		if s == "" {
+			return true
+		}
+		out = append(out, s)
+		return len(out) < max
+	}
+	for _, p := range explicit {
+		if !add(p) {
+			return out
+		}
+	}
+	if useDefault {
+		src := candidates.DefaultList()
+		for {
+			b, err := src.Next()
+			if err == io.EOF || err != nil {
+				break
+			}
+			if !add(string(b)) {
+				return out
+			}
+		}
+	}
+	for _, wl := range wordlists {
+		if wl == "-" {
+			continue
+		}
+		f, err := os.Open(wl)
+		if err != nil {
+			continue
+		}
+		sc := bufio.NewScanner(f)
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			if !add(strings.TrimRight(sc.Text(), "\r\n")) {
+				f.Close()
+				return out
+			}
+		}
+		f.Close()
+	}
+	return out
+}
 
 // --- structured logging -----------------------------------------------------
 

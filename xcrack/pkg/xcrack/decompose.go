@@ -113,7 +113,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
 		}
-		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText)
+		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText, ch.Hint)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
@@ -139,14 +139,20 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		n.Password = pw
 		n.Status = StatusDecrypted
 		// Re-detect the decrypted content and fall through so a decrypted
-		// container is enumerated below.
+		// container is enumerated below. The purpose here is strictly to find a
+		// container to decompose, so pick the highest-confidence CONTAINER among
+		// the candidates rather than the single best format -- a non-container
+		// format that merely outranks it (e.g. the whole-file iwork detector,
+		// which shares the ZIP magic) must not shadow the real zip container.
 		data = plain
 		sum = sha256.Sum256(data)
-		if fm2, derr := e.opts.Registry.Detect(peek(data)); derr == nil {
-			fm = fm2
-			caps = fm.Caps()
-		} else {
-			caps = xfileformats.Caps{}
+		caps = xfileformats.Caps{}
+		for _, cand := range e.opts.Registry.DetectAll(peek(data)) {
+			if cand.Caps().Container {
+				fm = cand
+				caps = cand.Caps()
+				break
+			}
 		}
 	}
 
@@ -197,11 +203,21 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 // handled. It then annotates the child node with the encryption outcome.
 func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
 	if entry.Encrypted {
+		// Known-plaintext key recovery (no password), when enabled and the entry's
+		// scheme supports it (ZipCrypto). Tried before the password search; on
+		// failure (wrong/absent known plaintext) we fall through to it.
+		if kp := e.opts.KnownPlaintext; kp.For != nil && entry.KeyRecover != nil {
+			if known := kp.For(childPath); len(known) > 0 {
+				if child, ok := e.recoverWithPlaintext(ctx, childPath, entry, known, kp.Offload, depth, ancestors, prom, acc, base, ctxText); ok {
+					return child
+				}
+			}
+		}
 		verify := entry.Verify
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
-		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText)
+		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText, hintOf(entry.Challenge))
 		if !found {
 			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
 			if !acc.addNode() {
@@ -239,10 +255,36 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
 }
 
+// recoverWithPlaintext attempts a known-plaintext key recovery for an encrypted
+// entry and, on success, decomposes the recovered content. It returns ok=false
+// (without producing a node) when recovery does not apply or fails, so the caller
+// falls back to the password search. The key-recovery closure re-validates its
+// result, so a wrong `known` cannot yield a false positive.
+func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, entry *xfileformats.Entry, known []byte, offload any, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (*Node, bool) {
+	r, ok, err := entry.KeyRecover(ctx, known, offload)
+	if err != nil || !ok {
+		return nil, false
+	}
+	data, rerr := readBounded(r, e.opts.Limits.MaxEntrySize)
+	if rerr != nil {
+		return e.errNode(childPath, rerr, acc), true
+	}
+	if e.opts.OnFound != nil {
+		e.opts.OnFound(Found{Path: childPath, KeyRecovered: true})
+	}
+	child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+	child.WasEncrypted = true
+	child.KeyRecovered = true
+	if child.Status == StatusPlain {
+		child.Status = StatusDecrypted
+	}
+	return child, true
+}
+
 // searchTarget finds a password that satisfies verify: it tries promoted
 // (ancestor) passwords first (cheap, usually hits for nested archives), then
 // runs a concurrent search over the base candidate source.
-func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (string, bool) {
+func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte, hint string) (string, bool) {
 	// Proven passwords from outer layers are tried first; FastReject is NOT
 	// applied to them (they are evidence, not guesses).
 	for _, pw := range prom.snapshot() {
@@ -257,6 +299,32 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 		}
 	}
 	reject := e.opts.FastReject
+	// Embedded password hint (e.g. the iWork `.iwph` or a ZIP comment): the
+	// strongest per-file signal, so it is tried right after promoted passwords.
+	// Each hint-derived base word is optionally expanded by the configured rule
+	// mangler (Options.HintRules). Subject to FastReject like any guess.
+	if e.opts.HintCandidates && hint != "" {
+		for _, hw := range candidates.FromHint(hint, hintCandidateMax) {
+			words := []string{hw}
+			if e.opts.HintRules != nil {
+				words = append(words, e.opts.HintRules(hw)...)
+			}
+			for _, cand := range words {
+				if ctx.Err() != nil {
+					return "", false
+				}
+				if reject != nil && reject(path, []byte(cand)) {
+					continue
+				}
+				ok, err := safeVerify(verify, []byte(cand))
+				acc.addCandidates(1)
+				if err == nil && ok {
+					e.found(path, cand)
+					return cand, true
+				}
+			}
+		}
+	}
 	// Context/association candidates: derived from the node name and any text
 	// harvested from plain sibling entries. Tried after promotion, before the
 	// general keyspace. Subject to FastReject like any other guess.
@@ -393,11 +461,20 @@ func cloneBase(base CandidateSource) (CandidateSource, bool) {
 // Context-candidate harvesting bounds. The harvested text is auxiliary (it only
 // seeds guesses), so reads here are capped independently of the content budget.
 const (
-	harvestPerEntry = 64 << 10  // bytes read per plain entry
-	harvestTotal    = 256 << 10 // total harvested-text budget per container
-	harvestMaxHint  = 4 << 20   // skip entries whose declared size hint exceeds this
-	contextTextMax  = 64        // max text-derived candidates per search
+	harvestPerEntry  = 64 << 10  // bytes read per plain entry
+	harvestTotal     = 256 << 10 // total harvested-text budget per container
+	harvestMaxHint   = 4 << 20   // skip entries whose declared size hint exceeds this
+	contextTextMax   = 64        // max text-derived candidates per search
+	hintCandidateMax = 64        // max base words derived from an embedded hint
 )
+
+// hintOf returns a Challenge's embedded password hint, or "" when absent.
+func hintOf(ch *xcrypto.Challenge) string {
+	if ch == nil {
+		return ""
+	}
+	return ch.Hint
+}
 
 // contextCandidates returns the de-duplicated association guesses for a node:
 // strings derived from its name, then any extracted from harvested sibling text.

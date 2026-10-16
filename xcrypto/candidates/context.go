@@ -80,6 +80,44 @@ func FromText(text []byte, max int) []string {
 	return out
 }
 
+// FromHint derives candidate passwords from an embedded password/decryption hint
+// (e.g. the iWork `.iwph` hint or a ZIP comment). A hint is frequently the
+// password itself or a thin clue, so the literal hint, its alphanumeric tokens
+// and their concatenation, embedded digit runs, and any value the hint quotes or
+// names ("pw: hunter2") are all tried. The hint is UNTRUSTED, attacker-influenced
+// text; only candidate strings are derived from it. Results are de-duplicated in
+// first-seen order and capped at max (0 => 64). A caller typically feeds these
+// base words through a rule engine for further variants.
+func FromHint(hint string, max int) []string {
+	if max <= 0 {
+		max = 64
+	}
+	hint = strings.TrimSpace(hint)
+	seen := map[string]bool{}
+	var out []string
+	add := func(s string) {
+		s = strings.TrimSpace(s)
+		if s == "" || len(s) > 256 || seen[s] || len(out) >= max {
+			return
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	add(hint) // the literal hint -- often the password itself
+	toks := strings.FieldsFunc(hint, func(r rune) bool { return !isAlnum(r) })
+	for _, t := range toks {
+		add(t)
+	}
+	add(strings.Join(toks, "")) // tokens concatenated, e.g. "my dog" -> "mydog"
+	for _, d := range digitRuns(hint) {
+		add(d)
+	}
+	for _, s := range FromText([]byte(hint), max) { // "pw: X" / quoted value
+		add(s)
+	}
+	return out
+}
+
 func isAlnumByte(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z') || (b >= '0' && b <= '9')
 }

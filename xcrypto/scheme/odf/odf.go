@@ -6,13 +6,17 @@
 // PBKDF2-HMAC-SHA1), decrypt (AES-256-CBC), and verify via the 1K checksum. The
 // ZIP container and manifest parsing live in the file-format layer.
 //
-// Modern ODF 1.2 (AES-256-CBC, SHA-256 start key) is supported. The legacy
-// ODF 1.1 Blowfish-CFB scheme is detected and reported as unsupported.
+// Modern ODF 1.2 (AES-256-CBC, SHA-256 start key) and the ODF 1.3 authenticated
+// AES-256-GCM variant are supported. The legacy ODF 1.1 Blowfish-CFB scheme is
+// detected and reported as unsupported.
 package odf
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/sha1"
 	"crypto/sha256"
+	"errors"
 	"strings"
 
 	"github.com/rom/xcrypto"
@@ -34,6 +38,13 @@ type EntryParams struct {
 
 func isAES256CBC(algo string) bool {
 	return strings.Contains(strings.ToLower(algo), "aes256-cbc") || strings.Contains(strings.ToLower(algo), "aes-256-cbc")
+}
+
+// isAES256GCM reports whether the algorithm is W3C xmlenc11 AES-256-GCM, the
+// authenticated mode ODF 1.3 added (http://www.w3.org/2009/xmlenc11#aes256-gcm).
+func isAES256GCM(algo string) bool {
+	a := strings.ToLower(algo)
+	return strings.Contains(a, "aes256-gcm") || strings.Contains(a, "aes-256-gcm")
 }
 
 // DeriveKey computes the content key: PBKDF2-HMAC-SHA1(start-key-hash(password)).
@@ -61,27 +72,68 @@ func DeriveKey(password []byte, p EntryParams) ([]byte, error) {
 }
 
 // DecryptCompressed decrypts a raw entry to its DEFLATE-compressed bytes (the
-// caller inflates). Only AES-256-CBC is supported.
+// caller inflates). AES-256-CBC and AES-256-GCM are supported. For GCM a tag
+// mismatch (wrong password) is reported as xcrypto.ErrWrongPassword.
 func DecryptCompressed(password []byte, p EntryParams, raw []byte) ([]byte, error) {
-	if !isAES256CBC(p.Algorithm) {
-		return nil, xcrypto.ErrUnsupported
-	}
 	key, err := DeriveKey(password, p)
 	if err != nil {
 		return nil, err
 	}
-	if len(p.IV) != 16 {
-		return nil, xcrypto.ErrMalformed
+	switch {
+	case isAES256GCM(p.Algorithm):
+		return decryptGCM(key, p.IV, raw)
+	case isAES256CBC(p.Algorithm):
+		if len(p.IV) != 16 {
+			return nil, xcrypto.ErrMalformed
+		}
+		n := len(raw) / 16 * 16
+		if n == 0 {
+			return nil, xcrypto.ErrMalformed
+		}
+		return prim.CBCDecrypt(key, p.IV, raw[:n])
+	default:
+		return nil, xcrypto.ErrUnsupported
 	}
-	n := len(raw) / 16 * 16
-	if n == 0 {
-		return nil, xcrypto.ErrMalformed
-	}
-	return prim.CBCDecrypt(key, p.IV, raw[:n])
 }
 
-// Verify checks a password via the 1K checksum over the compressed data.
+// decryptGCM opens an ODF AES-256-GCM entry: the stored bytes are the
+// ciphertext with the 128-bit authentication tag appended (the Go AEAD
+// convention), the nonce is the manifest IV (12 bytes). A tag mismatch means
+// the wrong key, so it cannot yield a false-positive verification.
+func decryptGCM(key, iv, raw []byte) ([]byte, error) {
+	if len(iv) == 0 || len(iv) > 16 {
+		return nil, xcrypto.ErrMalformed
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return nil, err
+	}
+	aead, err := cipher.NewGCMWithNonceSize(block, len(iv))
+	if err != nil {
+		return nil, err
+	}
+	if len(raw) < aead.Overhead() {
+		return nil, xcrypto.ErrMalformed
+	}
+	plain, err := aead.Open(nil, iv, raw, nil)
+	if err != nil {
+		return nil, xcrypto.ErrWrongPassword
+	}
+	return plain, nil
+}
+
+// Verify checks a password. For GCM the authentication tag is authoritative; for
+// CBC it compares the 1K checksum over the compressed data.
 func Verify(password []byte, p EntryParams, raw []byte) (bool, error) {
+	if isAES256GCM(p.Algorithm) {
+		if _, err := DecryptCompressed(password, p, raw); err != nil {
+			if errors.Is(err, xcrypto.ErrWrongPassword) {
+				return false, nil
+			}
+			return false, err
+		}
+		return true, nil
+	}
 	comp, err := DecryptCompressed(password, p, raw)
 	if err != nil {
 		return false, err
@@ -106,14 +158,19 @@ func Verify(password []byte, p EntryParams, raw []byte) (bool, error) {
 
 // Challenge returns a reporting challenge for an ODF entry.
 func Challenge(p EntryParams) *xcrypto.Challenge {
-	algo := "odf-aes256-cbc"
-	if !isAES256CBC(p.Algorithm) {
+	algo, cipherAlgo := "odf-aes256-cbc", "aes-cbc"
+	switch {
+	case isAES256GCM(p.Algorithm):
+		algo, cipherAlgo = "odf-aes256-gcm", "aes-gcm"
+	case isAES256CBC(p.Algorithm):
+		algo, cipherAlgo = "odf-aes256-cbc", "aes-cbc"
+	default:
 		algo = "odf-" + p.Algorithm
 	}
 	return &xcrypto.Challenge{
 		Scheme:   algo,
 		KDF:      xcrypto.KDFSpec{Algo: "pbkdf2-hmac-sha1", Iterations: p.Iterations, Salt: p.Salt, KeyLen: p.KeySize},
-		Cipher:   xcrypto.CipherSpec{Algo: "aes-cbc", KeyBits: p.KeySize * 8},
+		Cipher:   xcrypto.CipherSpec{Algo: cipherAlgo, KeyBits: p.KeySize * 8},
 		Verifier: p.Checksum,
 	}
 }

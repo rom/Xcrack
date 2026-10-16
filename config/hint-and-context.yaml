@@ -1,0 +1,31 @@
+# Derive candidates from what's inside/around the file, then mangle with rules.
+#
+#   - context_candidates: guesses from the file/entry name and plaintext harvested
+#     from plain sibling entries (e.g. a README that names the password).
+#   - hint_candidates: guesses from an embedded password hint (the Apple iWork
+#     `.iwph` hint, or a ZIP entry comment), tried FIRST -- the hint is often the
+#     password itself or a thin clue.
+#   - hint_rules: hashcat-style rules applied to each hint-derived word, so a hint
+#     like "sesame" also tries "Sesame", "SESAME", "Sesame!", "Sesame2024", ...
+#
+#   xcrack --config config/hint-and-context.yaml protected.pages
+#   xcrack --config config/hint-and-context.yaml --hint-rules my.rules secret.zip
+
+search:
+  promote_passwords: true
+  context_candidates: true
+  hint_candidates: true
+  hint_rules:
+    - ":"                    # the hint verbatim (often the password)
+    - "c"                    # Capitalize
+    - "u"                    # UPPERCASE
+    - "$!"                   # append '!'
+    - "$2 $0 $2 $4"          # append 2024
+    - "c $2 $0 $2 $4"        # Capitalize + append 2024
+    - "sa@ so0 se3 si1"      # leetspeak
+
+candidates:
+  use_default_list: true     # still fall back to the common list
+
+output:
+  format: text

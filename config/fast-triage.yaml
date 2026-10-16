@@ -1,0 +1,26 @@
+# Fast triage: a quick, strictly-bounded pass for sorting a pile of files into
+# "trivially unlocked" vs "needs real effort", without hogging the machine.
+#
+#   xcrack --config config/fast-triage.yaml ./incoming/*.zip
+
+candidates:
+  use_default_list: true     # just the built-in common list + hints
+  wordlists: []
+
+search:
+  promote_passwords: true
+  hint_candidates: true      # cheap, high-signal, catches hinted files instantly
+
+concurrency:
+  throttle: 50               # ~50% CPU duty cycle, leave the box responsive
+
+budget:
+  per_file: 20s              # give up quickly per file
+  total: 10m                 # whole-run deadline
+
+limits:
+  max_candidates: 200000     # small keyspace cap per node
+
+output:
+  format: jsonl              # one JSON object per result, easy to pipe/triage
+  log_level: warn

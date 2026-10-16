@@ -1,0 +1,44 @@
+name: fuzz-nightly
+
+# Non-blocking exploratory testing that is deliberately NON-deterministic, kept
+# off the PR/push path so it can never flake a pull request:
+#   - time-bounded random fuzzing of every Fuzz* target (may discover new
+#     crashers), and
+#   - the live qpdf cross-validation with random per-run salts.
+# A found crasher fails this run (visible in the Actions tab) and its minimized
+# input is uploaded as an artifact to commit as a regression seed.
+on:
+  schedule:
+    - cron: "17 4 * * *" # daily, 04:17 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    name: exploratory fuzz + live cross-validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.5"
+      - name: Install reference tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qpdf p7zip-full
+      - name: Exploratory fuzzing (random, time-bounded)
+        run: ./scripts/fuzz.sh 60s
+      - name: Live qpdf cross-validation (random salts)
+        if: always()
+        env:
+          XCRACK_QPDF_LIVE: "1"
+        run: go test -run='^TestQPDFCrossValidation$' ./xfileformats/formats/pdf/
+      - name: Upload any fuzz crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore

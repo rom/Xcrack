@@ -10,6 +10,7 @@ import (
 	stdzip "archive/zip"
 	"bytes"
 	"compress/flate"
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -119,6 +120,26 @@ func (f *Format) makeEntry(zf *stdzip.File, name string) (*xfileformats.Entry, e
 	return f.makeZipCryptoEntry(zf, name)
 }
 
+// zipHint normalizes an untrusted ZIP entry comment into a password hint: it
+// trims whitespace, drops control characters, and caps the length. Empty when
+// there is no useful comment.
+func zipHint(comment string) string {
+	const maxHint = 256
+	if comment == "" {
+		return ""
+	}
+	if len(comment) > maxHint {
+		comment = comment[:maxHint]
+	}
+	s := strings.Map(func(r rune) rune {
+		if r == '\t' || (r >= 0x20 && r != 0x7f) {
+			return r
+		}
+		return -1
+	}, comment)
+	return strings.TrimSpace(s)
+}
+
 func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats.Entry, error) {
 	method := zf.Method
 	if method != methodStore && method != methodDeflate {
@@ -126,6 +147,7 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 	}
 	crc, flags, dosTime := zf.CRC32, zf.Flags, zf.ModifiedTime
 	ch := zipcrypto.Challenge(int64(zf.UncompressedSize64))
+	ch.Hint = zipHint(zf.Comment) // a per-entry comment is sometimes a password hint
 
 	decryptPlain := func(password []byte) ([]byte, error) {
 		raw, err := readRawBytes(zf, maxEntryRaw)
@@ -161,9 +183,59 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 		}
 		return bytes.NewReader(plain), nil
 	}
+	// keyRecover performs a known-plaintext key recovery (no password). `known` is
+	// aligned to the start of the encrypted DATA stream (the compressed bytes; for
+	// a STORED entry that is the file content itself). On success it rolls the
+	// recovered state back over the 12-byte header, decrypts the whole entry, and
+	// decompresses. The result's CRC is checked, so a wrong `known` (e.g. for a
+	// DEFLATE entry whose compressed bytes are unknown) cannot yield a false hit.
+	keyRecover := func(ctx context.Context, known []byte, offload any) (io.Reader, bool, error) {
+		raw, err := readRawBytes(zf, maxEntryRaw)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(raw) < zipcrypto.HeaderLen {
+			return nil, false, nil
+		}
+		data := raw[zipcrypto.HeaderLen:]
+		n := len(known)
+		if n > len(data) {
+			n = len(data)
+		}
+		if n < zipcrypto.MinKnownPlaintext {
+			return nil, false, nil // not enough known plaintext to recover
+		}
+		var (
+			keys zipcrypto.Keys
+			ok   bool
+		)
+		if off, _ := offload.(zipcrypto.Offloader); off != nil {
+			keys, ok, err = zipcrypto.RecoverKeysWith(ctx, known[:n], data[:n], off)
+			if err != nil {
+				return nil, false, err
+			}
+		} else {
+			keys, ok = zipcrypto.RecoverKeysCtx(ctx, known[:n], data[:n])
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		// keys = state before data[0]; roll back over the header to the entry start.
+		start, _ := keys.RollBack(raw[:zipcrypto.HeaderLen])
+		full := append([]byte(nil), raw...)
+		start.Decrypt(full)
+		plain, err := decompress(full[zipcrypto.HeaderLen:], method)
+		if err != nil {
+			return nil, false, nil // recovered keys but content did not decompress
+		}
+		if crc32.ChecksumIEEE(plain) != crc {
+			return nil, false, nil // decompressed but CRC mismatch => not a real hit
+		}
+		return bytes.NewReader(plain), true, nil
+	}
 	return &xfileformats.Entry{
 		Path: name, Size: int64(zf.UncompressedSize64),
-		Encrypted: true, Challenge: ch, Verify: verify, Open: open,
+		Encrypted: true, Challenge: ch, Verify: verify, Open: open, KeyRecover: keyRecover,
 	}, nil
 }
 
@@ -177,6 +249,7 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) 
 		KDF:               xcrypto.KDFSpec{Algo: "pbkdf2-hmac-sha1", Iterations: winzipaes.PBKDF2Iter, KeyLen: p.KeyLen()},
 		Cipher:            xcrypto.CipherSpec{Algo: "aes-ctr", KeyBits: p.KeyLen() * 8},
 		DecryptedSizeHint: int64(zf.UncompressedSize64),
+		Hint:              zipHint(zf.Comment),
 	}
 	if hdr, err := readRawBytes(zf, int64(p.SaltLen()+winzipaes.PWVerifLen)); err == nil && len(hdr) >= p.SaltLen()+winzipaes.PWVerifLen {
 		ch.KDF.Salt = append([]byte(nil), hdr[:p.SaltLen()]...)

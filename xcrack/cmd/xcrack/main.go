@@ -32,6 +32,10 @@ func run(args []string) int {
 			return 0
 		case "identify":
 			return runIdentify(args[1:])
+		case "kp":
+			return runKP(args[1:])
+		case "hashline":
+			return runHashline(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -85,6 +89,13 @@ func runCrack(args []string) int {
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
+	hintF := fs_.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment), tried first")
+	hintRulesF := fs_.String("hint-rules", "", "hashcat-style rule file applied to hint-derived words (implies --hint)")
+	pcfgF := fs_.Bool("pcfg", false, "train a PCFG on the candidate words and generate guesses in probability order")
+	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
+	var hybridAppend, hybridPrepend stringSlice
+	fs_.Var(&hybridAppend, "hybrid-append", "append every expansion of MASK to each wordlist word (hashcat dict+mask; repeatable)")
+	fs_.Var(&hybridPrepend, "hybrid-prepend", "prepend every expansion of MASK to each wordlist word (hashcat mask+dict; repeatable)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -132,6 +143,15 @@ func runCrack(args []string) int {
 	}
 	opts.FindAll = *findAll
 	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
+	opts.HintCandidates = *hintF || *hintRulesF != "" || (cfg != nil && (cfg.Search.Hint || len(cfg.Search.HintRules) > 0))
+	if opts.HintCandidates {
+		mangler, herr := buildHintRules(*hintRulesF, cfg)
+		if herr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: hint-rules: %v\n", herr)
+			return 2
+		}
+		opts.HintRules = mangler
+	}
 
 	opts.Limits = xcrack.DefaultLimits()
 	opts.Limits.MaxDepth = resolveInt(set["max-depth"], *maxDepth, "", cfgInt(cfg, func(c *fileConfig) int { return c.Limits.MaxDepth }), opts.Limits.MaxDepth)
@@ -159,9 +179,26 @@ func runCrack(args []string) int {
 	opts.Logger = newLogger(logLvl)
 
 	// Build the pattern set from --pattern files and the config's patterns block.
-	patternSet, err := buildPatternSet(patterns, cfg)
+	patternSet, customCharsets, err := buildPatternSet(patterns, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "xcrack: pattern: %v\n", err)
+		return 2
+	}
+	// Hybrid attack masks (wordlist ± mask), from flags and the config.
+	allHybridAppend := append([]string{}, hybridAppend...)
+	allHybridPrepend := append([]string{}, hybridPrepend...)
+	if cfg != nil {
+		allHybridAppend = append(allHybridAppend, cfg.Search.HybridAppend...)
+		allHybridPrepend = append(allHybridPrepend, cfg.Search.HybridPrepend...)
+	}
+	hybridAppendMasks, err := compileMasks(allHybridAppend, customCharsets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: hybrid-append: %v\n", err)
+		return 2
+	}
+	hybridPrependMasks, err := compileMasks(allHybridPrepend, customCharsets)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: hybrid-prepend: %v\n", err)
 		return 2
 	}
 
@@ -217,8 +254,19 @@ func runCrack(args []string) int {
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
+
+	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
+	// the built-in list, and wordlist files, bounded), then cloned per file.
+	var pcfgModel *candidates.PCFG
+	if *pcfgF {
+		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
+	}
+
 	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
+		if pcfgModel != nil {
+			srcs = append(srcs, pcfgModel.Source(*pcfgMax))
+		}
 		// Root-name context: the engine derives name candidates for every nested
 		// node, but the top-level file's name is only known here, so seed it first.
 		if opts.ContextCandidates {
@@ -245,6 +293,34 @@ func runCrack(args []string) int {
 		}
 		// Masks are standalone keyspaces appended after the wordlists.
 		srcs = append(srcs, patternSet.MaskSources()...)
+		// Hybrid attacks: each wordlist word combined with every expansion of a
+		// mask (dict+mask / mask+dict). Built over a fresh file-wordlist chain
+		// (stdin cannot be re-iterated per mask, so it is excluded here).
+		if len(hybridAppendMasks) > 0 || len(hybridPrependMasks) > 0 {
+			freshWordlist := func() candidates.Source {
+				var ws []candidates.Source
+				for _, wl := range allWordlists {
+					if wl == "-" {
+						continue
+					}
+					ws = append(ws, candidates.File(wl))
+				}
+				if len(ws) == 0 {
+					return nil
+				}
+				return candidates.Chain(ws...)
+			}
+			for _, m := range hybridAppendMasks {
+				if w := freshWordlist(); w != nil {
+					srcs = append(srcs, pattern.Hybrid(w, m, true))
+				}
+			}
+			for _, m := range hybridPrependMasks {
+				if w := freshWordlist(); w != nil {
+					srcs = append(srcs, pattern.Hybrid(w, m, false))
+				}
+			}
+		}
 		return candidates.Chain(srcs...)
 	}
 
@@ -538,6 +614,9 @@ func usage() {
 USAGE:
   xcrack [flags] [sources...]      decrypt and recursively decompose sources
   xcrack identify [sources...]     detect format & encryption only
+  xcrack kp --plain P --cipher C   ZipCrypto known-plaintext key recovery
+                                   (no password; --bkcrack offloads the search)
+  xcrack hashline [sources...]     emit $office$/$pdf$/... lines for hashcat/John
   xcrack version
 
 COMMON FLAGS:
@@ -549,6 +628,11 @@ COMMON FLAGS:
       --format text|json|jsonl
       --workers N  --file-jobs N  --max-procs N
       --timeout D  --max-duration D  --batch-size N  --throttle PCT
+      --context                  derive guesses from names + plain siblings
+      --hint                     derive guesses from an embedded password hint
+      --hint-rules FILE          rule file applied to hint-derived words
+      --hybrid-append MASK       wordlist word + mask expansion (dict+mask; repeatable)
+      --hybrid-prepend MASK      mask expansion + wordlist word (mask+dict; repeatable)
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list
@@ -560,16 +644,49 @@ Authorized use only: operate on files you own or are permitted to access.
 
 // buildPatternSet merges the pattern-file DSL (--pattern) and the config's
 // patterns block into one compiled pattern.Set (masks + rules + custom charsets).
-func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, error) {
+// buildHintRules compiles the hint-mangling ruleset from the --hint-rules file
+// (hashcat-style, one rule per line) plus any inline rules in the config, and
+// returns a word->variants function for Options.HintRules. It returns nil when
+// there are no rules, so only the hint-derived base words are tried.
+func buildHintRules(file string, cfg *fileConfig) (func(string) []string, error) {
+	var lines []string
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, strings.Split(string(data), "\n")...)
+	}
+	if cfg != nil {
+		lines = append(lines, cfg.Search.HintRules...)
+	}
+	rs, err := pattern.CompileRules(lines)
+	if err != nil {
+		return nil, err
+	}
+	if rs.Len() == 0 {
+		return nil, nil
+	}
+	return func(base string) []string {
+		mangled := rs.Apply([]byte(base))
+		out := make([]string, 0, len(mangled))
+		for _, v := range mangled {
+			out = append(out, string(v))
+		}
+		return out
+	}, nil
+}
+
+func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]string, error) {
 	spec := pattern.Spec{CustomCharsets: map[rune]string{}}
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		s, err := pattern.ParseText(data)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		spec.Masks = append(spec.Masks, s.Masks...)
 		spec.Rules = append(spec.Rules, s.Rules...)
@@ -586,5 +703,20 @@ func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, error) {
 			}
 		}
 	}
-	return pattern.Compile(spec)
+	set, err := pattern.Compile(spec)
+	return set, spec.CustomCharsets, err
+}
+
+// compileMasks compiles each mask spec (sharing the custom charset table) for a
+// hybrid attack, failing on the first malformed mask.
+func compileMasks(specs []string, custom map[rune]string) ([]*pattern.Mask, error) {
+	var out []*pattern.Mask
+	for _, s := range specs {
+		m, err := pattern.CompileMask(s, custom)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, m)
+	}
+	return out, nil
 }

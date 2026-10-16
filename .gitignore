@@ -14,6 +14,10 @@
 /dist/
 coverage.*
 
+# Default result-file outputs written by the example configs (config/*.yaml)
+/results.json
+/results.ndjson
+
 # Editor
 .idea/
 .vscode/

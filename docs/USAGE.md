@@ -70,6 +70,7 @@ go build -o bin/xcrackd ./xcrack/cmd/xcrackd
 ```
 xcrack [flags] [sources...]      decrypt and recursively decompose sources
 xcrack identify [sources...]     detect format & encryption only (no cracking)
+xcrack hashline [sources...]     emit $office$/$pdf$ hash lines for hashcat / John
 xcrack version
 xcrack help
 ```
@@ -107,6 +108,11 @@ archive that reuses a password is unlocked almost for free.
 | `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
 | `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--hint` | derive guesses from a file's embedded password hint (iWork `.iwph`, ZIP comment), tried first (see [Hint candidates](#hint-candidates)) |
+| `--hint-rules FILE` | hashcat-style rule file applied to hint-derived words (implies `--hint`) |
+| `--hybrid-append MASK` | append every expansion of `MASK` to each wordlist word (hashcat dict+mask, `-a 6`) — repeatable |
+| `--hybrid-prepend MASK` | prepend every expansion of `MASK` to each wordlist word (hashcat mask+dict, `-a 7`) — repeatable |
+| `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
@@ -148,6 +154,33 @@ first. Harvesting is bounded (64 KiB per plain entry, 256 KiB per container) and
 reads only *unencrypted* siblings. The feature is **off by default** (it widens
 the search a little); enable it per run with `--context` or in a config file
 with `search: { context_candidates: true }`.
+
+#### Hint candidates
+
+Some formats carry an in-file **password hint** that the author set — Apple
+iWork stores one in a `.iwph` member, and a ZIP entry can have a comment. The
+hint is often the password itself or a thin clue. With `--hint`, the engine
+derives candidates from it and tries them **first** (right after promoted
+passwords): the literal hint, its alphanumeric tokens and their concatenation,
+embedded digit runs, and any value the hint quotes or names (`pw: hunter2`).
+
+`--hint-rules FILE` (or `search: { hint_rules: [...] }`) applies a
+hashcat-style ruleset to each hint-derived word, so a hint like `sesame` also
+tries `Sesame`, `SESAME`, `Sesame!`, `Sesame2024`, `s3s4m3`, … — exactly the
+rule DSL used by `--pattern`. Giving `--hint-rules` implies `--hint`.
+
+```sh
+# Unlock an iWork doc straight from its .iwph hint (often the password):
+xcrack --hint protected.pages
+
+# Treat the hint as a stem and mangle it into likely passwords:
+xcrack --hint --hint-rules rules/best64.rule secret.zip
+```
+
+The hint is untrusted, attacker-influenced text; only candidate strings are
+derived from it. The feature is **off by default**. See
+[`config/hint-and-context.yaml`](../config/hint-and-context.yaml) for a worked
+config.
 
 #### Checkpoint / resume
 
@@ -287,6 +320,11 @@ recursion:
 
 search:
   promote_passwords: true
+  context_candidates: false
+  hint_candidates: false    # derive guesses from an embedded password hint
+  hint_rules:               # hashcat-style rules applied to hint-derived words
+    - "c"
+    - "$2 $0 $2 $4"
 
 candidates:
   passwords: [infected, Welcome1]
@@ -314,6 +352,10 @@ budget:
 xcrack -c xcrack.yaml /inbox/
 xcrack -c xcrack.yaml --workers 2 /inbox/     # flag overrides the config
 ```
+
+Ready-to-adapt example configs live in [`config/`](../config/) — basic wordlist,
+mask+rules, hint+context, fast triage, and deep batch — see its
+[`README`](../config/README.md).
 
 ### Environment variables
 
@@ -351,8 +393,11 @@ xcrack -p 'S3cret!' quarterly.xlsx
 # --- Encrypted PDF (user OR owner password) ---
 xcrack -w rockyou.txt statement.pdf
 
-# --- LibreOffice / OpenOffice (ODF: .odt/.ods/.odp) ---
+# --- LibreOffice / OpenOffice (ODF: .odt/.ods/.odp; AES-256 CBC or GCM) ---
 xcrack -p hunter2 notes.odt
+
+# --- KeePass database (.kdbx, KDBX4: Argon2d/Argon2id/AES-KDF) ---
+xcrack -w rockyou.txt secrets.kdbx    # recovers the master passphrase
 
 # --- Legacy MS Office (.doc/.xls/.ppt: RC4 CryptoAPI / RC4 97-2000 / XOR) ---
 xcrack -p myhovercraftisfullofeels old-memo.doc
@@ -382,6 +427,25 @@ Detect format and encryption **without** attempting any password:
 xcrack identify suspicious.bin mystery.dat
 # suspicious.bin: format=ooxml container=false encrypted=true explodable=false
 # mystery.dat: format=zip container=true encrypted=false explodable=false
+```
+
+### `hashline`
+
+Emit a crackable hash line for an external GPU cracker instead of searching
+in-process — Xcrack probes the file once and prints the `$…$` string that
+hashcat (`-m <mode>`) or John the Ripper (`--format=<name>`) expects. The hash
+line goes to **stdout** (so it pipes cleanly into a cracker); a
+`# <file> (hashcat -m N | john --format=X)` note goes to stderr.
+
+Supported today: encrypted **OOXML** Office documents (`$office$`, `-m
+9400/9500/9600`) and **PDF** (`$pdf$`, `-m 10400/10500/10600/10700`). These
+emitters are cross-validated against real hashcat (see
+`scripts/hashcat-xval.sh`). Other schemes report that no emitter exists yet.
+
+```sh
+xcrack hashline secret.docx > hashes.txt         # $office$*2013*100000*256*...
+xcrack hashline *.pdf 2>/dev/null >> hashes.txt  # append $pdf$ lines
+hashcat -m 9600 hashes.txt rockyou.txt           # crack on the GPU box
 ```
 
 ---
@@ -415,6 +479,19 @@ xcrack -w names.txt --pattern patterns.txt locked.zip
 
 Masks run as their own keyspaces (appended after wordlists); rules expand each
 wordlist entry. Keep mask keyspaces small — this is CPU-only guessing, not GPU.
+
+**Hybrid (wordlist ± mask).** `--hybrid-append MASK` tries `word + maskExpansion`
+for every wordlist word (hashcat's dict+mask, `-a 6`); `--hybrid-prepend MASK`
+tries `maskExpansion + word` (mask+dict, `-a 7`). Both are repeatable and share
+the run's custom charsets.
+
+```sh
+# "Sesame" + two digits (Sesame00..Sesame99), for every word in names.txt:
+xcrack -w names.txt --hybrid-append '?d?d' vault.7z
+
+# a leading symbol in front of each word:
+xcrack -w names.txt --hybrid-prepend '?s' vault.7z
+```
 
 ---
 
@@ -620,17 +697,76 @@ keys on; byte fields are hex-encoded.
 
 ---
 
+## ZipCrypto known-plaintext attack
+
+Traditional PKWARE ("ZipCrypto") encryption is cryptographically broken: given
+~12+ bytes of known plaintext for an entry and the matching ciphertext, its
+internal key state can be recovered with **no password** (Biham–Kocher). The
+`xcrypto/scheme/zipcrypto` package implements the full attack in pure Go:
+
+```go
+import "github.com/rom/xcrypto/scheme/zipcrypto"
+
+// plain and cipher are the known plaintext and ciphertext at the same stream
+// positions (e.g. a file you know is in the archive). keys is the internal state.
+keys, ok := zipcrypto.RecoverKeys(plain, cipher)
+if ok {
+    // Roll back across the 12-byte header (recovering it) to reach the entry start,
+    // then decrypt the whole entry with keys.Decrypt.
+    start, _ := keys.RollBack(headerCiphertext)
+    _ = start
+}
+```
+
+**This is compute-heavy.** The keystream leaves a few ×10⁵ internal-key
+candidates and each needs a ~2¹⁶ key1 enumeration (a two-step *fiber* roll-back
+keeps it there rather than fanning out 256-wide per level — a ~34× per-window
+speedup). The candidates are independent, so the search runs across all CPU cores
+and scales **near-linearly** — measured ~16 / 28 / 62 candidates·s⁻¹ on 1 / 2 / 4
+cores. A representative full recovery (54-byte known plaintext) examined ~185k
+candidates and recovered the keys in **~57 min on a 4-core box**; expect roughly
+an hour on a laptop, a few minutes on a many-core server, and a further small
+constant factor from dedicated C++ tools such as *bkcrack*. More known plaintext
+does not shrink the candidate set. Use `RecoverKeysBudget(plain, cipher,
+maxCandidates)` to bound the effort and resume with a larger budget, hand the
+problem to a local *bkcrack* binary with `RecoverKeysWith(plain, cipher,
+zipcrypto.ExternalBkcrack{Bin: "bkcrack"})` (CLI `--bkcrack /path/to/bkcrack`),
+or offload the heavy search to an external/GPU engine via the challenge-export
+bridge above. The offload and this package's ZipCrypto primitives are
+cross-validated against the real *bkcrack* binary (`TestExternalBkcrackReal`,
+run with `XCRACK_BKCRACK=/path/to/bkcrack`); the offload's answer is always
+re-validated locally, so an external engine can never cause a false positive.
+
+`xcrack kp` exposes all of this: `--plain`/`--cipher` are the aligned known
+plaintext and ciphertext, `--bkcrack` offloads the search, and `--decrypt ENTRY
+--offset N` recovers the keys then decrypts a whole ZipCrypto entry — rolling the
+state back over the 12-byte header and any earlier data so a *mid-entry* known
+plaintext still unlocks the entire entry (`--keep-header` keeps the header
+bytes). `--recover-password MAXLEN:CHARSET` then recovers the actual password
+from the entry-start state via bkcrack (re-validated locally). The engine can do
+the same automatically for an archive entry via `Options.KnownPlaintext{For,
+Offload}` (e.g. a STORED entry whose content an embedder already holds).
+
+Two further knobs: the compute-heavy in-process attack honors context
+cancellation (`RecoverKeysCtx`), so an embedder can bound it; and *sparse* known
+plaintext (scattered known bytes) is available through the offload by passing
+bkcrack's `-x <offset> <hex>` via `ExternalBkcrack.Args` (the in-process attack
+is contiguous-only). Recovering a running key state from a broken cipher is
+legitimate cryptanalysis — no sound cipher is weakened.
+
+---
+
 ## Supported formats
 
 | Family | Formats | Notes |
 | ------ | ------- | ----- |
 | Archives | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** | 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | MS Office | OOXML (`.docx/.xlsx/.pptx`, agile + standard), legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI / RC4 97-2000 / XOR) | legacy XOR body reconstruction: Excel only |
-| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC) | |
+| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC), **Apple iWork** (Pages/Numbers/Keynote, '13+ `.iwpv2`) | iWork recovers the passphrase only (body not reconstructed) |
 | Mail / passphrase | MIME (`.eml`) attachments, **age** (scrypt), **symmetric OpenPGP** (`gpg -c`) | |
+| Keys / key stores | **OpenSSH** private keys, **PEM/PKCS#8** (PBES2 + DEK-Info), **JKS**, **PKCS#12** (`.p12/.pfx`), **PuTTY** `.ppk` (v3/v2), **SQLCipher** (library-only) | |
 
-Not yet implemented (staged, pending test fixtures): KeePass, SQLCipher, Apple
-iWork, encrypted DMG, ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream
-decryption. Out of scope: GPU cracking in-tree, any online/network attack, and
-public-key PDF (needs a private key, not a password). See the
-[roadmap](roadmap.md).
+Not yet implemented (staged): KeePass (needs in-tree Argon2d), encrypted DMG,
+ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream decryption. Out of
+scope: GPU cracking in-tree, any online/network attack, and public-key PDF
+(needs a private key, not a password). See the [roadmap](roadmap.md).

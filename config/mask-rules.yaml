@@ -1,0 +1,30 @@
+# Mask brute-force + rule mangling. Masks generate candidates directly; rules
+# mangle each wordlist/candidate word. Custom charsets (?1..?4) are defined under
+# custom_charsets. See docs/USAGE.md for the mask/rule DSL.
+#
+#   xcrack --config config/mask-rules.yaml secret.pdf
+
+candidates:
+  wordlists:
+    - /usr/share/wordlists/rockyou.txt
+  use_default_list: false
+
+patterns:
+  masks:
+    - "?u?l?l?l?l?d?d"        # Ulllldd  e.g. Summer23
+    - "?1?1?1?1?1?1"          # six chars from the custom set ?1
+  rules:
+    - ":"                    # try the word unchanged
+    - "c"                    # Capitalize
+    - "u"                    # UPPERCASE
+    - "$!"                   # append '!'
+    - "c $2 $0 $2 $3"        # Capitalize then append 2023
+    - "sa@ so0 se3"          # leetspeak a->@ o->0 e->3
+  custom_charsets:
+    "1": "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+
+limits:
+  max_candidates: 50000000   # cap per encrypted node so a mask run stays bounded
+
+output:
+  format: text

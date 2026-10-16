@@ -13,6 +13,7 @@ func FuzzOpen(f *testing.F) {
 	f.Add([]byte{})
 	f.Add([]byte(sig))
 	f.Add(append([]byte(sig), make([]byte, 600)...))
+	f.Add(difatBomb()) // oversized/cyclic DIFAT chain (regression)
 
 	f.Fuzz(func(t *testing.T, b []byte) {
 		cf, err := Open(b)
