@@ -96,6 +96,9 @@ func runCrack(args []string) int {
 	var hybridAppend, hybridPrepend stringSlice
 	fs_.Var(&hybridAppend, "hybrid-append", "append every expansion of MASK to each wordlist word (hashcat dict+mask; repeatable)")
 	fs_.Var(&hybridPrepend, "hybrid-prepend", "prepend every expansion of MASK to each wordlist word (hashcat mask+dict; repeatable)")
+	toggleF := fs_.Bool("toggle-case", false, "also try case-toggle variants of each wordlist word (hashcat toggle attack)")
+	princeF := fs_.Bool("prince", false, "also try PRINCE chains (length-ordered concatenations of wordlist words)")
+	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -262,6 +265,35 @@ func runCrack(args []string) int {
 		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
 	}
 
+	// Extra generators (flags, or the config's search block).
+	genToggle := *toggleF || (cfg != nil && cfg.Search.ToggleCase)
+	genPrince := *princeF || (cfg != nil && cfg.Search.Prince)
+	genKeyWalk := *keywalkF || (cfg != nil && cfg.Search.KeyboardWalk)
+	const (
+		princeMaxLen   = 32        // drop concatenations longer than this
+		princeMaxWords = 3         // at most this many words per chain
+		princeMax      = 5_000_000 // cap on PRINCE candidates per file
+		keyWalkMin     = 4         // shortest keyboard walk
+		keyWalkMax     = 10        // longest keyboard walk
+		keyWalkCount   = 1_000_000 // cap on generated walks
+	)
+
+	// A fresh, re-iterable chain of the file wordlists (stdin excluded, since it
+	// cannot be re-read). Shared by the hybrid, PRINCE and toggle-case builders.
+	freshWordlist := func() candidates.Source {
+		var ws []candidates.Source
+		for _, wl := range allWordlists {
+			if wl == "-" {
+				continue
+			}
+			ws = append(ws, candidates.File(wl))
+		}
+		if len(ws) == 0 {
+			return nil
+		}
+		return candidates.Chain(ws...)
+	}
+
 	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
 		if pcfgModel != nil {
@@ -297,19 +329,6 @@ func runCrack(args []string) int {
 		// mask (dict+mask / mask+dict). Built over a fresh file-wordlist chain
 		// (stdin cannot be re-iterated per mask, so it is excluded here).
 		if len(hybridAppendMasks) > 0 || len(hybridPrependMasks) > 0 {
-			freshWordlist := func() candidates.Source {
-				var ws []candidates.Source
-				for _, wl := range allWordlists {
-					if wl == "-" {
-						continue
-					}
-					ws = append(ws, candidates.File(wl))
-				}
-				if len(ws) == 0 {
-					return nil
-				}
-				return candidates.Chain(ws...)
-			}
 			for _, m := range hybridAppendMasks {
 				if w := freshWordlist(); w != nil {
 					srcs = append(srcs, pattern.Hybrid(w, m, true))
@@ -320,6 +339,22 @@ func runCrack(args []string) int {
 					srcs = append(srcs, pattern.Hybrid(w, m, false))
 				}
 			}
+		}
+		// Toggle-case variants of the wordlist words (hashcat toggle attack).
+		if genToggle {
+			if w := freshWordlist(); w != nil {
+				srcs = append(srcs, candidates.ToggleCase(w, 0))
+			}
+		}
+		// PRINCE: length-ordered concatenations of wordlist words.
+		if genPrince {
+			if w := freshWordlist(); w != nil {
+				srcs = append(srcs, candidates.Prince(w, 1, princeMaxLen, princeMaxWords, princeMax))
+			}
+		}
+		// Keyboard-walk: adjacency walks on a QWERTY keyboard (standalone).
+		if genKeyWalk {
+			srcs = append(srcs, candidates.KeyboardWalk(keyWalkMin, keyWalkMax, keyWalkCount))
 		}
 		return candidates.Chain(srcs...)
 	}
@@ -633,6 +668,9 @@ COMMON FLAGS:
       --hint-rules FILE          rule file applied to hint-derived words
       --hybrid-append MASK       wordlist word + mask expansion (dict+mask; repeatable)
       --hybrid-prepend MASK      mask expansion + wordlist word (mask+dict; repeatable)
+      --toggle-case              also try case-toggle variants of each wordlist word
+      --prince                   also try PRINCE chains (concatenated wordlist words)
+      --keyboard-walk            also try QWERTY keyboard-adjacency walks
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list
