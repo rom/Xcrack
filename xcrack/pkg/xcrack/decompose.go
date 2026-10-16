@@ -139,14 +139,20 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		n.Password = pw
 		n.Status = StatusDecrypted
 		// Re-detect the decrypted content and fall through so a decrypted
-		// container is enumerated below.
+		// container is enumerated below. The purpose here is strictly to find a
+		// container to decompose, so pick the highest-confidence CONTAINER among
+		// the candidates rather than the single best format -- a non-container
+		// format that merely outranks it (e.g. the whole-file iwork detector,
+		// which shares the ZIP magic) must not shadow the real zip container.
 		data = plain
 		sum = sha256.Sum256(data)
-		if fm2, derr := e.opts.Registry.Detect(peek(data)); derr == nil {
-			fm = fm2
-			caps = fm.Caps()
-		} else {
-			caps = xfileformats.Caps{}
+		caps = xfileformats.Caps{}
+		for _, cand := range e.opts.Registry.DetectAll(peek(data)) {
+			if cand.Caps().Container {
+				fm = cand
+				caps = cand.Caps()
+				break
+			}
 		}
 	}
 

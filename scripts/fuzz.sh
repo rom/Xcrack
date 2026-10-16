@@ -17,6 +17,9 @@ pkgs=(
   ./xfileformats/formats/msoffice
   ./xfileformats/formats/age
   ./xfileformats/formats/pgp
+  ./xfileformats/formats/sshkey
+  ./xfileformats/formats/privkey
+  ./xfileformats/formats/iwork
   ./xcrack/pkg/xcrack
 )
 fail=0

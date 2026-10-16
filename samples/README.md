@@ -38,6 +38,13 @@ make build                              # or: (cd xcrack && go build -o ../bin/x
 | `key.ppk` | **PuTTY** `.ppk` v3 (Argon2id) | `opensesame` | `puttygen -t ed25519 --new-passphrase` |
 | `notes.db` | **SQLCipher** v4 database | `opensesame` | `sqlcipher "PRAGMA key=…"` |
 | `kp_entry.bin`, `kp_cipher.bin`, `kp_known.txt` | **ZipCrypto known-plaintext** demo | `sesame` | in-tree `kpgen.go` |
+| `apple.pages` | **Apple Pages** (iWork 14.5) | `Password` | user-supplied (saved from Pages) |
+| `apple.numbers` | **Apple Numbers** (iWork 14.5) | `Password` | user-supplied (saved from Numbers) |
+| `apple.key` | **Apple Keynote** (iWork 14.5) | `Password` | user-supplied (saved from Keynote) |
+
+> The Apple iWork samples use the passphrase **`Password`** (also in
+> `wordlist.txt`). They can't be produced from command-line tools — they were
+> saved by Pages/Numbers/Keynote 14.5 — so `generate.sh` does not recreate them.
 
 ## Notes
 

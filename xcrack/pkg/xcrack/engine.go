@@ -17,6 +17,7 @@ import (
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
+	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
@@ -165,6 +166,10 @@ func DefaultRegistry() *xfileformats.Registry {
 	msoffice.Register(r)
 	pdf.Register(r)
 	odf.Register(r)
+	// iWork documents (.pages/.numbers/.key) are ZIP archives; iwork outranks the
+	// generic zip format in Detect and declines non-iWork zips in Probe, so it
+	// must be registered alongside zip (ranking is by Detect confidence).
+	iwork.Register(r)
 	archive.Register(r)
 	age.Register(r)
 	fpgp.Register(r)

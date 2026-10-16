@@ -66,7 +66,8 @@ Items marked **[batch]** are the current implementation batch.
 
 Implemented: ZIP (ZipCrypto/WinZip-AES), tar/gzip/bzip2/xz, 7z & RAR (incl.
 header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
-(.eml), age, symmetric OpenPGP, OpenSSH private keys, encrypted PEM/PKCS#8 keys.
+(.eml), age, symmetric OpenPGP, OpenSSH private keys, encrypted PEM/PKCS#8 keys,
+JKS, PKCS#12, PuTTY .ppk, SQLCipher, Apple iWork (Pages/Numbers/Keynote).
 
 | | Format(s) | Notes |
 |--|-----------|-------|
@@ -81,7 +82,8 @@ header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
 | ✅ | **SQLCipher** | Passphrase recovery via the page-1 HMAC (PBKDF2 → HMAC subkey → HMAC-SHA512/SHA1 over page 1), SQLCipher v4 and v3 profiles; cross-checked against the sqlcipher CLI. Library-only (`xcrypto/scheme/sqlcipher`) — SQLCipher files have no cleartext magic, so a caller must target them explicitly (not engine-autodetected). |
 | 🔬 | KeePass `.kdbx` | KDBX4's default KDF is **Argon2d**, which `golang.org/x/crypto` does not expose (only Argon2i/id); needs an in-tree Argon2d. The MAC-based verifier is otherwise ready. Staged. |
-| ⬜ | Apple iWork, ODF AES-GCM, Hangul HWP | Document suites. |
+| ✅ | **Apple iWork** (Pages/Numbers/Keynote) | Passphrase recovery for the modern '13+ format (.pages/.numbers/.key ZIP archives). The `.iwpv2` verifier is PBKDF2-HMAC-SHA1 → AES-128-CBC → `sha256(plain[:32])==plain[32:64]`; reverse-engineered from Pages/Numbers/Keynote 14.5 files and cross-validated against the known passphrase. Only the passphrase is recovered (document body not reconstructed). |
+| ⬜ | ODF AES-GCM, Hangul HWP | Remaining document suites. |
 | 🔬 | Full-volume: BitLocker, VeraCrypt, LUKS, FileVault | Large, separate effort + threat review. |
 | ⬜ | More codecs: zstd, lz4, brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth. |
 

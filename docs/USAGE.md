@@ -686,11 +686,11 @@ legitimate cryptanalysis — no sound cipher is weakened.
 | ------ | ------- | ----- |
 | Archives | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** | 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | MS Office | OOXML (`.docx/.xlsx/.pptx`, agile + standard), legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI / RC4 97-2000 / XOR) | legacy XOR body reconstruction: Excel only |
-| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC) | |
+| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC), **Apple iWork** (Pages/Numbers/Keynote, '13+ `.iwpv2`) | iWork recovers the passphrase only (body not reconstructed) |
 | Mail / passphrase | MIME (`.eml`) attachments, **age** (scrypt), **symmetric OpenPGP** (`gpg -c`) | |
+| Keys / key stores | **OpenSSH** private keys, **PEM/PKCS#8** (PBES2 + DEK-Info), **JKS**, **PKCS#12** (`.p12/.pfx`), **PuTTY** `.ppk` (v3/v2), **SQLCipher** (library-only) | |
 
-Not yet implemented (staged, pending test fixtures): KeePass, SQLCipher, Apple
-iWork, encrypted DMG, ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream
-decryption. Out of scope: GPU cracking in-tree, any online/network attack, and
-public-key PDF (needs a private key, not a password). See the
-[roadmap](roadmap.md).
+Not yet implemented (staged): KeePass (needs in-tree Argon2d), encrypted DMG,
+ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream decryption. Out of
+scope: GPU cracking in-tree, any online/network attack, and public-key PDF
+(needs a private key, not a password). See the [roadmap](roadmap.md).
