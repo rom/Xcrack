@@ -10,6 +10,11 @@
 /bin/*
 !/bin/.gitkeep
 
+# Stray binaries left by `go build ./cmd/...` run from inside the xcrack/ module
+# directory (these are files *inside* the module dir, not the dir itself).
+/xcrack/xcrack
+/xcrack/xcrackd
+
 # Build / coverage
 /dist/
 coverage.*
