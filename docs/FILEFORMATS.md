@@ -33,7 +33,7 @@ appears in challenges, JSON output, and the `identify` command.
 | Family | Formats | Caps |
 | ------ | ------- | ---- |
 | [Archives & mail](#archives--mail) | ZIP, tar, gzip, bzip2, xz, 7-Zip, RAR, MIME `.eml` | 📦 🔓 🧩 |
-| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`) | 🔓 📦 |
+| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), Access detection | 🔓 📦 |
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
 | [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass | 🔑 |
@@ -71,6 +71,20 @@ for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR obfuscation are
 implemented and unit-tested; XOR *content* reconstruction is wired for Excel but
 not Word (no reference oracle), and only the main document streams are decrypted
 (auxiliary encrypted streams are left as-is).
+
+**Wider Office family (Publisher / Visio / Project / Access).** An *encrypted*
+Office file of any application is the same CFB container — an `EncryptionInfo`
+stream plus an `EncryptedPackage` — so detection is content-first and
+extension-independent: encrypted **Publisher** (`.pub`), **Visio**
+(`.vsd`/`.vsdx`) and **Project** (`.mpp`) that use the standard agile/standard
+Office encryption are recovered through the same `ooxml` path as `.docx` (there
+is no way to tell them apart before decryption; the application only shows in
+the decrypted payload, which the engine then decomposes). **Access** is the
+exception — `.mdb` (Jet) and `.accdb` (ACE) are *not* CFB files; the `access`
+format detects and names them (jet3/jet4/ace) by their `Standard Jet DB` /
+`Standard ACE DB` signature. Known gaps: Access password *recovery* is staged
+(no validated oracle in this build), and pre-2007 Publisher/Visio/Project
+binaries that used bespoke RC4-in-stream encryption are not yet decoded.
 
 ### OOXML agile variants (hashcat `$office$` version)
 
@@ -126,9 +140,10 @@ private keys or database body are surfaced as-is, not reconstructed.
 | **KeePass** `.kdbx` (KDBX4) | `9AA2D903 B54BFB67`, major version 4 | `keepass-kdbx4-argon2d` (default), `-argon2id`, `-aeskdf` | **Argon2d** / Argon2id / legacy AES-KDF | the header **HMAC-SHA256** | `pykeepass`; the in-tree Argon2d is checked against the reference `argon2` CLI |
 
 **SQLCipher** databases have no cleartext magic, so the engine cannot
-auto-detect them; point Xcrack at a `.db` explicitly (library API or the CLI
-targeting the file). **KeePass** KDBX **3.x** uses a different (stream-start-bytes)
-verifier and is reported unsupported; KDBX4 is the handled version.
+auto-detect them; force the scheme from the CLI with `xcrack --as sqlcipher FILE`
+(or target the scheme via the library API). **KeePass** KDBX **3.x** uses a
+different (stream-start-bytes) verifier and is reported unsupported; KDBX4 is the
+handled version.
 
 **In-tree Argon2.** KeePass KDBX4 defaults to **Argon2d**, which
 `golang.org/x/crypto/argon2` does not expose (only Argon2i/Argon2id). Xcrack

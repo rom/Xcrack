@@ -9,12 +9,14 @@ package xcrack
 import (
 	"context"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
+	"github.com/rom/xfileformats/formats/access"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
 	fdmg "github.com/rom/xfileformats/formats/dmg"
@@ -29,6 +31,7 @@ import (
 	fpgp "github.com/rom/xfileformats/formats/pgp"
 	"github.com/rom/xfileformats/formats/privkey"
 	"github.com/rom/xfileformats/formats/puttykey"
+	"github.com/rom/xfileformats/formats/sqlcipher"
 	"github.com/rom/xfileformats/formats/sshkey"
 	"github.com/rom/xfileformats/formats/zip"
 )
@@ -191,7 +194,24 @@ func DefaultRegistry() *xfileformats.Registry {
 	fp12.Register(r)
 	puttykey.Register(r)
 	fdmg.Register(r)
+	access.Register(r)
 	return r
+}
+
+// ForceRegistry returns a registry containing only the named format, for the
+// CLI's `--as` force-format option. It exists for formats that carry no magic
+// bytes and so cannot be auto-detected (SQLCipher): such a format greedily
+// claims the input, so it is never in DefaultRegistry and is reachable only
+// when the caller targets it. ok is false for an unknown name.
+func ForceRegistry(name string) (*xfileformats.Registry, bool) {
+	r := xfileformats.NewRegistry()
+	switch strings.ToLower(name) {
+	case "sqlcipher":
+		sqlcipher.Register(r)
+		return r, true
+	default:
+		return nil, false
+	}
 }
 
 func (o *Options) normalize() {
