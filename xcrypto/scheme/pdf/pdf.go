@@ -256,7 +256,9 @@ func (h *Handler) hash2B(password, salt, udata []byte) []byte {
 	if h.R < 6 {
 		return K
 	}
-	for round := 0; ; round++ {
+	// round counts rounds completed (1-based), matching the spec's "round
+	// number" used by the termination test below.
+	for round := 1; ; round++ {
 		// K1 = (password || K || udata) repeated 64 times
 		block := make([]byte, 0, len(password)+len(K)+len(udata))
 		block = append(block, password...)
@@ -285,7 +287,14 @@ func (h *Handler) hash2B(password, salt, udata []byte) []byte {
 			d := sha512.Sum512(E)
 			K = d[:]
 		}
-		if round >= 63 && int(E[len(E)-1]) <= round-32 {
+		// ISO 32000-2 Algorithm 2.B: perform at least 64 rounds, then stop
+		// once the last byte of E (as an unsigned int) is <= round-32, with
+		// round being the number of rounds performed. A previous 0-based
+		// variant (round >= 63 && last <= round-32) tested the boundary one
+		// position too low, so whenever that byte landed exactly on the
+		// boundary it ran one extra round and derived a wrong key for ~2-3%
+		// of salts.
+		if round >= 64 && int(E[len(E)-1]) <= round-32 {
 			break
 		}
 	}
