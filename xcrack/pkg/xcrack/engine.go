@@ -17,6 +17,7 @@ import (
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
+	fdmg "github.com/rom/xfileformats/formats/dmg"
 	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/keepass"
@@ -189,6 +190,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	keepass.Register(r)
 	fp12.Register(r)
 	puttykey.Register(r)
+	fdmg.Register(r)
 	return r
 }
 

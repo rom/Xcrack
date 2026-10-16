@@ -67,9 +67,14 @@ they are not date-bound. Each phase leaves `main` releasable.
 - ✅ **Header-encrypted 7z/RAR** (`7z -mhe`, `rar -hp`): the whole archive is a
   single password-gated entry that unlocks to a tar the engine re-decomposes,
   cross-validated against the `7z` / `rar` CLIs.
-- KeePass databases; Apple iWork; SQLCipher; encrypted DMG; RAR5 specifics;
-  ODF AES-GCM. (Several need test oracles not present in the build environment;
-  implemented as fixtures become available.)
+- ✅ **KeePass** (KDBX4, in-tree Argon2d), ✅ **Apple iWork**, ✅ **SQLCipher**,
+  ✅ **ODF AES-GCM**.
+- ✅ **Apple encrypted DMG**: v1 (AES-128) and v2 (AES-128/256) password
+  verification, cross-validated against John the Ripper's authoritative `dmg`
+  vectors; consumed via the portable `dmg2john` `$dmg$` line (direct on-disk
+  `encrcdsa` header parsing staged pending a real-image sample).
+- RAR5 specifics remain; the few others need test oracles not present in the
+  build environment and are implemented as fixtures become available.
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate
   effort; gated on real demand and a dedicated threat review.
 

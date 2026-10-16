@@ -37,6 +37,7 @@ appears in challenges, JSON output, and the `identify` command.
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
 | [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass | 🔑 |
+| [Disk images](#disk-images) | Apple encrypted DMG (via `dmg2john` `$dmg$` line) | 🔓 |
 
 ---
 
@@ -136,6 +137,20 @@ match x/crypto bit-for-bit and Argon2d matches the reference `argon2` CLI's
 known-answer vectors (so PuTTY v3 and KeePass both have a vetted Argon2).
 
 ---
+
+## Disk images
+
+| Format | Signature | Scheme(s) | KDF | Cipher | Verifier | Oracle |
+| ------ | --------- | --------- | --- | ------ | -------- | ------ |
+| **Apple encrypted DMG** 🔓 | a `dmg2john` `$dmg$1*…` / `$dmg$2*…` line | `dmg-v1` (AES-128) and `dmg-v2` (AES-128 / **AES-256**) | PBKDF2-HMAC-SHA1 | v1: 3DES key-unwrap; v2: 3DES-unwrapped AES-CBC | v1: valid PKCS padding on both unwrapped blobs; v2: AES-CBC chunk decrypt yields 8 consecutive NUL bytes (per-chunk IV = HMAC-SHA1(key, chunkNo)) | **John the Ripper's authoritative `dmg` vectors** (both versions, AES-128 & AES-256, cross-validated byte-for-byte) |
+
+Xcrack consumes the portable `$dmg$` line `dmg2john image.dmg` produces, the
+same way John/hashcat users already work: `dmg2john image.dmg > h` then
+`xcrack h -w wordlist` (the whole candidate pipeline — spray, breach, masks,
+sharding — applies). The DMG *cryptography* is oracle-validated against John's
+vectors; parsing the raw on-disk `encrcdsa`/koly container directly is deferred
+until a real-image test sample is available to validate the header parser (the
+crypto would be unchanged). The recovered passphrase is the deliverable.
 
 ## GPU offload — hash-line export
 
