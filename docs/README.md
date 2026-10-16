@@ -1,9 +1,15 @@
 # Xcrack Documentation
 
-This directory contains the architecture and design documentation for Xcrack
-and its standalone formats library, **Xfileformats**.
+This directory contains the usage, architecture, and design documentation for
+Xcrack and its standalone formats library, **Xfileformats**.
 
-## Reading order
+## Using Xcrack
+
+- **[Usage](USAGE.md)** — how to build (`make`), run the CLI and the `xcrackd`
+  service, embed the library, and configure everything, with many examples.
+  Start here if you just want to run it.
+
+## Reading order (design & architecture)
 
 1. **[MVP](mvp.md)** — what the first release does and does not do.
 2. **[ASR](asr.md)** — the Architecturally Significant Requirements (quality

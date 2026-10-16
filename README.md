@@ -1,89 +1,68 @@
 # Xcrack
 
-Xcrack recovers access to password-protected and encrypted files so their
-contents can be inspected. Its primary role is as an **embeddable Go library**
-inside the **Impex** malicious-content scanner: when Impex encounters an
-encrypted or password-protected file, Xcrack decrypts it (and recursively
-unpacks any nested layers) so the scanner can analyse the real content.
+**Xcrack recovers access to password-protected and encrypted files so their
+contents can be inspected.** Its primary role is as an embeddable Go library
+inside the **Impex** malicious-content scanner: when Impex meets an encrypted or
+password-protected file, Xcrack decrypts it — and recursively unpacks any nested
+layers — so the scanner can analyse the real content. It is delivered in three
+forms over one engine:
 
-A standalone **CLI** is also provided for triage, testing, and manual recovery.
+- **Library** (`github.com/rom/xcrack/pkg/xcrack`) — what Impex embeds.
+- **CLI** (`xcrack`) — triage, testing, manual recovery.
+- **HTTP service** (`xcrackd`) — a backend a thin client (an Impex kiosk or
+  DataLock appliance) calls, optionally fronting a separate GPU/OpenCL tier.
 
-> **Authorized use only.** Xcrack is a defensive / recovery tool. It is built to
-> be run against files you own or are explicitly authorized to access —
-> malware analysis pipelines, DFIR, sanctioned engagements, and recovery of your
-> own forgotten passwords. It performs **offline** attacks against a file's own
-> key-derivation function; it does not attack remote systems and ships no
+👉 **New here? Read [`docs/USAGE.md`](docs/USAGE.md)** for commands, flags, and
+many worked examples.
+
+> **Authorized use only.** Xcrack is a defensive / recovery tool, built to run
+> against files you own or are explicitly authorized to access — malware-analysis
+> pipelines, DFIR, sanctioned engagements, forgotten-password recovery. It
+> performs **offline** guessing against a file's own key-derivation function; it
+> never attacks remote systems, never executes or renders content, and ships no
 > network/online attack modes.
 
-## Repository layout
+## What it handles
 
-This repository hosts **three independent Go modules**, layered so each lower
-one is reusable on its own:
+| Family | Formats |
+| ------ | ------- |
+| **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
+| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR) |
+| **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC) |
+| **Mail / passphrase** | MIME (`.eml`) attachments; **age** (scrypt); **symmetric OpenPGP** (`gpg -c`) |
 
-| Module | Import path | Purpose |
-| ------ | ----------- | ------- |
-| **Xcrypto** | `github.com/rom/xcrypto` | Standalone **crypto library + cracking engine**: cryptographic primitives, the concrete encryption schemes (ZipCrypto, WinZip AES, OOXML agile/standard), candidate generation, the hashcat-compatible pattern engine, and the concurrent password-search engine. Knows nothing about file formats or recursion — any tool can crack a challenge with it alone. Zero third-party dependencies. |
-| **Xfileformats** | `github.com/rom/xfileformats` | Standalone, reusable file-format library: detect a format, parse containers (ZIP, CFB/OLE2), and build an `xcrypto.Challenge`. **Policy-free** — delegates all cryptography to Xcrypto and knows nothing about candidate lists, concurrency, or recursion. |
-| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (recursive decomposition, result tree, password promotion, resource budgets) plus the `xcrack` CLI. Imports Xfileformats and Xcrypto. |
+Every scheme is cross-validated — against known-answer vectors, the real
+`zip` / `qpdf` / `7z` / `rar` / `age` / `gpg` CLIs, and byte-for-byte against
+gold-standard decrypted legacy-Office documents.
 
-```
-/
-├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
-│    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
-│    ├─ scheme/…            zipcrypto · winzipaes · ooxml · pdf · odf · officebinary · age · pgp
-│    ├─ candidates/         candidate sources
-│    ├─ pattern/            hashcat-compatible masks + rules
-│    └─ attack/             concurrent password-search engine
-├─ xfileformats/            module github.com/rom/xfileformats  (parse + detect)
-│    ├─ formats/zip         ZIP container (per-entry encryption)
-│    ├─ formats/ooxml       encrypted MS Office (CFB-wrapped)
-│    ├─ formats/pdf         encrypted PDF (rebuild a decrypted copy)
-│    ├─ formats/odf         encrypted LibreOffice/OpenOffice (ODF)
-│    ├─ formats/msoffice    legacy MS Office (.doc/.xls/.ppt, RC4/XOR)
-│    ├─ formats/age         age (age-encryption.org, scrypt passphrase)
-│    ├─ formats/pgp         symmetric OpenPGP (gpg -c)
-│    ├─ formats/archive     tar · gzip · bzip2 · xz · 7z · rar · MIME (.eml)
-│    └─ internal/cfb        OLE2 / compound-file reader
-├─ xcrack/                  module github.com/rom/xcrack
-│    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool
-│    ├─ pkg/api/            HTTP service wrapping the engine (Pool)
-│    ├─ cmd/xcrack/         CLI
-│    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
-└─ docs/                    architecture, design, ASR, MVP, threat model, ADRs
-```
+Recovery features: recursive decomposition of nested layers into a result tree
+(password **and** content reported per layer), password promotion across layers,
+a hashcat-compatible pattern engine (masks + rules) with optional statistical
+(Markov) ordering, two-axis globally-bounded concurrency, disk-spill for large
+intermediates, resource budgets + bomb defenses, and challenge export/import for
+offloading heavy cracking to an external engine.
 
-## Documentation
-
-Start with [`docs/README.md`](docs/README.md). Key documents:
-
-- [Architecture](docs/architecture.md) — system context, containers, components, data flow.
-- [Design](docs/design.md) — public APIs, the recursion algorithm, the pattern engine, concurrency, error model.
-- [Architecturally Significant Requirements](docs/asr.md) — quality attributes and constraints that shape the architecture.
-- [MVP](docs/mvp.md) — first-release scope and acceptance criteria.
-- [Threat Model](docs/threat-model.md) — hostile-input handling and trust boundaries.
-- [Roadmap](docs/roadmap.md) — phased delivery plan.
-- [ADRs](docs/adr/) — the record of the major architecture decisions.
-
-## Building & running
+## Quick start
 
 Requires Go 1.25+ (a `go.work` ties the three modules together).
 
 ```sh
-# build everything, run the full test suite (with the race detector)
-go build ./xcrypto/... ./xfileformats/... ./xcrack/...
-go test -race ./xcrypto/... ./xfileformats/... ./xcrack/...
+make build                    # -> bin/xcrack and bin/xcrackd
+make check                    # gofmt check + vet + race tests (what CI runs)
 
-# build the CLI
-go build -o xcrack ./xcrack/cmd/xcrack
+# Decrypt + recursively decompose, writing the tree + manifest.json to ./out:
+bin/xcrack -p infected -p Welcome1 -w rockyou.txt -o ./out invoice.zip
 
-# decrypt + recursively decompose an archive, writing the tree to ./out
-./xcrack -p infected -p Welcome1 -w rockyou.txt -o ./out invoice.zip
+# Detect format / encryption only:
+bin/xcrack identify suspicious.bin
 
-# detect format / encryption only
-./xcrack identify suspicious.bin
+# Run the backend service:
+bin/xcrackd -addr :8080 -max-procs 16
+curl -s --data-binary @invoice.zip 'http://localhost:8080/v1/decrypt?password=infected'
 ```
 
-Embedding (the Impex pattern) — see `xcrack/examples/impex-embed`:
+Embedding (the Impex pattern) — see `xcrack/examples/impex-embed` and
+[`docs/USAGE.md`](docs/USAGE.md#embedding-the-library):
 
 ```go
 pool := xcrack.NewPool(xcrack.Options{Workers: 4, MaxProcs: 8})
@@ -92,92 +71,77 @@ res, _ := pool.Process(ctx, reader, size,
 res.Root.Walk(func(n *xcrack.Node) { /* scan n.Content ... */ })
 ```
 
-### HTTP service (`xcrackd`)
+## Repository layout
 
-For thin clients (an Impex **kiosk** or **DataLock** appliance) that can't embed
-the engine, run it as a backend service on a more powerful, hardened host — one
-that may optionally front a separate GPU/OpenCL cracking tier. The cryptanalysis
-stays offline (it only attacks the submitted file's own KDF).
+Three independent Go modules, layered so each lower one is reusable on its own:
 
-```sh
-go build -o xcrackd ./xcrack/cmd/xcrackd
-./xcrackd -addr :8080 -max-procs 16
+| Module | Import path | Purpose |
+| ------ | ----------- | ------- |
+| **Xcrypto** | `github.com/rom/xcrypto` | Crypto library + cracking engine: primitives, the concrete encryption schemes, candidate generation, the pattern engine, and the concurrent password search. Core schemes are stdlib-only; extended schemes may use `golang.org/x/crypto`. Knows nothing about file formats or recursion. |
+| **Xfileformats** | `github.com/rom/xfileformats` | Policy-free file-format library: detect a format, parse containers (ZIP, CFB/OLE2), build an `xcrypto.Challenge`. Delegates all cryptography to Xcrypto. |
+| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (recursive decomposition, result tree, password promotion, budgets, pool), the `xcrack` CLI, and the `xcrackd` HTTP service. |
 
-# detect only
-curl -s --data-binary @suspicious.bin http://localhost:8080/v1/identify
-
-# decrypt + decompose with candidate passwords
-curl -s --data-binary @invoice.zip \
-  'http://localhost:8080/v1/decrypt?password=infected&password=Welcome1'
+```
+/
+├─ Makefile                 build (-> bin/), test, race, vet, fmt, fuzz, …
+├─ bin/                     compiled binaries land here (git-ignored)
+├─ xcrypto/                 module github.com/rom/xcrypto   (crypto + cracking)
+│    ├─ prim/               primitives: PBKDF2 · AES-CTR/CBC/ECB · RC4 · Office hash
+│    ├─ scheme/…            zipcrypto · winzipaes · ooxml · pdf · odf · officebinary · age · pgp
+│    ├─ candidates/         candidate sources + Markov ordering
+│    ├─ pattern/            hashcat-compatible masks + rules
+│    └─ attack/             concurrent password-search engine
+├─ xfileformats/            module github.com/rom/xfileformats  (parse + detect)
+│    ├─ formats/{zip,ooxml,pdf,odf,msoffice,age,pgp,archive}
+│    └─ internal/cfb        OLE2 / compound-file reader
+├─ xcrack/                  module github.com/rom/xcrack
+│    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool · metrics
+│    ├─ pkg/api/            HTTP service wrapping the engine (Pool)
+│    ├─ cmd/xcrack/         CLI
+│    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
+└─ docs/                    usage, architecture, design, ASR, MVP, threat model, ADRs
 ```
 
-Both POST routes take the raw file as the body and return the same JSON tree the
-library/CLI produce. The service ships **no** auth or TLS by design — put it
-behind a proxy/mesh that provides them, and never expose it directly to
-untrusted networks. Responses carry recovered passwords and content digests, so
-treat them as sensitive.
+## Documentation
+
+- **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples.
+- [Architecture](docs/architecture.md) — system context, containers, components, data flow.
+- [Design](docs/design.md) — public APIs, the recursion algorithm, the pattern engine, concurrency, error model.
+- [ASR](docs/asr.md) — quality attributes and constraints that shape the architecture.
+- [MVP](docs/mvp.md) · [Roadmap](docs/roadmap.md) · [Threat model](docs/threat-model.md) · [ADRs](docs/adr/).
+
+Start with the docs index in [`docs/README.md`](docs/README.md).
 
 ## Status
 
-Early but working end to end across all three modules.
+Working end to end across all three modules; **MVP and Phase 2 complete**, with
+the service tier and several Phase 3/4 engine features landed:
 
-**Implemented**
-- `xcrypto` (crypto + cracking engine): primitives (PBKDF2, AES-CTR/CBC/ECB,
-  RC4, Office agile/standard key derivation); schemes **ZipCrypto**, **WinZip
-  AES** (AE-1/AE-2, 128/192/256), **OOXML agile + standard**, **PDF** (RC4 /
-  AESV2 / AESV3, R2-R6, user + owner), and **legacy Office binary** (RC4
-  CryptoAPI, Office 97/2000 RC4, XOR obfuscation); candidate sources; a
-  **hashcat-compatible pattern engine** (masks `?l?u?d?s?a?b` + ?1-?4, and a
-  practical rule subset); and the concurrent, globally-bounded **attack** search
-  engine. Zero third-party deps.
-- `xfileformats`: detection + registry; **ZIP** container (per-entry
-  ZipCrypto/AES); **encrypted OOXML MS Office** via a bounded **CFB/OLE2**
-  reader; **encrypted PDF** (parse `/Encrypt`+`/ID`, rebuild a decrypted PDF);
-  **encrypted ODF** (LibreOffice/OpenOffice AES-256-CBC); **legacy MS Office**
-  (`.doc/.xls/.ppt` — decrypts each OLE stream); **age** (scrypt passphrase) and
-  **symmetric OpenPGP** (`gpg -c`); and **archive unpackers** (tar, gzip, bzip2,
-  xz, **7z**, **rar**, MIME `.eml`). Builds `xcrypto.Challenge` and delegates all
-  crypto to Xcrypto. Verified against known-answer round-trips, the real
-  `zip` / `qpdf` / `7z` / `rar` / `age` / `gpg` CLIs, and byte-for-byte against
-  gold-standard decrypted legacy-Office documents.
-- `xcrack` engine: recursive decomposition into a result tree, per-node password
-  **and** content, password promotion, resource budgets (depth / total-bytes /
-  nodes / entry-size) + ancestor cycle detection, **two-axis concurrency**
-  (candidate workers x parallel sibling entries, globally bounded), **disk-spill**
-  for large intermediates, `recover()` guards on every format call, `context`/budget
-  cancellation, and a reusable global pool.
-- **Hardening**: fuzz targets on every hostile-input parser (+ the whole
-  pipeline) and a decompression-bomb / fan-out / byte-budget / cycle corpus,
-  run by `scripts/fuzz.sh` and a GitHub Actions CI workflow. Fuzzing already
-  found and fixed a PDF slice-bounds crash and capped the OOXML spin count.
-- CLI (`xcrack`, `identify`, `version`): text/JSON/JSONL output, tree extraction
-  + `manifest.json`, YAML config, `--pattern` files, concurrent multi-file scan.
+- **Formats** — the whole table above, each cross-validated (see
+  [Roadmap](docs/roadmap.md) for the exact matrix).
+- **Service tier** — `xcrackd` HTTP API (`/v1/identify`, `/v1/decrypt`,
+  `/v1/metrics`, `/v1/healthz`); `Pool.Metrics()` telemetry; a pluggable live
+  candidate provider.
+- **Search** — statistical (Markov) candidate ordering; challenge export/import
+  so heavy cracking can be offloaded to an external GPU/OpenCL engine (Xcrack
+  itself stays pure Go and CPU-only).
+- **Hardening** — fuzz targets on every hostile-input parser plus the whole
+  pipeline, a decompression-bomb / fan-out / cycle corpus, `recover()` guards on
+  every format call, and a GitHub Actions CI workflow (build · vet · gofmt ·
+  `-race` · govulncheck · bounded fuzz).
 
-**MVP complete.** PDF is cross-validated in CI against the real `qpdf` encoder
-(RC4-40/128, AES-128, AES-256); all concurrency flags are wired
-(`--workers` / `--file-jobs` / `--max-procs` / `--batch-size` / `--throttle` /
-`--timeout` / `--max-duration`).
+**Staged** (implemented as test fixtures become available): KeePass, SQLCipher,
+Apple iWork, encrypted DMG, ODF AES-GCM, and legacy-Office macro/VBA
+auxiliary-stream decryption.
 
-**Phase 2 complete.** Archive unpackers (tar/gzip/bzip2/xz/**7z**/**rar**, MIME
-`.eml`), **ODF** (LibreOffice/OpenOffice, AES-256-CBC), and **legacy MS Office**
-(`.doc/.xls/.ppt` — RC4 CryptoAPI, Office 97/2000 RC4, and XOR obfuscation) are
-all implemented and tested. The legacy-Office RC4 CryptoAPI decryption is
-cross-validated byte-for-byte against gold-standard decrypted documents (`.doc`,
-`.xls`, `.ppt`); the 7z/rar/pdf/zip/bzip2/xz paths are cross-validated against
-the real CLIs.
-
-> **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is the common case and
-> is fully decrypted and cross-validated for Word, Excel, and PowerPoint. The
-> Office 97/2000 RC4 key derivation and the XOR obfuscation scheme are
-> implemented and unit-tested (known-answer vectors + a round-trip); XOR
-> content reconstruction is wired for Excel but not for Word (Word stores the
-> obfuscated body differently and there is no reference oracle for it), so a
-> Word XOR document is detected and its password recovered but its body is not
-> rebuilt. Only the main document streams are decrypted (WordDocument + table +
-> Data, Workbook, PowerPoint Document); auxiliary streams that some variants
-> also encrypt are left as-is.
+> **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is fully decrypted and
+> cross-validated for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR
+> obfuscation are implemented and unit-tested; XOR *content* reconstruction is
+> wired for Excel but not Word (no reference oracle), and only the main document
+> streams are decrypted (auxiliary encrypted streams are left as-is).
 
 ## License
 
-MIT (planned). See [`docs/adr/0001-pure-go-no-external-binaries.md`](docs/adr/0001-pure-go-no-external-binaries.md)
-and the roadmap for dependency and licensing posture.
+MIT (planned). See
+[`docs/adr/0001-pure-go-no-external-binaries.md`](docs/adr/0001-pure-go-no-external-binaries.md)
+and the [roadmap](docs/roadmap.md) for dependency and licensing posture.
