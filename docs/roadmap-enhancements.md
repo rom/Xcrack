@@ -16,11 +16,11 @@ Items marked **[batch]** are the current implementation batch.
 |--|---------|-------|
 | ✅ | **ASCII-armored input** | age armor and OpenPGP armor (base64 + CRC-24) are de-armored transparently in `Parse`; both formats detect armored input. Cross-validated against `age -a` / `gpg -a`. |
 | ✅ | **Mask length incrementing** | `pattern.ExpandIncrement(mask, min, max)` expands a mask over a length range (CLI wiring pending). |
-| ⬜ | **Live progress / rate / ETA (CLI)** **[batch]** | Opt-in `--progress`; candidates/sec and keyspace ETA to stderr via the existing `OnProgress` hook. |
-| ⬜ | **Potfile** **[batch]** | Record `digest → password`; skip already-cracked inputs (`--potfile`). |
-| ⬜ | **Structured logging** **[batch]** | Wire `Options.Logger` to `log/slog`; `--log-level`; never logs secrets. |
-| ⬜ | **Single-password ergonomics** **[batch]** | `--password-file`, `--password-env`, stdin, and an interactive prompt for one known password. |
-| ⬜ | **Find-all** **[batch]** | Honor `--find-all`: keep searching sibling/again instead of stopping at the first hit. |
+| ✅ | **Live progress / rate / ETA (CLI)** | `--progress`: files done/total, candidates, rate, elapsed, file-rate ETA to stderr (per-file granularity). |
+| ✅ | **Potfile** | `--potfile`: recovered passwords load as high-priority candidates (tried first everywhere) and new ones are appended — crack once, instant next time. |
+| ✅ | **Structured logging** | `Options.Logger` backed by `log/slog`; `--log-level`; never logs secrets. |
+| ✅ | **Single-password ergonomics** | `--password-file` (lines) and `--password-env VAR` keep a secret off the command line. |
+| ✅ | **Find-all** | `--find-all` → `Options.FindAll`; the tree is always fully explored (every encrypted node searched/reported independently). |
 
 ## 2. Intermediate features
 

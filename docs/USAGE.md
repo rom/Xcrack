@@ -103,6 +103,9 @@ archive that reuses a password is unlocked almost for free.
 | `-p`, `--password STR` | an explicit candidate — repeatable |
 | `-w`, `--wordlist FILE` | a wordlist; `-` reads stdin; `.gz` auto-detected — repeatable |
 | `--pattern FILE` | a mask/rule pattern file — repeatable (see [Pattern engine](#pattern-engine-masks--rules)) |
+| `--password-file FILE` | candidate passwords, one per line, tried first — repeatable (keeps secrets off the command line) |
+| `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
+| `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--no-default-list` | disable the built-in common-password list |
 
 ```sh
@@ -126,7 +129,8 @@ xcrack quote.pdf
 | `--format text\|json\|jsonl` | result rendering (default `text`) |
 | `-o`, `--out DIR` | write the decrypted tree under `DIR/<name>.extracted/` + a `manifest.json` |
 | `--results-file FILE` | append a JSON manifest per input to `FILE` |
-| `--log-level LEVEL` | `debug\|info\|warn\|error` (reserved; structured logging is phase 2) |
+| `--progress` | print live progress to stderr: files done/total, candidates, rate, elapsed, ETA |
+| `--log-level LEVEL` | `debug\|info\|warn\|error` structured logging to stderr (never logs secrets) |
 
 ```sh
 # Human-readable tree:
