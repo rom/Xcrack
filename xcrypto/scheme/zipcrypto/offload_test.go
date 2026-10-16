@@ -3,6 +3,7 @@ package zipcrypto
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -23,7 +24,7 @@ func writeStub(t *testing.T, name, body string) string {
 }
 
 // kpVector returns an aligned known plaintext/ciphertext pair and the true keys
-// as of before plain[0] (i.e. the initial NewKeys state, since Encrypt consumes
+// as of before plain[0] (the initial NewKeys state, since Encrypt consumes
 // plain[0] first).
 func kpVector(pw, text string) (plain, cipher []byte, want Keys) {
 	plain = []byte(text)
@@ -33,11 +34,21 @@ func kpVector(pw, text string) (plain, cipher []byte, want Keys) {
 	return plain, cipher, NewKeys([]byte(pw))
 }
 
+// bkHex returns the "X Y Z" hex a real bkcrack run (via ExternalBkcrack's dummy
+// 12-byte header) would print for keys `want`: the state BEFORE that header,
+// which ExternalBkcrack then rolls forward to recover `want`.
+func bkHex(want Keys) string {
+	bk, _ := want.RollBack(make([]byte, HeaderLen))
+	k0, k1, k2 := bk.Words()
+	return fmt.Sprintf("%08x %08x %08x", k0, k1, k2)
+}
+
 // TestExternalBkcrackOffload drives RecoverKeysWith through a stub that mimics
-// bkcrack's output format, then confirms the recovered keys decrypt the data.
+// bkcrack's output and header convention, then confirms the recovered keys
+// decrypt the data.
 func TestExternalBkcrackOffload(t *testing.T) {
 	plain, cipher, want := kpVector("hunter2", "the quick brown fox jumps over the lazy dog 0123456789")
-	body := fmt.Sprintf("#!/bin/sh\necho '[12:00:00] Keys'\necho '%08x %08x %08x'\n", want.k0, want.k1, want.k2)
+	body := fmt.Sprintf("#!/bin/sh\necho '[12:00:00] Keys'\necho '%s'\n", bkHex(want))
 	bin := writeStub(t, "bkcrack-stub.sh", body)
 
 	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
@@ -60,7 +71,7 @@ func TestExternalBkcrackOffload(t *testing.T) {
 // TestExternalBkcrackOneLine accepts the single-line "Keys: X Y Z" shape too.
 func TestExternalBkcrackOneLine(t *testing.T) {
 	plain, cipher, want := kpVector("S3cr3t!", "the quick brown fox jumps over the lazy dog 0123456789")
-	body := fmt.Sprintf("#!/bin/sh\necho 'Keys: %08x %08x %08x'\n", want.k0, want.k1, want.k2)
+	body := fmt.Sprintf("#!/bin/sh\necho 'Keys: %s'\n", bkHex(want))
 	bin := writeStub(t, "bkcrack-oneline.sh", body)
 
 	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
@@ -73,12 +84,13 @@ func TestExternalBkcrackOneLine(t *testing.T) {
 }
 
 // TestExternalBkcrackWrongKeysRejected proves the local re-validation blocks a
-// false positive: a stub that prints WRONG keys must yield not-found, not a wrong
-// "success".
+// false positive: a stub that prints keys which do not reproduce the keystream
+// must yield not-found, not a wrong "success".
 func TestExternalBkcrackWrongKeysRejected(t *testing.T) {
 	plain, cipher, want := kpVector("hunter2", "the quick brown fox jumps over the lazy dog 0123456789")
-	// Corrupt each word so the triple is syntactically valid but wrong.
-	body := fmt.Sprintf("#!/bin/sh\necho 'Keys'\necho '%08x %08x %08x'\n", want.k0^0xff, want.k1, want.k2)
+	bad := KeysFromWords(0xdeadbeef, 0xfeedface, 0x12345678)
+	_ = want
+	body := fmt.Sprintf("#!/bin/sh\necho 'Keys'\necho '%s'\n", bkHex(bad))
 	bin := writeStub(t, "bkcrack-wrong.sh", body)
 
 	keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
@@ -142,5 +154,47 @@ func TestParseBkcrackKeys(t *testing.T) {
 	}
 	if _, ok := parseBkcrackKeys([]byte("no keys here\n")); ok {
 		t.Fatal("parsed keys from output with none")
+	}
+}
+
+// TestExternalBkcrackReal cross-validates the offload against a REAL bkcrack
+// binary, when one is supplied via XCRACK_BKCRACK. It is the oracle check for
+// ExternalBkcrack's header/offset bridging AND for this package's own ZipCrypto
+// primitives: bkcrack's recovered state, rolled forward through the dummy header,
+// must equal NewKeys(pw) and must decrypt the data. A stub cannot prove the
+// dummy-header convention is right — only the genuine tool can. Skipped when the
+// env var is unset so CI without bkcrack still passes.
+//
+// This does NOT run the in-process search (that can take tens of minutes on a
+// full keyspace); the in-process attack's correctness is covered by
+// TestAutoPipelineRecovers and the full-run benchmark, both of which land on the
+// same NewKeys(pw) that bkcrack reports here.
+func TestExternalBkcrackReal(t *testing.T) {
+	bin := os.Getenv("XCRACK_BKCRACK")
+	if bin == "" {
+		t.Skip("set XCRACK_BKCRACK to a bkcrack binary to run the oracle cross-check")
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		if _, statErr := os.Stat(bin); statErr != nil {
+			t.Skipf("XCRACK_BKCRACK=%q not executable: %v", bin, err)
+		}
+	}
+	for _, pw := range []string{"hunter2", "S3cr3t!", "correct horse battery staple"} {
+		plain, cipher, want := kpVector(pw, "the quick brown fox jumps over the lazy dog 0123456789 and then some")
+		keys, ok, err := RecoverKeysWith(plain, cipher, ExternalBkcrack{Bin: bin})
+		if err != nil {
+			t.Fatalf("pw=%q: real bkcrack: %v", pw, err)
+		}
+		if !ok {
+			t.Fatalf("pw=%q: real bkcrack found no keys", pw)
+		}
+		if keys != want {
+			t.Fatalf("pw=%q: bkcrack keys %+v != NewKeys %+v", pw, keys, want)
+		}
+		dec := append([]byte(nil), cipher...)
+		keys.Decrypt(dec)
+		if string(dec) != string(plain) {
+			t.Fatalf("pw=%q: bkcrack keys do not decrypt the data", pw)
+		}
 	}
 }

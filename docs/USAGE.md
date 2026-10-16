@@ -656,7 +656,17 @@ maxCandidates)` to bound the effort and resume with a larger budget, hand the
 problem to a local *bkcrack* binary with `RecoverKeysWith(plain, cipher,
 zipcrypto.ExternalBkcrack{Bin: "bkcrack"})` (CLI `--bkcrack /path/to/bkcrack`),
 or offload the heavy search to an external/GPU engine via the challenge-export
-bridge above. Recovering a running key state from a broken cipher is legitimate
+bridge above. The offload and this package's ZipCrypto primitives are
+cross-validated against the real *bkcrack* binary (`TestExternalBkcrackReal`,
+run with `XCRACK_BKCRACK=/path/to/bkcrack`); the offload's answer is always
+re-validated locally, so an external engine can never cause a false positive.
+
+`xcrack kp` exposes all of this: `--plain`/`--cipher` are the aligned known
+plaintext and ciphertext, `--bkcrack` offloads the search, and `--decrypt ENTRY
+--offset N` recovers the keys then decrypts a whole ZipCrypto entry — rolling the
+state back over the 12-byte header and any earlier data so a *mid-entry* known
+plaintext still unlocks the entire entry (`--keep-header` keeps the header
+bytes). Recovering a running key state from a broken cipher is legitimate
 cryptanalysis — no sound cipher is weakened.
 
 ---

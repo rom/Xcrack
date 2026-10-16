@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"os"
@@ -20,7 +21,9 @@ func runKP(args []string) int {
 	cipherF := fs_.String("cipher", "", "ciphertext for those same bytes (equal length, same stream position)")
 	bkcrackF := fs_.String("bkcrack", "", "offload the search to this bkcrack binary instead of the in-process attack")
 	bkTimeout := fs_.Duration("bkcrack-timeout", 0, "wall-clock limit for the bkcrack run (0=none)")
-	decryptF := fs_.String("decrypt", "", "after recovery, decrypt this ciphertext file (starting at the --plain stream position)")
+	decryptF := fs_.String("decrypt", "", "after recovery, decrypt this full ZipCrypto entry (12-byte header + data)")
+	offsetF := fs_.Int("offset", 0, "data offset (post-header) of --plain within the --decrypt entry (bkcrack -o)")
+	keepHeaderF := fs_.Bool("keep-header", false, "keep the 12-byte encryption header in --decrypt output (default: drop it)")
 	outF := fs_.String("out", "", "where --decrypt writes its plaintext (default: stdout)")
 	fs_.Usage = func() {
 		fmt.Fprint(os.Stderr, `xcrack kp -- ZipCrypto known-plaintext key recovery (Biham-Kocher)
@@ -31,7 +34,8 @@ design; recovering its running key state is legitimate cryptanalysis of a weak
 cipher. Prints the recovered state as "key0 key1 key2" (hex), matching bkcrack.
 
 USAGE:
-  xcrack kp --plain P --cipher C [--bkcrack BIN] [--decrypt F --out G]
+  xcrack kp --plain P --cipher C [--bkcrack BIN]
+           [--decrypt ENTRY --offset N [--keep-header] --out G]
 
 FLAGS:
   --plain FILE         known plaintext bytes
@@ -40,8 +44,13 @@ FLAGS:
                        faster); the result is re-validated locally, so a faulty
                        or hostile engine can never cause a false positive
   --bkcrack-timeout D  wall-clock limit for the bkcrack run (e.g. 5m)
-  --decrypt FILE       decrypt FILE (ciphertext starting at the same stream
-                       position as --plain) with the recovered keys
+  --decrypt ENTRY      decrypt a whole ZipCrypto entry (12-byte header + data):
+                       the recovered state is rolled back over the header and any
+                       earlier data to the entry start, so a mid-entry known
+                       plaintext still decrypts the entire entry
+  --offset N           data offset (post-header) of --plain within ENTRY (as in
+                       bkcrack's -o; default 0 = known plaintext at data start)
+  --keep-header        keep the 12-byte header in --decrypt output (default: drop)
   --out FILE           where --decrypt writes (default: stdout)
 
 Needs at least 12 contiguous known-plaintext bytes; more recovers faster.
@@ -98,16 +107,35 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 	fmt.Printf("%08x %08x %08x\n", k0, k1, k2)
 
 	if *decryptF != "" {
-		ct, err := os.ReadFile(*decryptF)
+		entry, err := os.ReadFile(*decryptF)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "xcrack kp: %v\n", err)
 			return 2
 		}
-		dec := keys // copy: Decrypt mutates the receiver
-		dec.Decrypt(ct)
+		// plain[0] sits at absolute offset HeaderLen+offset within the entry (the
+		// 12-byte ZipCrypto header precedes the data, like bkcrack's -o convention).
+		abs := zipcrypto.HeaderLen + *offsetF
+		if *offsetF < 0 || abs+len(cipher) > len(entry) {
+			fmt.Fprintf(os.Stderr, "xcrack kp: --offset %d places the known plaintext outside the %d-byte entry\n", *offsetF, len(entry))
+			return 2
+		}
+		if !bytes.Equal(entry[abs:abs+len(cipher)], cipher) {
+			fmt.Fprintln(os.Stderr, "xcrack kp: --cipher does not match the entry at --offset (wrong --offset or mismatched files)")
+			return 2
+		}
+		// Roll the recovered state (before plain[0]) back over the preceding
+		// ciphertext (header + any earlier data) to the entry start, then decrypt
+		// the whole entry forward.
+		start, _ := keys.RollBack(entry[:abs])
+		full := append([]byte(nil), entry...)
+		start.Decrypt(full)
+		out := full
+		if !*keepHeaderF {
+			out = full[zipcrypto.HeaderLen:] // abs >= HeaderLen, so this is safe
+		}
 		if *outF == "" {
-			_, _ = os.Stdout.Write(ct)
-		} else if err := os.WriteFile(*outF, ct, 0o600); err != nil {
+			_, _ = os.Stdout.Write(out)
+		} else if err := os.WriteFile(*outF, out, 0o600); err != nil {
 			fmt.Fprintf(os.Stderr, "xcrack kp: %v\n", err)
 			return 2
 		}

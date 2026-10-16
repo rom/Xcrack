@@ -68,11 +68,20 @@ func keysReproduce(keys Keys, plain, cipher []byte) bool {
 	return true
 }
 
-// ExternalBkcrack is an Offloader that shells out to a bkcrack binary. It writes
-// the known plaintext and its matching ciphertext to temporary files, runs
-// bkcrack against them (plaintext aligned at offset 0 of the ciphertext), and
-// parses the recovered X Y Z (= key0 key1 key2) from bkcrack's output. bkcrack is
-// a separate GPL tool and is NOT bundled or invoked unless a caller sets Bin.
+// ExternalBkcrack is an Offloader that shells out to a bkcrack binary
+// (https://github.com/kimci86/bkcrack). bkcrack is a separate tool and is NOT
+// bundled or invoked unless a caller sets Bin.
+//
+// Convention bridging. bkcrack models its ciphertext as a 12-byte ZipCrypto
+// encryption header followed by the data, and reports the internal keys as the
+// state BEFORE that header, with the known plaintext matched at an offset into
+// the data. Our plain/cipher are a raw aligned keystream slice with no header,
+// and RecoverKeys reports the state before cipher[0]. To bridge the two,
+// ExternalBkcrack prepends a dummy 12-byte header to the ciphertext it hands
+// bkcrack (its bytes are arbitrary; --ignore-check-byte stops bkcrack from
+// treating the last one as a known-plaintext check byte), then rolls bkcrack's
+// reported keys forward through that dummy header to land on the state before
+// cipher[0]. The result is finally re-validated by RecoverKeysWith.
 type ExternalBkcrack struct {
 	Bin     string        // path or PATH name of the bkcrack binary (required)
 	Args    []string      // extra arguments inserted before the -p/-c pair (optional)
@@ -97,12 +106,15 @@ func (b ExternalBkcrack) Recover(plain, cipher []byte) (Keys, bool, error) {
 		return Keys{}, false, err
 	}
 	defer os.RemoveAll(dir)
+	// Prepend a dummy 12-byte header to the ciphertext (see the type doc).
+	cipherFile := make([]byte, HeaderLen+len(cipher))
+	copy(cipherFile[HeaderLen:], cipher)
 	pfile := filepath.Join(dir, "plain.bin")
 	cfile := filepath.Join(dir, "cipher.bin")
 	if err := os.WriteFile(pfile, plain, 0o600); err != nil {
 		return Keys{}, false, err
 	}
-	if err := os.WriteFile(cfile, cipher, 0o600); err != nil {
+	if err := os.WriteFile(cfile, cipherFile, 0o600); err != nil {
 		return Keys{}, false, err
 	}
 
@@ -113,7 +125,8 @@ func (b ExternalBkcrack) Recover(plain, cipher []byte) (Keys, bool, error) {
 		defer cancel()
 	}
 	args := append([]string{}, b.Args...)
-	args = append(args, "-p", pfile, "-c", cfile)
+	// --ignore-check-byte: the dummy header's last byte is not a real check byte.
+	args = append(args, "--ignore-check-byte", "-p", pfile, "-c", cfile)
 	cmd := exec.CommandContext(ctx, b.Bin, args...)
 	var out bytes.Buffer
 	cmd.Stdout = &out
@@ -121,6 +134,9 @@ func (b ExternalBkcrack) Recover(plain, cipher []byte) (Keys, bool, error) {
 	runErr := cmd.Run()
 
 	if keys, ok := parseBkcrackKeys(out.Bytes()); ok {
+		// bkcrack reports the state before the dummy header; roll it forward
+		// through the header to reach the state before cipher[0].
+		keys.Decrypt(make([]byte, HeaderLen))
 		return keys, true, nil
 	}
 	// Parsed no keys. A timeout or a failure to start the process is a real error;
