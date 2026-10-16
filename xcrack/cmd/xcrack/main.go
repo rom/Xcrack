@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -100,6 +101,7 @@ func runCrack(args []string) int {
 	toggleF := fs_.Bool("toggle-case", false, "also try case-toggle variants of each wordlist word (hashcat toggle attack)")
 	princeF := fs_.Bool("prince", false, "also try PRINCE chains (length-ordered concatenations of wordlist words)")
 	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
+	adaptiveF := fs_.Bool("adaptive", false, "corpus-wide adaptive promotion: try passwords recovered from any file first on the rest (most-successful first), smallest files first")
 	sprayF := fs_.Bool("spray", false, "also try a curated password-spraying set (common + season/year patterns), tried early")
 	var sprayTokens stringSlice
 	fs_.Var(&sprayTokens, "spray-token", "org/product/user token mangled into the spray set (repeatable; implies --spray)")
@@ -154,6 +156,7 @@ func runCrack(args []string) int {
 		opts.NoPromote = !*cfg.Search.Promote
 	}
 	opts.FindAll = *findAll
+	opts.CorpusPromotion = *adaptiveF || (cfg != nil && cfg.Search.Adaptive)
 	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
 	opts.HintCandidates = *hintF || *hintRulesF != "" || (cfg != nil && (cfg.Search.Hint || len(cfg.Search.HintRules) > 0))
 	if opts.HintCandidates {
@@ -412,8 +415,27 @@ func runCrack(args []string) int {
 		prog = newProgress(len(files))
 	}
 	sem := make(chan struct{}, jobs)
+	// Dispatch order: argument order by default. With --adaptive, dispatch the
+	// smallest files first so the cheap, likely wins surface early and seed the
+	// corpus-wide promotion set before the big files run. Results stay indexed by
+	// the original position, so output order is unchanged.
+	dispatch := make([]int, len(files))
+	for i := range files {
+		dispatch[i] = i
+	}
+	if opts.CorpusPromotion {
+		sizes := make([]int64, len(files))
+		for i, path := range files {
+			if fi, err := os.Stat(path); err == nil {
+				sizes[i] = fi.Size()
+			}
+		}
+		sort.SliceStable(dispatch, func(a, b int) bool { return sizes[dispatch[a]] < sizes[dispatch[b]] })
+	}
+
 	var wg sync.WaitGroup
-	for i, path := range files {
+	for _, i := range dispatch {
+		path := files[i]
 		wg.Add(1)
 		sem <- struct{}{}
 		go func(i int, path string) {
@@ -709,6 +731,7 @@ COMMON FLAGS:
       --toggle-case              also try case-toggle variants of each wordlist word
       --prince                   also try PRINCE chains (concatenated wordlist words)
       --keyboard-walk            also try QWERTY keyboard-adjacency walks
+      --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --spray                    curated spray set (common + season/year), tried early
       --spray-token STR          org/product/user token mangled into the spray set (repeatable)
       --spray-year N             year used in spray patterns (repeatable; default current/previous)

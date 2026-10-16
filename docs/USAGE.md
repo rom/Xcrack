@@ -115,6 +115,7 @@ unlocked almost for free.
 | `--hybrid-prepend MASK` | prepend every expansion of `MASK` to each wordlist word (hashcat mask+dict, `-a 7`) — repeatable |
 | `--breach FILE` | a frequency-annotated breach corpus (`<count> <pw>` or `<pw>:<count>`; gzip auto-detected), tried ahead of plain wordlists — repeatable |
 | `--breach-min-count N` | drop breach entries seen fewer than `N` times (spray only the common ones) |
+| `--adaptive` | corpus-wide promotion across a multi-file run: a password recovered from any file is tried first on all the others (ordered by how often it has worked), and the smallest files are processed first so cheap wins seed the rest |
 | `--spray` | add a compact curated spray set (globally common passwords + season/year walks), tried early |
 | `--spray-token STR` | an org/product/user token mangled into the spray set (year, `!`/`@`/`#` suffixes, case variants) — repeatable, implies `--spray` |
 | `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
@@ -340,6 +341,7 @@ search:
     - "$2 $0 $2 $4"
   spray: true               # curated spray set (common + season/year patterns)
   spray_tokens: [Acme]      # org/product/user tokens mangled into the spray set
+  adaptive: true            # corpus-wide promotion across files (smallest first)
 
 candidates:
   passwords: [infected, Welcome1]

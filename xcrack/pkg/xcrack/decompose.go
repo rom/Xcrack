@@ -367,23 +367,50 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 
 // promoter holds passwords recovered in outer layers for "promotion" to inner
 // layers. It is safe for concurrent use so siblings can be processed in
-// parallel.
+// parallel. When shared is non-nil (Options.CorpusPromotion), it also reads
+// from and writes through to a Pool-level learnedSet, so finds cross file
+// boundaries within a run and the most repeatedly-successful passwords are
+// tried first.
 type promoter struct {
-	mu sync.Mutex
-	pw []string
-	on bool
+	mu     sync.Mutex
+	pw     []string
+	seen   map[string]struct{}
+	on     bool
+	shared *learnedSet
 }
 
-func newPromoter(on bool) *promoter { return &promoter{on: on} }
+func newPromoter(on bool, shared *learnedSet) *promoter {
+	return &promoter{on: on, seen: make(map[string]struct{}), shared: shared}
+}
 
 func (p *promoter) snapshot() []string {
 	if !p.on {
 		return nil
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	out := make([]string, len(p.pw))
-	copy(out, p.pw)
+	local := make([]string, len(p.pw))
+	copy(local, p.pw)
+	p.mu.Unlock()
+	if p.shared == nil {
+		return local
+	}
+	// Corpus-wide proven passwords first (ordered by observed success), then this
+	// run's own finds not already present.
+	ordered := p.shared.snapshotOrdered()
+	seen := make(map[string]struct{}, len(ordered)+len(local))
+	out := make([]string, 0, len(ordered)+len(local))
+	for _, s := range ordered {
+		if _, dup := seen[s]; !dup {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
+	for _, s := range local {
+		if _, dup := seen[s]; !dup {
+			seen[s] = struct{}{}
+			out = append(out, s)
+		}
+	}
 	return out
 }
 
@@ -392,13 +419,14 @@ func (p *promoter) add(s string) {
 		return
 	}
 	p.mu.Lock()
-	defer p.mu.Unlock()
-	for _, x := range p.pw {
-		if x == s {
-			return
-		}
+	if _, dup := p.seen[s]; !dup {
+		p.seen[s] = struct{}{}
+		p.pw = append(p.pw, s)
 	}
-	p.pw = append(p.pw, s)
+	p.mu.Unlock()
+	if p.shared != nil {
+		p.shared.add(s)
+	}
 }
 
 // processEntries processes a container's entries into out[i], either

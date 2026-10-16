@@ -87,6 +87,7 @@ type Options struct {
 	// unless told otherwise.
 	NoRecurse         bool // disable container decomposition (default: recurse)
 	NoPromote         bool // disable password promotion (default: promote)
+	CorpusPromotion   bool // promote recovered passwords across every file in a run (not just inner layers) and try the most repeatedly-successful ones first; requires promotion on (default: off)
 	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
@@ -229,6 +230,7 @@ type Pool struct {
 	opts    Options
 	cracker *attack.Engine
 	metrics metrics
+	learned *learnedSet // corpus-wide recovered passwords (used when CorpusPromotion)
 }
 
 // NewPool returns a Pool configured by opts (defaults applied). The cracking
@@ -243,7 +245,7 @@ func NewPool(opts Options) *Pool {
 		BatchSize:       opts.BatchSize,
 		ThrottlePercent: opts.ThrottlePercent,
 	})
-	return &Pool{opts: opts, cracker: cr}
+	return &Pool{opts: opts, cracker: cr, learned: newLearnedSet(0)}
 }
 
 // Close releases the Pool. It is currently a no-op but is part of the stable
@@ -275,7 +277,14 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		effective = chainSources(p.opts.CandidateProvider.Candidates(ctx), candidates)
 	}
 	acc := newAccounting(p.opts.Limits)
-	prom := newPromoter(!p.opts.NoPromote)
+	// Corpus-wide promotion threads the Pool's learned-password set through this
+	// run's promoter, so finds cross file boundaries; otherwise promotion stays
+	// per-file (inner layers only).
+	var shared *learnedSet
+	if p.opts.CorpusPromotion && !p.opts.NoPromote {
+		shared = p.learned
+	}
+	prom := newPromoter(!p.opts.NoPromote, shared)
 	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective, nil)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
