@@ -91,6 +91,7 @@ func runCrack(args []string) int {
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
 	passwordEnv := fs_.String("password-env", "", "read a candidate password from this environment variable")
 	potfilePath := fs_.String("potfile", "", "load recovered passwords from, and append new ones to, this file")
+	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
 
 	maxDepth := fs_.Int("max-depth", 0, "max nesting depth (0=default 32)")
 	maxTotal := fs_.Int64("max-total-bytes", 0, "cumulative decompressed byte budget")
@@ -178,6 +179,10 @@ func runCrack(args []string) int {
 	}
 	if len(files) == 0 {
 		fmt.Fprintln(os.Stderr, "xcrack: no matching source files")
+		return 2
+	}
+	if *checkpointPath != "" && len(files) != 1 {
+		fmt.Fprintln(os.Stderr, "xcrack: --checkpoint requires exactly one source (single-target resume)")
 		return 2
 	}
 
@@ -273,10 +278,33 @@ func runCrack(args []string) int {
 				errs[i] = err
 				return
 			}
-			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), buildCandidates(path))
+			src := buildCandidates(path)
+			// Resumable single-target run: wrap the candidate source so progress is
+			// persisted and an interrupted run resumes near where it stopped.
+			if *checkpointPath != "" {
+				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, useDefault, []string(patterns)))
+				ck, cerr := candidates.Checkpoint(src, *checkpointPath, sig, 0, -1)
+				if cerr != nil {
+					errs[i] = cerr
+					return
+				}
+				if rf := ck.(candidates.Resumable).ResumeFrom(); rf > 0 {
+					fmt.Fprintf(os.Stderr, "xcrack: resuming from candidate %d (checkpoint %s)\n", rf, *checkpointPath)
+				}
+				src = ck
+			}
+			res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)), src)
 			if err != nil {
 				errs[i] = err
 				return
+			}
+			// The target was searched to completion (found or exhausted): persist the
+			// final position and clear the checkpoint so a re-run starts fresh.
+			if *checkpointPath != "" {
+				if s, ok := src.(candidates.Saver); ok {
+					s.Save()
+				}
+				os.Remove(*checkpointPath)
 			}
 			res.Root.Path = filepath.Base(path)
 			results[i] = res

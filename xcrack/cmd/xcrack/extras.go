@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"os"
@@ -106,6 +108,25 @@ func (p *potfile) add(pws ...string) {
 	for _, pw := range fresh {
 		fmt.Fprintln(f, pw)
 	}
+}
+
+// candidateSig returns a short stable signature of the candidate configuration,
+// used (with the target file's name and size) to key a resume checkpoint so a
+// changed keyspace is not silently resumed. It is best-effort: it covers the
+// explicit passwords, wordlists, default-list toggle, and pattern files.
+func candidateSig(passwords, wordlists []string, useDefault bool, patternFiles []string) string {
+	h := sha256.New()
+	writeAll := func(tag string, ss []string) {
+		fmt.Fprintf(h, "%s=%d\n", tag, len(ss))
+		for _, s := range ss {
+			fmt.Fprintf(h, "%s\n", s)
+		}
+	}
+	writeAll("pw", passwords)
+	writeAll("wl", wordlists)
+	writeAll("pat", patternFiles)
+	fmt.Fprintf(h, "def=%t\n", useDefault)
+	return hex.EncodeToString(h.Sum(nil)[:8])
 }
 
 // --- single-password ergonomics ---------------------------------------------

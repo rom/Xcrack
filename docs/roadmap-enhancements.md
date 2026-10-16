@@ -26,12 +26,12 @@ Items marked **[batch]** are the current implementation batch.
 
 | | Feature | Notes |
 |--|---------|-------|
-| ⬜ | **Checkpoint / resume** **[batch]** | Persist search position for a long single-file run; resume after interruption. |
+| ✅ | **Checkpoint / resume** | `candidates.Checkpoint` + CLI `--checkpoint FILE`: persists the search position (with a keyspace signature) every N candidates and atomically; an interrupted single-target run resumes a safety margin behind the saved point so no in-flight candidate is skipped. Non-cloneable (single global cursor) and seeks only on the first `Reset`, so a multi-entry container never cascade-skips; scoped to single-target runs (guarded in the CLI). |
 | ✅ | **Full rule engine** | Broad hashcat function set (case, dup/reflect, rotate/trim, insert/overwrite/swap/extract, ascii±, title, `pN zN ZN yN YN`, …) + reject rules (`<>_ ! / ( ) =`) + stacking; word length capped (bomb-safe). |
 | ✅ | **Context / association candidates** | `--context` / `Options.ContextCandidates`: seeds each search with guesses derived from the file/entry name (stem, tokens, digit runs) and plaintext harvested from plain sibling entries (a README or email body that names the password). Tried after promotion, before the general keyspace. Parsers fuzzed (no-panic). |
 | ✅ | **Per-format fast-reject** | `Options.FastReject(path, candidate) bool`: a cheap caller pre-check consulted before the expensive KDF for every generated candidate (never for proven promoted passwords); returning true prunes a hopeless keyspace without a false-positive risk. Built-in verifiers already carry their own fast verifier checks (ZipCrypto check byte, WinZip-AES 2-byte, OpenPGP CFB quick-check). |
 | ✅ | **Candidate dedup** | `candidates.Dedup` — bounded dedup wrapper so masks×rules don't retry a string. |
-| ⬜ | **Streaming large inputs** **[batch]** | Avoid materializing whole archives; stream bounded windows. |
+| 🚧 | **Streaming large inputs** | Reads are already bounded (`MaxEntrySize`/`MaxTotalBytes`, `io.SectionReader`), so a malicious or huge input cannot exhaust memory. Fully *streaming* decrypt/decompress of large entries without materializing each one (bounded sliding windows through the container readers) is a larger architectural change, staged. |
 | ✅ | **Prometheus-format metrics** | `Metrics.WritePrometheus` + `GET /metrics` text exposition (alongside JSON `/v1/metrics`). |
 | ✅ | **Combinator attack** | `candidates.Combinator(left, right, sep)` (CLI wiring pending). |
 | ⬜ | **Hybrid attack** | wordlist ± mask (dict+mask / mask+dict). |
@@ -42,7 +42,7 @@ Items marked **[batch]** are the current implementation batch.
 | | Feature | Notes |
 |--|---------|-------|
 | ✅ | **Observability** | `Options.OnAudit` emits a secrets-free `AuditEvent` per node (path, format, status, encrypted, size) for an audit log or trace. |
-| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first); PCFG/OMEN still 🔬. |
+| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first) covers statistical generation today. A full PCFG (Weir et al. — learn a probabilistic context-free grammar of structure/segments and enumerate by probability) is a distinct, larger model, staged. |
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
 | 🔬 | Adaptive scheduling | Order files/candidates by observed crackability; corpus-wide promotion. |

@@ -107,6 +107,7 @@ archive that reuses a password is unlocked almost for free.
 | `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
 | `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
 ```sh
@@ -147,6 +148,31 @@ first. Harvesting is bounded (64 KiB per plain entry, 256 KiB per container) and
 reads only *unencrypted* siblings. The feature is **off by default** (it widens
 the search a little); enable it per run with `--context` or in a config file
 with `search: { context_candidates: true }`.
+
+#### Checkpoint / resume
+
+A long run against a single hard target can be made resumable with
+`--checkpoint FILE`:
+
+```sh
+# Start a long masked search, persisting progress to run.ckpt:
+xcrack --checkpoint run.ckpt --pattern big-mask.txt --no-default-list vault.pdf
+
+# If the process is killed, just run the SAME command again — it resumes near
+# where it stopped and prints e.g. "resuming from candidate 4300000 (checkpoint run.ckpt)".
+```
+
+How it works: the candidate position is written to `FILE` every 100 000
+candidates (atomically, with a signature of the target and candidate set). On a
+re-run with a matching signature, iteration resumes a safety margin *behind* the
+last saved position, so no candidate that was handed out but not yet verified
+before the interruption is skipped. When the search finishes (password found or
+keyspace exhausted) the checkpoint file is removed, so the next run starts fresh.
+Changing the target or the candidate set changes the signature and starts over.
+
+`--checkpoint` requires **exactly one** source (it tracks a single global
+cursor) and is meant for a single encrypted target; the candidate source must be
+deterministic (masks, wordlists, chains — not `stdin`).
 
 ### Output
 
