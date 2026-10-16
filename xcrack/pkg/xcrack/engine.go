@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xcrypto/scheme/zipcrypto"
@@ -41,6 +42,13 @@ import (
 // pattern engine) are accepted directly. Implementations need not be
 // thread-safe; the engine serializes access behind a feeder.
 type CandidateSource = candidates.Source
+
+// Accelerator is the optional batch-KDF offload (the opt-in xcrackd OpenCL
+// tier, github.com/rom/xcrack/pkg/accel). It is re-exported here so callers set
+// Options.Accelerator without importing the accel package directly. The default
+// pure-Go build has no backend, so this stays nil and everything runs on the
+// CPU; see Options.Accelerator.
+type Accelerator = accel.Accelerator
 
 // Logger is a minimal structured logger. The engine never logs recovered
 // passwords or decrypted content through it.
@@ -137,6 +145,19 @@ type Options struct {
 	// safe for concurrent use. A FastReject that is too aggressive only slows or
 	// misses a crack; it can never cause a false positive.
 	FastReject func(path string, candidate []byte) bool
+
+	// Accelerator, when set, offloads the shared PBKDF2-HMAC-SHA1 key derivation
+	// of acceleration-capable targets (whole-file xfileformats.Accelerable formats
+	// such as DMG, and container entries carrying an Entry.Accel such as
+	// WinZip-AES) to an external batch engine — the opt-in xcrackd OpenCL tier. It
+	// is consulted only for the general keyspace sweep, and only for targets whose
+	// derivation fits the backend's kernel; promoted/hint/context passwords are
+	// always tried on the CPU first, and any backend error or unsupported
+	// parameter falls back transparently to the unchanged CPU search. The
+	// accelerator's output is always re-checked by the format's own authoritative
+	// verifier, so it can never cause a false positive. nil (the default) keeps
+	// every search on the CPU.
+	Accelerator Accelerator
 }
 
 // KnownPlaintext configures an opt-in known-plaintext key-recovery attack for

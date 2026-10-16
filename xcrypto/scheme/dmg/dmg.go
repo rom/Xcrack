@@ -74,6 +74,35 @@ func (p Params) SchemeName() string {
 	return "dmg-v2"
 }
 
+// Salt20 returns the fixed 20-byte PBKDF2 salt (the stored salt zero-padded or
+// truncated) actually fed to the key derivation, exposed so an external batch
+// accelerator derives the key with byte-identical inputs to the CPU path.
+func (p Params) Salt20() []byte { return p.salt20() }
+
+// EffectiveIterations returns the PBKDF2 iteration count actually used (applying
+// the shared default when the header/hash line carries none).
+func (p Params) EffectiveIterations() int { return p.iterations() }
+
+// DKLen is the derived-key length (bytes) both versions request from PBKDF2.
+const DKLen = 32
+
+// VerifyWithDK reports whether a password unlocks the image given the
+// pre-derived key dk = PBKDF2-HMAC-SHA1(password, Salt20(), EffectiveIterations(),
+// DKLen) -- i.e. with the (expensive) derivation already done by an external
+// batch tier (the xcrackd OpenCL accelerator). It runs the identical v1/v2
+// verifier Verify uses, so a GPU-derived key yields the same verdict as the CPU
+// path.
+func VerifyWithDK(dk []byte, p Params) (bool, error) {
+	switch p.Version {
+	case 1:
+		return verifyV1(dk, p)
+	case 2:
+		return verifyV2(dk, p)
+	default:
+		return false, xcrypto.ErrUnsupported
+	}
+}
+
 // Verify reports whether password unlocks the image described by p.
 func Verify(password []byte, p Params) (bool, error) {
 	dk, err := prim.PBKDF2(sha1.New, string(password), p.salt20(), p.iterations(), 32)

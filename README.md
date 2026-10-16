@@ -47,7 +47,8 @@ globally-bounded concurrency, disk-streaming of large entries, resource budgets
 + bomb defenses, and — to offload heavy cracking to an external GPU engine —
 challenge export/import plus `$office$`/`$pdf$`/`$zip2$`/`$dmg$` hash-line
 emitters (`xcrack hashline`) for hashcat / John the Ripper. The `xcrackd` server
-has an optional, opt-in OpenCL tier (`-tags opencl`).
+also has an optional, opt-in **built-in** OpenCL tier (`-tags opencl`, `--gpu`)
+that batches the PBKDF2-HMAC-SHA1 sweep of the live search onto the device.
 
 ## Quick start
 
@@ -137,8 +138,13 @@ the service tier and several Phase 3/4 engine features landed:
   `/v1/metrics`, `/v1/healthz`); `Pool.Metrics()` telemetry; a pluggable live
   candidate provider.
 - **Search** — statistical (Markov) candidate ordering; challenge export/import
-  so heavy cracking can be offloaded to an external GPU/OpenCL engine (Xcrack
-  itself stays pure Go and CPU-only).
+  so heavy cracking can be offloaded to an external GPU/OpenCL engine. The
+  default build stays pure Go and CPU-only; the opt-in `xcrackd` OpenCL tier
+  (`-tags opencl`, `--gpu`) now feeds the **live crack loop** directly —
+  acceleration-capable targets (WinZip-AES, encrypted DMG, and other
+  PBKDF2-HMAC-SHA1 schemes) have their key-derivation sweep batched onto the
+  device, with the CPU verifier re-checking every hit and handling everything
+  the kernel can't.
 - **Hardening** — fuzz targets on every hostile-input parser plus the whole
   pipeline, a decompression-bomb / fan-out / cycle corpus, `recover()` guards on
   every format call, and a GitHub Actions CI workflow (build · vet · gofmt ·

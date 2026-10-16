@@ -192,6 +192,16 @@ emitter exists yet. (ZipCrypto entries are not exported as hash lines — they
 have the `kp` known-plaintext path and the external-engine challenge export
 instead.)
 
+**In-tree GPU tier (opt-in, server only).** Besides exporting to an external
+cracker, the `xcrackd` server can accelerate the search itself: a binary built
+with `-tags opencl` and run with `--gpu` batches the PBKDF2-HMAC-SHA1 sweep of
+acceleration-capable targets onto an OpenCL device. Today those are **WinZip-AES
+ZIP entries** (1000-iteration KDF) and **encrypted DMG** (the high-iteration
+`encrcdsa` KDF — where a GPU helps most); every other scheme and anything the
+kernel can't serve stays on the unchanged CPU path. The device only derives
+keys; the format's own verifier re-checks every hit, so acceleration never
+affects correctness. The default build is pure-Go/CPU-only (ADR 0001 amendment).
+
 ---
 
 ## Not handled (yet) / out of scope
@@ -201,7 +211,9 @@ disk images (ISO/UDF, VHD(X), DMG), installers (MSI/CAB/NSIS/Inno), OneNote /
 Outlook mail carriers, Hangul HWP, more codecs (zstd/lz4/brotli/…), and
 full-volume encryption (BitLocker, VeraCrypt, LUKS, FileVault).
 
-**Out of scope by design:** in-tree GPU cracking, any online/network attack,
-weakening of *sound* ciphers, document rendering or macro execution, and
+**Out of scope by design:** GPU cracking in the default build (the opt-in
+`xcrackd` OpenCL server tier above is the one sanctioned exception), any
+online/network attack, weakening of *sound* ciphers, document rendering or
+macro execution, and
 public-key PDF (which needs a private key, not a password). See
 [`asr.md`](asr.md) §5.

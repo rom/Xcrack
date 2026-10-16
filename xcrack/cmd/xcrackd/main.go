@@ -51,22 +51,26 @@ func main() {
 
 	// Optional GPU tier. It is opt-in and hardware-gated: without an -tags opencl
 	// build, or without OpenCL hardware, xcrackd logs why and runs the unchanged
-	// pure-Go CPU engine.
+	// pure-Go CPU engine. When a device is present and the kernel self-test
+	// passes, the accelerator is handed to the engine (Options.Accelerator), which
+	// offloads the shared PBKDF2-HMAC-SHA1 sweep of acceleration-capable targets
+	// (WinZip-AES, DMG, ...) to it and keeps the CPU path for everything else.
+	var gpuAcc accel.Accelerator
 	if *gpu {
 		if !accel.Built() {
 			log.Printf("--gpu requested but this binary is pure-Go; rebuild with -tags opencl. Continuing on CPU.")
 		} else if acc, err := accel.Detect(); err != nil {
 			log.Printf("--gpu requested but no usable OpenCL device: %v. Continuing on CPU.", err)
+		} else if err := accel.GPUSelfTest(); err != nil {
+			log.Printf("GPU self-test failed (%v); not using the GPU tier. Continuing on CPU.", err)
+			acc.Close()
 		} else {
+			gpuAcc = acc
 			defer acc.Close()
-			if err := accel.GPUSelfTest(); err != nil {
-				log.Printf("GPU self-test failed (%v); not using the GPU tier. Continuing on CPU.", err)
-			} else {
-				for _, d := range acc.Devices() {
-					log.Printf("GPU tier: %s %s (%s, %d compute units)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
-				}
-				log.Printf("GPU tier: PBKDF2-HMAC-SHA1 kernel validated and available")
+			for _, d := range acc.Devices() {
+				log.Printf("GPU tier: %s %s (%s, %d compute units)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
 			}
+			log.Printf("GPU tier: PBKDF2-HMAC-SHA1 kernel validated and active")
 		}
 	}
 
@@ -74,6 +78,7 @@ func main() {
 		Workers:         *workers,
 		MaxProcs:        *maxProcs,
 		FileConcurrency: *fileJobs,
+		Accelerator:     gpuAcc,
 	})
 	defer pool.Close()
 

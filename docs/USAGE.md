@@ -685,9 +685,18 @@ bin/xcrackd-gpu -gpu-selftest        # prove the kernel matches the CPU referenc
 bin/xcrackd-gpu -gpu -addr :8080     # hardware-gated; falls back to CPU if absent
 ```
 
+When a device is present and the kernel passes its self-test, `--gpu` wires the
+accelerator straight into the **live crack loop**: for acceleration-capable
+targets (WinZip-AES ZIP entries, encrypted DMG, and other PBKDF2-HMAC-SHA1
+schemes) the keyspace sweep is derived on the device in batches, and the CPU
+verifier re-checks every candidate the device flags. Promoted / hint / context
+passwords are still tried on the CPU first, and any unsupported parameter or
+device error falls back transparently to the pure-Go CPU search — so the GPU
+only ever changes speed, never results.
+
 The GPU tier only accelerates PBKDF2-HMAC-SHA1 key derivation (the shared KDF);
-it never parses or opens file content, and the default build / CI never include
-it (ADR 0001 amendment).
+it never parses or opens file content, never decides a match on its own, and the
+default build / CI never include it (ADR 0001 amendment).
 
 **Endpoints:**
 

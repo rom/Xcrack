@@ -18,6 +18,7 @@ import (
 	"io"
 	"path"
 	"strings"
+	"sync"
 
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/hashline"
@@ -252,8 +253,10 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) 
 		DecryptedSizeHint: int64(zf.UncompressedSize64),
 		Hint:              zipHint(zf.Comment),
 	}
+	var salt []byte
 	if hdr, err := readRawBytes(zf, int64(p.SaltLen()+winzipaes.PWVerifLen)); err == nil && len(hdr) >= p.SaltLen()+winzipaes.PWVerifLen {
-		ch.KDF.Salt = append([]byte(nil), hdr[:p.SaltLen()]...)
+		salt = append([]byte(nil), hdr[:p.SaltLen()]...)
+		ch.KDF.Salt = salt
 		ch.Verifier = append([]byte(nil), hdr[p.SaltLen():p.SaltLen()+winzipaes.PWVerifLen]...)
 	}
 	verify := func(password []byte) (bool, error) {
@@ -281,10 +284,42 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) 
 		}
 		return bytes.NewReader(plain), nil
 	}
-	return &xfileformats.Entry{
+	e := &xfileformats.Entry{
 		Path: name, Size: int64(zf.UncompressedSize64),
 		Encrypted: true, Challenge: ch, Verify: verify, Open: open,
-	}, nil
+	}
+	// Expose the batchable PBKDF2-HMAC-SHA1 derivation so the engine can offload
+	// the keyspace sweep to a GPU tier. WinZip-AES derives enc||auth||verifier in
+	// one 1000-iteration PBKDF2 over the entry salt; Finish re-runs the exact
+	// verifier+HMAC check on the derived key. The raw entry (ciphertext+MAC) is
+	// read once and cached, since Finish is called per candidate. Only offered
+	// when the header salt was readable (otherwise no acceleration — the CPU path
+	// re-reads the whole entry itself).
+	if salt != nil {
+		var (
+			rawOnce sync.Once
+			rawBuf  []byte
+			rawErr  error
+		)
+		loadRaw := func() ([]byte, error) {
+			rawOnce.Do(func() { rawBuf, rawErr = readRawBytes(zf, maxEntryRaw) })
+			return rawBuf, rawErr
+		}
+		e.Accel = &xfileformats.AccelKDF{
+			Salt:  salt,
+			Iter:  winzipaes.PBKDF2Iter,
+			DKLen: 2*p.KeyLen() + winzipaes.PWVerifLen,
+			Finish: func(dk, _ []byte) bool {
+				raw, err := loadRaw()
+				if err != nil {
+					return false
+				}
+				ok, _ := winzipaes.VerifyWithDK(dk, p, raw)
+				return ok
+			},
+		}
+	}
+	return e, nil
 }
 
 // HashcatLines implements hashline.LineExporter: it emits a crackable $zip2$

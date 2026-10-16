@@ -193,6 +193,28 @@ func (f *Format) Decrypt(r io.ReaderAt, size int64, ch *xcrypto.Challenge, key [
 	return bytes.NewReader(nil), nil
 }
 
+// AccelKDF exposes the image's single PBKDF2-HMAC-SHA1 derivation so the engine
+// can offload the keyspace sweep to a GPU tier. Both DMG versions derive one
+// 32-byte key over the fixed 20-byte salt; Finish re-runs the authoritative
+// v1/v2 verifier on the derived key, so a GPU-derived key yields the same
+// verdict as the CPU path and acceleration can never cause a false positive.
+// This makes dmg.Format an xfileformats.Accelerable.
+func (f *Format) AccelKDF(ch *xcrypto.Challenge) (xfileformats.AccelKDF, bool) {
+	p := decodeParams(ch.Extra)
+	if p.Version != 1 && p.Version != 2 {
+		return xfileformats.AccelKDF{}, false
+	}
+	return xfileformats.AccelKDF{
+		Salt:  p.Salt20(),
+		Iter:  p.EffectiveIterations(),
+		DKLen: xdmg.DKLen,
+		Finish: func(dk, _ []byte) bool {
+			ok, _ := xdmg.VerifyWithDK(dk, p)
+			return ok
+		},
+	}, true
+}
+
 // firstDMGLine returns the first line containing a $dmg$ marker, or "".
 func firstDMGLine(buf []byte) string {
 	for _, ln := range bytes.Split(buf, []byte("\n")) {

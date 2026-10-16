@@ -63,6 +63,51 @@ type Encrypted interface {
 	Decrypt(r io.ReaderAt, size int64, ch *xcrypto.Challenge, key []byte) (io.Reader, error)
 }
 
+// AccelKDF describes a batchable PBKDF2-HMAC-SHA1 key derivation that an
+// external GPU/OpenCL tier can run across many candidate passwords at once,
+// paired with a Finish closure that turns one derived key into a pass/fail
+// verdict. It lets the recovery engine offload the expensive per-candidate KDF
+// to a batch accelerator WITHOUT this library (or xcrypto) depending on any
+// accelerator package: it is plain data plus a closure.
+//
+// A format exposes it only when its password verification is dominated by a
+// single shared (Salt, Iter, DKLen) PBKDF2-HMAC-SHA1 run -- the one primitive
+// the accelerator implements. The engine always keeps the CPU Verify /
+// Entry.Verify path as the authoritative fallback, so a nil AccelKDF, or one
+// whose parameters the accelerator cannot serve, simply means "no
+// acceleration". Finish re-checks every candidate the accelerator flags, so the
+// accelerator is never trusted to decide correctness on its own and a faulty
+// backend can only slow a search, never cause a false positive.
+type AccelKDF struct {
+	// Salt, Iter, DKLen are the exact PBKDF2-HMAC-SHA1 parameters the accelerator
+	// must derive with -- byte-identical to what the CPU verifier uses (e.g. the
+	// DMG verifier's fixed 20-byte salt, not the raw stored salt).
+	Salt  []byte
+	Iter  int
+	DKLen int
+	// Finish reports whether password is correct given
+	// dk = PBKDF2-HMAC-SHA1(password, Salt, Iter, DKLen). It performs the same
+	// authoritative verifier check Verify would, but with the KDF already done,
+	// so the heavy work happens once on the accelerator. It must be safe for
+	// concurrent use. password is supplied for schemes that need it alongside the
+	// derived key (most ignore it).
+	Finish func(dk, password []byte) bool
+}
+
+// Accelerable is an optional capability of a whole-file Encrypted format whose
+// password verification is one shared PBKDF2-HMAC-SHA1 derivation (DMG, ODF,
+// SQLCipher, ...). The engine type-asserts for it and, when an accelerator is
+// configured, offloads the keyspace sweep to the batch KDF, falling back to the
+// per-candidate Verify otherwise. Container entries expose the same thing via
+// Entry.Accel instead.
+type Accelerable interface {
+	Encrypted
+	// AccelKDF returns the batchable derivation for an already-probed Challenge,
+	// or ok=false when this file cannot be accelerated (unsupported version,
+	// parameters outside the shared primitive, etc.).
+	AccelKDF(ch *xcrypto.Challenge) (AccelKDF, bool)
+}
+
 // Container is implemented by archives and compound files. Its entries may be
 // individually encrypted; in that case each Entry carries a Challenge and its
 // Verify/Open closures accept the password. The container itself does not
@@ -92,6 +137,13 @@ type Entry struct {
 	// check (not just a fast-reject heuristic). Safe for concurrent use. nil for
 	// unencrypted entries (treat as always-ok).
 	Verify func(password []byte) (ok bool, err error)
+	// Accel, when non-nil, offers a batchable PBKDF2-HMAC-SHA1 derivation for this
+	// entry so an external GPU tier can sweep the keyspace in bulk. The engine
+	// uses it only when an accelerator is configured and its parameters fit the
+	// backend; it always falls back to Verify otherwise. Its Finish closure is
+	// authoritative, so acceleration can never cause a false positive. nil means
+	// the entry is not accelerable (ZipCrypto, unencrypted, ...).
+	Accel *AccelKDF
 	// Open returns the entry's decrypted, decompressed content as a bounded
 	// reader. password is required iff Encrypted and ignored otherwise.
 	Open func(password []byte) (io.Reader, error)

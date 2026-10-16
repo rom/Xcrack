@@ -58,9 +58,18 @@ acceleration tier for the `xcrackd` server**, in `xcrack/pkg/accel`.
   (PBKDF2-HMAC-SHA1, the shared KDF); it never parses or opens file content, so
   QA-2 ("never execute content") is untouched. It lives in the server tier
   only, never in the embeddable library's default path.
+- **Never authoritative.** The crack loop routes acceleration-capable targets
+  through the primitive (whole-file `xfileformats.Accelerable` formats and
+  container entries carrying an `Entry.Accel`, offered to the engine via the
+  accel-free `AccelKDF` seam so `xfileformats`/`xcrypto` keep no dependency on
+  the accelerator package). The device only derives keys in bulk; the format's
+  own CPU verifier re-checks every candidate it flags, so a faulty or malicious
+  backend can at worst waste time — never cause a false positive — and any
+  unsupported parameter falls back to the pure-Go CPU search.
 
 This keeps the pure-Go, non-executing, single-static-binary guarantees for
 every default consumer while letting a dedicated server optionally exploit GPU
-hardware it happens to have. Live per-scheme routing of the crack loop's KDF
-through this primitive is a follow-up; the primitive itself is implemented and
-validated.
+hardware it happens to have. The primitive is implemented, validated
+byte-for-byte against the Go reference, and now wired into the live search loop
+(validated end-to-end against WinZip-AES and real DMG samples on an OpenCL
+device).
