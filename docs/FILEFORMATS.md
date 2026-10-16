@@ -149,9 +149,14 @@ known password).
 | ------ | ---- | ------------ |
 | OOXML Office (2007 / 2010 / 2013) | `office` | 9400 / 9500 / 9600 |
 | PDF (R2 / R3–R4 / R5 / R6) | `PDF` | 10400 / 10500 / 10600 / 10700 |
+| WinZip AES ZIP entries (128 / 192 / 256) | `ZIP` | 13600 |
 
-Other schemes report that no emitter exists yet. (ZipCrypto additionally has the
-`kp` known-plaintext path and the external-engine challenge export.)
+A ZIP yields one `$zip2$` line per WinZip-AES entry; because that line carries
+the entry's full ciphertext and HMAC-SHA1 tag (which the probe-time report
+omits), `hashline` re-reads the entry to build it. Other schemes report that no
+emitter exists yet. (ZipCrypto entries are not exported as hash lines — they
+have the `kp` known-plaintext path and the external-engine challenge export
+instead.)
 
 ---
 

@@ -172,3 +172,61 @@ func TestEmitUnsupported(t *testing.T) {
 		t.Error("expected ok=false for nil challenge")
 	}
 }
+
+// TestZip2 reproduces a WinZip-AES $zip2$ line that was confirmed crackable by
+// a live `hashcat -m 13600` run (password "hashcat"): the components below
+// slice an AES-256 entry into salt (16), verifier (2), ciphertext (19), and
+// 10-byte auth code, and the emitter must rebuild the exact line hashcat
+// accepted.
+func TestZip2(t *testing.T) {
+	const (
+		salt   = "7bb00a58f7434c99dc84e1491901263f"
+		verify = "58a0"
+		ct     = "265d082149ec51b4fe48d63ae306beb88dbac9"
+		auth   = "3b3c0657e2ce823eb571"
+		want   = "$zip2$*0*3*0*7bb00a58f7434c99dc84e1491901263f*58a0*19*265d082149ec51b4fe48d63ae306beb88dbac9*3b3c0657e2ce823eb571*$/zip2$"
+	)
+	r, ok := Zip2(256, mustHex(t, salt), mustHex(t, verify), mustHex(t, ct), mustHex(t, auth))
+	if !ok {
+		t.Fatal("Zip2 returned ok=false")
+	}
+	if r.Hashcat != 13600 {
+		t.Errorf("hashcat mode = %d, want 13600", r.Hashcat)
+	}
+	if r.John != "ZIP" {
+		t.Errorf("john format = %q, want ZIP", r.John)
+	}
+	if r.Line != want {
+		t.Errorf("line mismatch:\n got %s\nwant %s", r.Line, want)
+	}
+}
+
+// TestZip2ModeByKeyBits checks the mode digit tracks the AES key size and that
+// an unknown size or a missing field is rejected.
+func TestZip2ModeByKeyBits(t *testing.T) {
+	salt16, salt24, salt32 := make([]byte, 8), make([]byte, 12), make([]byte, 16)
+	verify, ct, auth := []byte{1, 2}, []byte{3, 4, 5}, make([]byte, 10)
+	for _, c := range []struct {
+		bits int
+		mode string
+		salt []byte
+	}{
+		{128, "*0*1*0*", salt16},
+		{192, "*0*2*0*", salt24},
+		{256, "*0*3*0*", salt32},
+	} {
+		r, ok := Zip2(c.bits, c.salt, verify, ct, auth)
+		if !ok {
+			t.Fatalf("%d-bit: ok=false", c.bits)
+		}
+		if !strings.Contains(r.Line, c.mode) {
+			t.Errorf("%d-bit: line %q missing mode marker %q", c.bits, r.Line, c.mode)
+		}
+	}
+	if _, ok := Zip2(64, salt16, verify, ct, auth); ok {
+		t.Error("expected ok=false for unknown key size")
+	}
+	if _, ok := Zip2(256, salt32, verify, nil, auth); ok {
+		t.Error("expected ok=false for empty ciphertext")
+	}
+}

@@ -70,7 +70,7 @@ go build -o bin/xcrackd ./xcrack/cmd/xcrackd
 ```
 xcrack [flags] [sources...]      decrypt and recursively decompose sources
 xcrack identify [sources...]     detect format & encryption only (no cracking)
-xcrack hashline [sources...]     emit $office$/$pdf$ hash lines for hashcat / John
+xcrack hashline [sources...]     emit $office$/$pdf$/$zip2$ hash lines for hashcat / John
 xcrack version
 xcrack help
 ```
@@ -437,14 +437,26 @@ hashcat (`-m <mode>`) or John the Ripper (`--format=<name>`) expects. The hash
 line goes to **stdout** (so it pipes cleanly into a cracker); a
 `# <file> (hashcat -m N | john --format=X)` note goes to stderr.
 
-Supported today: encrypted **OOXML** Office documents (`$office$`, `-m
-9400/9500/9600`) and **PDF** (`$pdf$`, `-m 10400/10500/10600/10700`). These
-emitters are cross-validated against real hashcat (see
+Supported today:
+
+| Scheme | Line | hashcat `-m` | John `--format=` |
+| --- | --- | --- | --- |
+| OOXML Office (agile + standard) | `$office$` | 9400 / 9500 / 9600 | `office` |
+| PDF (RC4 / AESV2 / AESV3) | `$pdf$` | 10400 / 10500 / 10600 / 10700 | `PDF` |
+| WinZip AES ZIP entries (per entry) | `$zip2$` | 13600 | `ZIP` |
+
+These emitters are cross-validated against real hashcat (see
 `scripts/hashcat-xval.sh`). Other schemes report that no emitter exists yet.
+For a ZIP, a `$zip2$` line is emitted per WinZip-AES entry (AES-128/192/256);
+ZipCrypto entries are not exported here — they are attacked by the built-in
+known-plaintext path instead. Note the `$zip2$` line embeds the entry's full
+ciphertext and authentication tag, which the lightweight probe-time report
+omits, so `hashline` re-reads the entry to build it.
 
 ```sh
 xcrack hashline secret.docx > hashes.txt         # $office$*2013*100000*256*...
 xcrack hashline *.pdf 2>/dev/null >> hashes.txt  # append $pdf$ lines
+xcrack hashline archive.zip 2>/dev/null >> hashes.txt  # $zip2$ per AES entry
 hashcat -m 9600 hashes.txt rockyou.txt           # crack on the GPU box
 ```
 

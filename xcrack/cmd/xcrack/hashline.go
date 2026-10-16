@@ -7,15 +7,15 @@ import (
 	"os"
 
 	"github.com/rom/xcrack/pkg/xcrack"
-	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/hashline"
 	"github.com/rom/xfileformats"
 )
 
-// runHashline emits crackable hash lines ($office$, $pdf$, ...) for external GPU
-// crackers (hashcat / John the Ripper). It probes each file once and prints the
-// hash string(s) to stdout; a human-readable "# <file> hashcat -m N" comment
-// goes to stderr so stdout stays a clean hash file to pipe into a cracker.
+// runHashline emits crackable hash lines ($office$, $pdf$, $zip2$, ...) for
+// external GPU crackers (hashcat / John the Ripper). It probes each file once
+// and prints the hash string(s) to stdout; a human-readable
+// "# <file> hashcat -m N" comment goes to stderr so stdout stays a clean hash
+// file to pipe into a cracker.
 func runHashline(args []string) int {
 	fs_ := flag.NewFlagSet("xcrack hashline", flag.ContinueOnError)
 	var sources stringSlice
@@ -43,30 +43,24 @@ func runHashline(args []string) int {
 			exit = maxInt(exit, 2)
 			continue
 		}
-		chs := challengesOf(reg, data)
-		if len(chs) == 0 {
-			fmt.Fprintf(os.Stderr, "# %s: no encrypted challenge found\n", path)
+		lines := linesOf(reg, data)
+		if len(lines) == 0 {
+			fmt.Fprintf(os.Stderr, "# %s: no hash-line emitter matched (unencrypted, unknown, or CPU-only scheme)\n", path)
 			exit = maxInt(exit, 1)
 			continue
 		}
-		for _, cc := range chs {
+		for _, l := range lines {
 			label := path
-			if cc.entry != "" {
-				label += ":" + cc.entry
-			}
-			r, ok := hashline.Emit(cc.ch)
-			if !ok {
-				fmt.Fprintf(os.Stderr, "# %s: no hash-line emitter for scheme %q yet\n", label, cc.ch.Scheme)
-				exit = maxInt(exit, 1)
-				continue
+			if l.Target != "" {
+				label += ":" + l.Target
 			}
 			any = true
 			mode := "n/a"
-			if r.Hashcat >= 0 {
-				mode = fmt.Sprintf("%d", r.Hashcat)
+			if l.Hashcat >= 0 {
+				mode = fmt.Sprintf("%d", l.Hashcat)
 			}
-			fmt.Fprintf(os.Stderr, "# %s  (hashcat -m %s  |  john --format=%s)\n", label, mode, r.John)
-			fmt.Println(r.Line)
+			fmt.Fprintf(os.Stderr, "# %s  (hashcat -m %s  |  john --format=%s)\n", label, mode, l.John)
+			fmt.Println(l.Line)
 		}
 	}
 	if !any && exit == 0 {
@@ -75,43 +69,55 @@ func runHashline(args []string) int {
 	return exit
 }
 
-type chEntry struct {
-	entry string
-	ch    *xcrypto.Challenge
-}
-
-// challengesOf detects the format and collects the encryption challenge(s): one
-// for a whole-file Encrypted format, or one per encrypted entry for a Container.
-func challengesOf(reg *xfileformats.Registry, data []byte) []chEntry {
+// linesOf detects the format and collects crackable hash lines for it. It walks
+// every format that claims the stream (not just the single best match, so an
+// AES ZIP is not shadowed by another format that shares the PK magic) and
+// returns the first non-empty result. A format implementing
+// hashline.LineExporter is preferred — it reads the full ciphertext a GPU
+// cracker needs (e.g. WinZip AES $zip2$); otherwise lines are derived from the
+// lightweight probe-time Challenge via hashline.Emit, one for a whole-file
+// Encrypted format or one per encrypted entry for a Container.
+func linesOf(reg *xfileformats.Registry, data []byte) []hashline.Labeled {
 	peek := data
 	if len(peek) > 512 {
 		peek = peek[:512]
 	}
-	f, err := reg.Detect(peek)
-	if err != nil {
-		return nil
-	}
 	r := bytes.NewReader(data)
 	size := int64(len(data))
-	if enc, ok := f.(xfileformats.Encrypted); ok {
-		ch, err := enc.Probe(r, size)
-		if err != nil || ch == nil {
-			return nil
-		}
-		return []chEntry{{"", ch}}
-	}
-	if c, ok := f.(xfileformats.Container); ok {
-		entries, err := c.Entries(r, size)
-		if err != nil {
-			return nil
-		}
-		var out []chEntry
-		for _, e := range entries {
-			if e.Encrypted && e.Challenge != nil {
-				out = append(out, chEntry{e.Path, e.Challenge})
+	for _, f := range reg.DetectAll(peek) {
+		// Prefer a direct line exporter (full ciphertext + auth, e.g. $zip2$).
+		if le, ok := f.(hashline.LineExporter); ok {
+			if ls, err := le.HashcatLines(r, size); err == nil && len(ls) > 0 {
+				return ls
 			}
 		}
-		return out
+		if enc, ok := f.(xfileformats.Encrypted); ok {
+			ch, err := enc.Probe(r, size)
+			if err != nil || ch == nil {
+				continue
+			}
+			if res, ok := hashline.Emit(ch); ok {
+				return []hashline.Labeled{{Result: res}}
+			}
+			continue
+		}
+		if c, ok := f.(xfileformats.Container); ok {
+			entries, err := c.Entries(r, size)
+			if err != nil {
+				continue
+			}
+			var out []hashline.Labeled
+			for _, e := range entries {
+				if e.Encrypted && e.Challenge != nil {
+					if res, ok := hashline.Emit(e.Challenge); ok {
+						out = append(out, hashline.Labeled{Target: e.Path, Result: res})
+					}
+				}
+			}
+			if len(out) > 0 {
+				return out
+			}
+		}
 	}
 	return nil
 }
