@@ -29,7 +29,7 @@ many worked examples.
 | **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** (`.mdb/.accdb`) detected |
 | **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC **and AES-256-GCM**); **Apple iWork** (Pages/Numbers/Keynote) |
-| **Disk images** | Apple **encrypted DMG** (v1 AES-128, v2 AES-128/256) via the `dmg2john` `$dmg$` line |
+| **Disk images** | Apple **encrypted DMG** (v2 AES-128/256) read on-disk directly, plus v1/v2 via the `dmg2john` `$dmg$` line |
 | **Mail / passphrase** | MIME (`.eml`) attachments; **age** (scrypt); **symmetric OpenPGP** (`gpg -c`) |
 | **Keys / key stores** | OpenSSH keys; PEM/PKCS#8; JKS; PKCS#12 (`.p12`); PuTTY `.ppk`; **SQLCipher** (`--as sqlcipher`); **KeePass** (`.kdbx` KDBX4, Argon2d/Argon2id/AES-KDF) |
 
@@ -145,8 +145,7 @@ the service tier and several Phase 3/4 engine features landed:
   `-race` · govulncheck · bounded fuzz).
 
 **Staged** (implemented as test fixtures / oracles become available): MS Access
-password *recovery* (detection ships now), the raw on-disk DMG `encrcdsa`
-container (the `dmg2john` `$dmg$` line ships now), and legacy-Office macro/VBA
+password *recovery* (detection ships now) and legacy-Office macro/VBA
 auxiliary-stream decryption.
 
 > **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is fully decrypted and

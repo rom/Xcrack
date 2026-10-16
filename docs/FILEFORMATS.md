@@ -157,15 +157,19 @@ known-answer vectors (so PuTTY v3 and KeePass both have a vetted Argon2).
 
 | Format | Signature | Scheme(s) | KDF | Cipher | Verifier | Oracle |
 | ------ | --------- | --------- | --- | ------ | -------- | ------ |
-| **Apple encrypted DMG** 🔓 | a `dmg2john` `$dmg$1*…` / `$dmg$2*…` line | `dmg-v1` (AES-128) and `dmg-v2` (AES-128 / **AES-256**) | PBKDF2-HMAC-SHA1 | v1: 3DES key-unwrap; v2: 3DES-unwrapped AES-CBC | v1: valid PKCS padding on both unwrapped blobs; v2: AES-CBC chunk decrypt yields 8 consecutive NUL bytes (per-chunk IV = HMAC-SHA1(key, chunkNo)) | **John the Ripper's authoritative `dmg` vectors** (both versions, AES-128 & AES-256, cross-validated byte-for-byte) |
+| **Apple encrypted DMG** 🔓 | on-disk `encrcdsa` v2 magic, or a `dmg2john` `$dmg$1*…` / `$dmg$2*…` line | `dmg-v1` (AES-128) and `dmg-v2` (AES-128 / **AES-256**) | PBKDF2-HMAC-SHA1 | v1: 3DES key-unwrap; v2: 3DES-unwrapped AES-CBC | v1: valid PKCS padding on both unwrapped blobs; v2: AES-CBC chunk decrypt yields 8 consecutive NUL bytes (per-chunk IV = HMAC-SHA1(key, chunkNo)) | **real macOS AES-128/256 images** (known password) + **John the Ripper's authoritative `dmg` vectors** (byte-for-byte) |
 
-Xcrack consumes the portable `$dmg$` line `dmg2john image.dmg` produces, the
-same way John/hashcat users already work: `dmg2john image.dmg > h` then
-`xcrack h -w wordlist` (the whole candidate pipeline — spray, breach, masks,
-sharding — applies). The DMG *cryptography* is oracle-validated against John's
-vectors; parsing the raw on-disk `encrcdsa`/koly container directly is deferred
-until a real-image test sample is available to validate the header parser (the
-crypto would be unchanged). The recovered passphrase is the deliverable.
+Xcrack reads a real on-disk **`encrcdsa` v2** image directly — just
+`xcrack image.dmg -w wordlist`, with the whole candidate pipeline (spray,
+breach, masks, sharding) — and also accepts the portable `$dmg$` line
+`dmg2john image.dmg` produces (`dmg2john image.dmg > h` then `xcrack h`). The
+on-disk parser follows the dmg2john / vilefault layout and reads only the
+header, key blob and one data chunk (via `ReadAt`), never the whole image; it is
+**validated against genuine macOS-produced AES-128 and AES-256 images** with a
+known password, and the crypto is additionally cross-validated against John's
+authoritative `dmg` vectors. The recovered passphrase is the deliverable (the
+image is not mounted). Older v1 (`.dmg`, pre-10.5) images are handled via the
+`$dmg$` line.
 
 ## GPU offload — hash-line export
 

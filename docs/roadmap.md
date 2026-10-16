@@ -72,9 +72,9 @@ they are not date-bound. Each phase leaves `main` releasable.
 - ✅ **KeePass** (KDBX4, in-tree Argon2d), ✅ **Apple iWork**, ✅ **SQLCipher**,
   ✅ **ODF AES-GCM**.
 - ✅ **Apple encrypted DMG**: v1 (AES-128) and v2 (AES-128/256) password
-  verification, cross-validated against John the Ripper's authoritative `dmg`
-  vectors; consumed via the portable `dmg2john` `$dmg$` line (direct on-disk
-  `encrcdsa` header parsing staged pending a real-image sample).
+  recovery. Reads a real on-disk `encrcdsa` v2 image directly (`xcrack image.dmg`)
+  and the portable `dmg2john` `$dmg$` line; validated against genuine macOS
+  AES-128/256 images and John the Ripper's authoritative `dmg` vectors.
 - RAR5 specifics remain; the few others need test oracles not present in the
   build environment and are implemented as fixtures become available.
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate
