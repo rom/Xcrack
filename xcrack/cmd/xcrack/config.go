@@ -42,6 +42,7 @@ type fileConfig struct {
 		Spray         bool     `yaml:"spray"`          // curated password-spraying set
 		SprayTokens   []string `yaml:"spray_tokens"`   // org/product/user tokens mangled into the spray set
 		Adaptive      bool     `yaml:"adaptive"`       // corpus-wide adaptive promotion across files
+		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`

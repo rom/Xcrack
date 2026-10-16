@@ -116,6 +116,7 @@ unlocked almost for free.
 | `--breach FILE` | a frequency-annotated breach corpus (`<count> <pw>` or `<pw>:<count>`; gzip auto-detected), tried ahead of plain wordlists — repeatable |
 | `--breach-min-count N` | drop breach entries seen fewer than `N` times (spray only the common ones) |
 | `--adaptive` | corpus-wide promotion across a multi-file run: a password recovered from any file is tried first on all the others (ordered by how often it has worked), and the smallest files are processed first so cheap wins seed the rest |
+| `--shard I/N` | distributed cracking: test only shard `I` of `N` of the keyspace (0-based). Run `0/N`…`N-1/N` on separate machines/processes over the same inputs; each covers a disjoint stride and together they cover everything. Promoted/context/hint guesses are tried by every shard |
 | `--spray` | add a compact curated spray set (globally common passwords + season/year walks), tried early |
 | `--spray-token STR` | an org/product/user token mangled into the spray set (year, `!`/`@`/`#` suffixes, case variants) — repeatable, implies `--spray` |
 | `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
@@ -146,7 +147,20 @@ xcrack --spray --spray-token Acme protected.docx
 # A frequency-ordered breach corpus (HIBP-style "pw:count" or SecLists "count pw"),
 # only trying passwords seen at least 100 times:
 xcrack --breach leaked-passwords.txt.gz --breach-min-count 100 archive.zip
+
+# Distributed cracking: split one big keyspace across four machines. Each runs
+# the same command over the same inputs with a different shard; exactly one
+# finds the password, the rest exhaust their stride.
+xcrack --shard 0/4 -w huge.txt big.zip   # machine 0
+xcrack --shard 1/4 -w huge.txt big.zip   # machine 1  (… 2/4, 3/4 on the others)
 ```
+
+Sharding composes with the challenge envelope (`xcrack hashline` / the
+`xcrackd` service) so a file is probed once and the heavy search is fanned out:
+every worker loads the same inputs and `--shard I/N` restricts it to a disjoint
+1/N stride of the candidate keyspace. The stride (every N-th candidate, not N
+contiguous blocks) keeps a most-likely-first ordering spread across all shards,
+so no single worker gets all the good guesses.
 
 #### Context candidates
 

@@ -56,8 +56,10 @@ they are not date-bound. Each phase leaves `main` releasable.
   backend called by an Impex kiosk / DataLock (QA-13).
 - ✅ Metrics/telemetry hooks (`Pool.Metrics()`, `GET /v1/metrics`).
 - ✅ Pluggable live candidate provider (`Options.CandidateProvider`).
-- Optional distributed candidate sharding (coordinator + workers) — still CPU,
-  still offline. (Explicitly a later, opt-in capability, not core.)
+- ✅ Optional distributed candidate sharding (`--shard I/N` / `candidates.Shard`)
+  — a disjoint stride of the keyspace per worker, still CPU, still offline,
+  composed with the challenge envelope. (Opt-in; orchestration is left to any
+  external job runner rather than a built-in network coordinator.)
 
 ## Phase 5 — Extended formats (demand-driven)
 - ✅ **age** (scrypt passphrase) and ✅ **GPG symmetric** (`gpg -c`, SEIPD v1/MDC),

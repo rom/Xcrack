@@ -101,6 +101,7 @@ func runCrack(args []string) int {
 	toggleF := fs_.Bool("toggle-case", false, "also try case-toggle variants of each wordlist word (hashcat toggle attack)")
 	princeF := fs_.Bool("prince", false, "also try PRINCE chains (length-ordered concatenations of wordlist words)")
 	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
+	shardF := fs_.String("shard", "", "distributed cracking: test only shard I of N of the keyspace, e.g. --shard 0/4 (run 0/4..3/4 on separate machines; promoted/context/hint guesses are tried by every shard)")
 	adaptiveF := fs_.Bool("adaptive", false, "corpus-wide adaptive promotion: try passwords recovered from any file first on the rest (most-successful first), smallest files first")
 	sprayF := fs_.Bool("spray", false, "also try a curated password-spraying set (common + season/year patterns), tried early")
 	var sprayTokens stringSlice
@@ -286,6 +287,15 @@ func runCrack(args []string) int {
 		}
 	}
 	useSpray := *sprayF || len(sprayTok) > 0 || len(sprayYearInts) > 0 || (cfg != nil && cfg.Search.Spray)
+	shardSpec := *shardF
+	if shardSpec == "" && cfg != nil {
+		shardSpec = cfg.Search.Shard
+	}
+	shardIndex, shardCount, serr := parseShard(shardSpec)
+	if serr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: --shard: %v\n", serr)
+		return 2
+	}
 
 	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
 	// the built-in list, and wordlist files, bounded), then cloned per file.
@@ -397,7 +407,10 @@ func runCrack(args []string) int {
 		if genKeyWalk {
 			srcs = append(srcs, candidates.KeyboardWalk(keyWalkMin, keyWalkMax, keyWalkCount))
 		}
-		return candidates.Chain(srcs...)
+		// Distributed cracking: restrict this worker to its stride of the keyspace.
+		// A no-op when shardCount <= 1. Promoted/context/hint guesses live outside
+		// this base source, so every worker still tries them.
+		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
 	}
 
 	ctx := context.Background()
@@ -453,7 +466,7 @@ func runCrack(args []string) int {
 			// Resumable single-target run: wrap the candidate source so progress is
 			// persisted and an interrupted run resumes near where it stopped.
 			if *checkpointPath != "" {
-				sig := fmt.Sprintf("%s:%d:%s", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok))
+				sig := fmt.Sprintf("%s:%d:%s:shard%d/%d", filepath.Base(path), len(data), candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok), shardIndex, shardCount)
 				ck, cerr := candidates.Checkpoint(src, *checkpointPath, sig, 0, -1)
 				if cerr != nil {
 					errs[i] = cerr
@@ -731,6 +744,7 @@ COMMON FLAGS:
       --toggle-case              also try case-toggle variants of each wordlist word
       --prince                   also try PRINCE chains (concatenated wordlist words)
       --keyboard-walk            also try QWERTY keyboard-adjacency walks
+      --shard I/N                distributed cracking: test only shard I of N of the keyspace
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --spray                    curated spray set (common + season/year), tried early
       --spray-token STR          org/product/user token mangled into the spray set (repeatable)
