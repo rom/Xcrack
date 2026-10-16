@@ -18,6 +18,16 @@ therefore optimised for *"decrypt and decompose an untrusted file quickly and
 safely, using mostly-known candidate passwords"* — not for grinding a single
 file against an enormous keyspace.
 
+Xcrack is delivered in **three forms** over one engine:
+
+1. **Embeddable library** (primary) — Impex links it directly.
+2. **CLI** — triage, testing, manual recovery.
+3. **HTTP service** (`xcrackd`) — a backend tier so the engine can run on a
+   powerful, hardened host and be called by thin clients such as an **Impex
+   kiosk** or an **Impex DataLock** appliance. That backend may optionally front
+   a separate **GPU/OpenCL** cracking engine for heavy keyspaces; Xcrack stays
+   pure/offline and hands such work out via an exported challenge (QA-14).
+
 ---
 
 ## 2. Quality-attribute requirements
@@ -111,6 +121,35 @@ the same inputs yield the same result tree.
 **Response required:** A single pure-Go build, cross-compilable, no cgo required.
 **Architectural impact:** stdlib-first crypto; third-party pure-Go libs only.
 
+### QA-13 — Service deployment / remote backend (H)
+**Scenario:** An Impex kiosk or an Impex DataLock appliance has limited CPU and
+cannot embed the engine; it needs to hand a file to a shared backend running on
+a more powerful, hardened server and get back the decrypted tree.
+**Response required:** The same engine is callable over a network API with the
+identical capability and result shape as the library and CLI (CON-3), with
+bounded request size, per-request deadlines, and the Pool's global resource
+ceiling shared across all concurrent requests. The cryptanalysis stays
+**offline** — the service attacks only the submitted file's own KDF, never a
+remote system (CON-2).
+**Architectural impact:** a thin `pkg/api` HTTP wrapper over `xcrack.Pool` and
+the `xcrackd` command; transport concerns only (size bounds, timeouts,
+JSON); authn/z and TLS are the operator's responsibility (provided by a proxy/
+mesh), not built in. A recovered password or decrypted bytes crossing the API
+boundary is sensitive (QA-8), so the service is deployed on a trusted network.
+
+### QA-14 — Heavy-cracking offload to an external engine (M)
+**Scenario:** A file's keyspace is too large for CPU guessing, and the operator
+has a GPU/OpenCL cracking engine (e.g. hashcat) available on the backend.
+**Response required:** Xcrack can **export** the probed challenge for a node in
+a portable form, let an external engine recover the password, and **import** the
+result to continue decryption/decomposition — without Xcrack itself gaining a
+GPU dependency or weakening any cipher. The offline, verify-against-the-file's-
+own-KDF posture is preserved end to end.
+**Architectural impact:** a serializable `xcrypto.Challenge` with export/import
+to JSON and a hashcat/`*2john`-style line; the GPU engine stays an external,
+optional component reached across a boundary, keeping CON-1 (pure Go, no cgo)
+and the "no GPU in-tree" non-goal intact.
+
 ---
 
 ## 3. Constraints
@@ -118,10 +157,10 @@ the same inputs yield the same result tree.
 | ID | Constraint | Rationale |
 | -- | ---------- | --------- |
 | CON-1 | **Pure Go, no external binaries, no cgo (default)** | Safety (QA-2), portability (QA-12), embeddability (QA-3). |
-| CON-2 | **No network / no online attacks** | Scope & authorized-use posture; offline-only against a file's own KDF. |
+| CON-2 | **No online/remote attacks; cryptanalysis is offline** | Scope & authorized-use posture: Xcrack only guesses against a submitted file's own KDF, never a remote system. The optional `xcrackd` service (QA-13) is a transport in front of that same offline engine, not a networked attack capability. |
 | CON-3 | **Full CLI/library parity** | Every CLI capability is a library `Options` field; the CLI adds no hidden behaviour. |
 | CON-4 | **Two modules, one repo** | Xfileformats importable alone (QA-4); engine/CLI separate. |
-| CON-5 | **Go 1.25+, MIT, minimal vetted dependencies** (stdlib-first; the embeddable libraries stay zero-dep, `gopkg.in/yaml.v3` is used only by the CLI) | Build simplicity; licence compatibility for embedding. |
+| CON-5 | **Go 1.25+, MIT, minimal vetted dependencies** (stdlib-first; `gopkg.in/yaml.v3` is used only by the CLI). The core crypto schemes stay stdlib-only; **extended** schemes that need primitives absent from the stdlib (scrypt, ChaCha20-Poly1305, Argon2, OpenPGP) may use **`golang.org/x/crypto`** — a BSD-licensed, well-reviewed library — rather than hand-rolling crypto. | Build simplicity; licence compatibility for embedding; vetted primitives over bespoke reimplementation for the extended formats. |
 | CON-6 | **No plaintext spillage** | Decrypted (potentially malicious) content stays in memory or a locked, wiped temp dir; not written unless the caller asks. |
 | CON-7 | **Authorized-use framing in docs & CLI help** | Defensive/recovery tool; operated against owned/authorized data. |
 
@@ -142,14 +181,20 @@ the same inputs yield the same result tree.
 | FR-9 | Optionally explode documents into internal parts (`--explode-documents`). | M |
 | FR-10 | Provide a reusable bounded `Pool` for long-running embedding. | H |
 | FR-11 | Checkpoint/resume a long single-file search. | L |
+| FR-12 | Serve detect/identify and decrypt/decompose over an HTTP API with the library's result shape. | H |
+| FR-13 | Export a probed challenge (and re-import a recovered password) so heavy cracking can run in an external GPU/OpenCL engine. | M |
 
 ---
 
 ## 5. Explicit non-goals (v1)
 
-- No GPU/OpenCL acceleration.
-- No distributed/multi-machine cracking.
-- No network or online/remote attacks of any kind.
+- No **in-tree** GPU/OpenCL acceleration. (Xcrack stays pure Go; heavy cracking
+  may be offloaded to a *separate, external* GPU engine via challenge export —
+  QA-14/FR-13 — which Xcrack does not implement or ship.)
+- No distributed/multi-machine cracking built into the engine.
+- No online/remote attacks of any kind. The `xcrackd` service (QA-13/FR-12) is a
+  transport in front of the offline engine, not a networked attack capability,
+  and ships no authentication/TLS of its own.
 - No cryptographic exploits or weakening of sound ciphers (offline guessing only).
 - No full-disk / volume encryption (BitLocker, FileVault, LUKS, VeraCrypt) in v1.
 - No document rendering or macro analysis (that is Impex's job; Xcrack only

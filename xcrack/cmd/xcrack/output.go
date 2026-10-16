@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,73 +11,10 @@ import (
 	"github.com/rom/xcrack/pkg/xcrack"
 )
 
-// nodeView is the JSON-serializable projection of a result Node.
-type nodeView struct {
-	Path         string     `json:"path"`
-	Format       string     `json:"format,omitempty"`
-	Status       string     `json:"status"`
-	WasEncrypted bool       `json:"encrypted"`
-	Password     string     `json:"password,omitempty"`
-	Error        string     `json:"error,omitempty"`
-	Size         int64      `json:"size,omitempty"`
-	SHA256       string     `json:"sha256,omitempty"`
-	Children     []nodeView `json:"children,omitempty"`
-}
-
-func buildView(n *xcrack.Node) nodeView {
-	v := nodeView{
-		Path:         n.Path,
-		Format:       n.Format,
-		Status:       n.Status.String(),
-		WasEncrypted: n.WasEncrypted,
-		Password:     n.Password,
-	}
-	if n.Err != nil {
-		v.Error = n.Err.Error()
-	}
-	if n.Content != nil {
-		v.Size = n.Content.Size()
-		sum := n.Content.SHA256()
-		v.SHA256 = hex.EncodeToString(sum[:])
-	}
-	for _, c := range n.Children {
-		v.Children = append(v.Children, buildView(c))
-	}
-	return v
-}
-
-type manifest struct {
-	Root      nodeView  `json:"root"`
-	Passwords []string  `json:"recovered_passwords"`
-	Stats     statsView `json:"stats"`
-}
-
-type statsView struct {
-	FilesSeen       int   `json:"files_seen"`
-	CandidatesTried int64 `json:"candidates_tried"`
-	BytesExtracted  int64 `json:"bytes_extracted"`
-	LimitHits       int   `json:"limit_hits"`
-	ElapsedMS       int64 `json:"elapsed_ms"`
-}
-
-func buildManifest(res *xcrack.Result) manifest {
-	return manifest{
-		Root:      buildView(res.Root),
-		Passwords: res.Passwords(),
-		Stats: statsView{
-			FilesSeen:       res.Stats.FilesSeen,
-			CandidatesTried: res.Stats.CandidatesTried,
-			BytesExtracted:  res.Stats.BytesExtracted,
-			LimitHits:       res.Stats.LimitHits,
-			ElapsedMS:       res.Stats.Elapsed.Milliseconds(),
-		},
-	}
-}
-
 func renderJSON(w io.Writer, res *xcrack.Result) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(buildManifest(res))
+	return enc.Encode(xcrack.BuildReport(res))
 }
 
 func renderJSONL(w io.Writer, res *xcrack.Result) error {
@@ -88,7 +24,7 @@ func renderJSONL(w io.Writer, res *xcrack.Result) error {
 		if err != nil {
 			return
 		}
-		err = enc.Encode(buildView(n))
+		err = enc.Encode(xcrack.BuildNodeReport(n))
 	})
 	return err
 }

@@ -157,7 +157,9 @@ xcrypto/
 │   ├─ ooxml/         ✓ MS Office agile + standard
 │   ├─ pdf/           ✓ RC4 40/128, AESV2-128, AESV3-256 (R2-R6, user+owner)
 │   ├─ odf/           ✓ ODF AES-256-CBC (PBKDF2-HMAC-SHA1 + SHA-256/SHA-1 start key)
-│   └─ officebinary/  ✓ legacy Office: RC4 CryptoAPI · Office 97/2000 RC4 · XOR
+│   ├─ officebinary/  ✓ legacy Office: RC4 CryptoAPI · Office 97/2000 RC4 · XOR
+│   ├─ age/           ✓ age scrypt passphrase (ChaCha20-Poly1305 + HKDF)   [x/crypto]
+│   └─ pgp/           ✓ symmetric OpenPGP (S2K + OpenPGP-CFB + SHA-1 MDC)
 ├─ candidates/        ✓ explicit · wordlist(+gzip,+stdin) · default list · chain
 ├─ pattern/           ✓ hashcat masks (?l?u?d?s?a?b, ?1-?4) + mangling rules + DSL
 └─ attack/            ✓ concurrent search over a Probe + Source, global semaphore
@@ -176,8 +178,10 @@ xfileformats/
 │   ├─ ooxml/         ✓ encrypted MS Office (CFB-wrapped; crypto via xcrypto)
 │   ├─ pdf/           ✓ encrypted PDF (parse /Encrypt+/ID; rebuild decrypted)
 │   ├─ odf/           ✓ encrypted ODF (AES-256-CBC; Blowfish-CFB detected→unsupported)
-│   ├─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
-│   └─ msoffice/      ✓ legacy .doc/.xls/.ppt (RC4 CryptoAPI / RC4 97-2000 / XOR)
+│   ├─ msoffice/      ✓ legacy .doc/.xls/.ppt (RC4 CryptoAPI / RC4 97-2000 / XOR)
+│   ├─ age/           ✓ age scrypt passphrase (whole-file)
+│   ├─ pgp/           ✓ symmetric OpenPGP / gpg -c (whole-file)
+│   └─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar (+ header-encrypted), eml/MIME
 └─ internal/cfb/      ✓ bounded OLE2 / compound-file reader (+ writer for fixtures)
 ```
 

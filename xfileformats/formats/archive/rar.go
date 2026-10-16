@@ -26,7 +26,8 @@ func (rarFormat) Detect(p []byte) (float64, bool) {
 func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, error) {
 	rr, err := rardecode.NewReader(section(r, size))
 	if err != nil {
-		return nil, xfileformats.ErrUnsupported // header-encrypted or invalid
+		// Encrypted headers (rar -hp) hide the listing; offer a gated entry.
+		return []*xfileformats.Entry{gatedEntry("rar-aes-header", rarHdrVerify(r, size), rarHdrTar(r, size))}, nil
 	}
 	var entries []*xfileformats.Entry
 	for len(entries) < maxEntries {
@@ -54,6 +55,52 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// rarHdrVerify returns a verifier for a header-encrypted rar.
+func rarHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
+	return func(pw []byte) (bool, error) {
+		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)))
+		if err != nil {
+			return false, nil
+		}
+		hdr, err := rr.Next()
+		if err != nil {
+			return err == io.EOF, nil // decrypted header, possibly empty archive
+		}
+		_ = hdr
+		return true, nil
+	}
+}
+
+// rarHdrTar returns an opener that repacks a header-encrypted rar's members as tar.
+func rarHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
+	return func(pw []byte) ([]byte, error) {
+		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)))
+		if err != nil {
+			return nil, xcrypto.ErrWrongPassword
+		}
+		var members []packMember
+		for len(members) < maxEntries {
+			hdr, err := rr.Next()
+			if err != nil {
+				break
+			}
+			if hdr.IsDir {
+				continue
+			}
+			name := sanitize(hdr.Name)
+			if name == "" {
+				continue
+			}
+			b, rerr := io.ReadAll(io.LimitReader(rr, maxDecompressed))
+			if rerr != nil {
+				return nil, rerr
+			}
+			members = append(members, packMember{name: name, data: b})
+		}
+		return packTar(members)
+	}
 }
 
 func rarOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {
