@@ -54,6 +54,9 @@ type Node struct {
 	WasEncrypted bool
 	// Password is the candidate that unlocked this node ("" if none).
 	Password string
+	// KeyRecovered reports that this node was unlocked by a known-plaintext key
+	// recovery (ZipCrypto) rather than by a password; Password is then "".
+	KeyRecovered bool
 	// Status is the processing outcome.
 	Status NodeStatus
 	// Err is non-nil for StatusError (never a panic).

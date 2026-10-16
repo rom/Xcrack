@@ -94,4 +94,15 @@ type Entry struct {
 	// Open returns the entry's decrypted, decompressed content as a bounded
 	// reader. password is required iff Encrypted and ignored otherwise.
 	Open func(password []byte) (io.Reader, error)
+	// KeyRecover, when non-nil, decrypts this entry via a known-plaintext key
+	// recovery instead of a password, for schemes where that applies (currently
+	// ZipCrypto). known is plaintext aligned to the start of the entry's encrypted
+	// data stream — for a STORED entry, the file's own leading bytes. offload is a
+	// scheme-specific external engine (e.g. a zipcrypto.Offloader such as
+	// ExternalBkcrack) used instead of the compute-heavy in-process search; pass
+	// nil to use the in-process attack. It returns the decrypted, decompressed
+	// content on success, ok=false when the known plaintext does not fit the
+	// scheme (so the caller falls back to a password search). The recovered state
+	// is always re-validated, so a wrong `known` cannot yield a false positive.
+	KeyRecover func(known []byte, offload any) (content io.Reader, ok bool, err error)
 }

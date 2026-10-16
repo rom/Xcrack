@@ -197,6 +197,16 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 // handled. It then annotates the child node with the encryption outcome.
 func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfileformats.Entry, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
 	if entry.Encrypted {
+		// Known-plaintext key recovery (no password), when enabled and the entry's
+		// scheme supports it (ZipCrypto). Tried before the password search; on
+		// failure (wrong/absent known plaintext) we fall through to it.
+		if kp := e.opts.KnownPlaintext; kp.For != nil && entry.KeyRecover != nil {
+			if known := kp.For(childPath); len(known) > 0 {
+				if child, ok := e.recoverWithPlaintext(ctx, childPath, entry, known, kp.Offload, depth, ancestors, prom, acc, base, ctxText); ok {
+					return child
+				}
+			}
+		}
 		verify := entry.Verify
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
@@ -237,6 +247,32 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		return e.errNode(childPath, rerr, acc)
 	}
 	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+}
+
+// recoverWithPlaintext attempts a known-plaintext key recovery for an encrypted
+// entry and, on success, decomposes the recovered content. It returns ok=false
+// (without producing a node) when recovery does not apply or fails, so the caller
+// falls back to the password search. The key-recovery closure re-validates its
+// result, so a wrong `known` cannot yield a false positive.
+func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, entry *xfileformats.Entry, known []byte, offload any, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (*Node, bool) {
+	r, ok, err := entry.KeyRecover(known, offload)
+	if err != nil || !ok {
+		return nil, false
+	}
+	data, rerr := readBounded(r, e.opts.Limits.MaxEntrySize)
+	if rerr != nil {
+		return e.errNode(childPath, rerr, acc), true
+	}
+	if e.opts.OnFound != nil {
+		e.opts.OnFound(Found{Path: childPath, KeyRecovered: true})
+	}
+	child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+	child.WasEncrypted = true
+	child.KeyRecovered = true
+	if child.Status == StatusPlain {
+		child.Status = StatusDecrypted
+	}
+	return child, true
 }
 
 // searchTarget finds a password that satisfies verify: it tries promoted

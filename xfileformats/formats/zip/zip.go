@@ -161,9 +161,59 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 		}
 		return bytes.NewReader(plain), nil
 	}
+	// keyRecover performs a known-plaintext key recovery (no password). `known` is
+	// aligned to the start of the encrypted DATA stream (the compressed bytes; for
+	// a STORED entry that is the file content itself). On success it rolls the
+	// recovered state back over the 12-byte header, decrypts the whole entry, and
+	// decompresses. The result's CRC is checked, so a wrong `known` (e.g. for a
+	// DEFLATE entry whose compressed bytes are unknown) cannot yield a false hit.
+	keyRecover := func(known []byte, offload any) (io.Reader, bool, error) {
+		raw, err := readRawBytes(zf, maxEntryRaw)
+		if err != nil {
+			return nil, false, err
+		}
+		if len(raw) < zipcrypto.HeaderLen {
+			return nil, false, nil
+		}
+		data := raw[zipcrypto.HeaderLen:]
+		n := len(known)
+		if n > len(data) {
+			n = len(data)
+		}
+		if n < zipcrypto.MinKnownPlaintext {
+			return nil, false, nil // not enough known plaintext to recover
+		}
+		var (
+			keys zipcrypto.Keys
+			ok   bool
+		)
+		if off, _ := offload.(zipcrypto.Offloader); off != nil {
+			keys, ok, err = zipcrypto.RecoverKeysWith(known[:n], data[:n], off)
+			if err != nil {
+				return nil, false, err
+			}
+		} else {
+			keys, ok = zipcrypto.RecoverKeys(known[:n], data[:n])
+		}
+		if !ok {
+			return nil, false, nil
+		}
+		// keys = state before data[0]; roll back over the header to the entry start.
+		start, _ := keys.RollBack(raw[:zipcrypto.HeaderLen])
+		full := append([]byte(nil), raw...)
+		start.Decrypt(full)
+		plain, err := decompress(full[zipcrypto.HeaderLen:], method)
+		if err != nil {
+			return nil, false, nil // recovered keys but content did not decompress
+		}
+		if crc32.ChecksumIEEE(plain) != crc {
+			return nil, false, nil // decompressed but CRC mismatch => not a real hit
+		}
+		return bytes.NewReader(plain), true, nil
+	}
 	return &xfileformats.Entry{
 		Path: name, Size: int64(zf.UncompressedSize64),
-		Encrypted: true, Challenge: ch, Verify: verify, Open: open,
+		Encrypted: true, Challenge: ch, Verify: verify, Open: open, KeyRecover: keyRecover,
 	}, nil
 }
 

@@ -13,6 +13,7 @@ import (
 
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
+	"github.com/rom/xcrypto/scheme/zipcrypto"
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
@@ -65,6 +66,9 @@ type Found struct {
 	Path     string
 	Format   string
 	Password string
+	// KeyRecovered reports that the node was unlocked by a known-plaintext key
+	// recovery (ZipCrypto) rather than a password; Password is then "".
+	KeyRecovered bool
 }
 
 // Options configures an engine/Pool. Every CLI flag maps to a field here, so
@@ -104,6 +108,11 @@ type Options struct {
 	// disables it.
 	CandidateProvider CandidateProvider
 
+	// KnownPlaintext, when enabled, lets the engine recover a ZipCrypto entry via a
+	// known-plaintext key-recovery attack (no password) before falling back to the
+	// password search. It is opt-in: the zero value disables it.
+	KnownPlaintext KnownPlaintext
+
 	// FastReject, when set, is a cheap per-format pre-check consulted before the
 	// expensive KDF for every generated candidate (context- and brute-force-
 	// derived): returning true discards the candidate without running Verify. It
@@ -113,6 +122,24 @@ type Options struct {
 	// safe for concurrent use. A FastReject that is too aggressive only slows or
 	// misses a crack; it can never cause a false positive.
 	FastReject func(path string, candidate []byte) bool
+}
+
+// KnownPlaintext configures an opt-in known-plaintext key-recovery attack for
+// ZipCrypto entries. When a plaintext fragment of an encrypted entry is known
+// (e.g. a STORED file whose content the embedder already has, or a known magic),
+// the internal key can be recovered directly — no password. The zero value is
+// disabled (For == nil).
+type KnownPlaintext struct {
+	// For returns known plaintext for the entry at path, aligned to the start of
+	// its encrypted data stream (for a STORED entry, the file's own leading
+	// bytes), or nil when none is available. At least zipcrypto.MinKnownPlaintext
+	// contiguous bytes are needed; more recovers faster.
+	For func(path string) []byte
+	// Offload, if non-nil, runs the search on an external engine (e.g.
+	// zipcrypto.ExternalBkcrack) instead of the compute-heavy in-process attack.
+	// The engine re-validates whatever it returns, so a faulty engine cannot
+	// cause a false positive.
+	Offload zipcrypto.Offloader
 }
 
 // DefaultOptions returns Options with explicit, conservative defaults. The zero
