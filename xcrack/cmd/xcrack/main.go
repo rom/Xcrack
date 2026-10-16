@@ -32,6 +32,8 @@ func run(args []string) int {
 			return 0
 		case "identify":
 			return runIdentify(args[1:])
+		case "kp":
+			return runKP(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -85,6 +87,8 @@ func runCrack(args []string) int {
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
+	pcfgF := fs_.Bool("pcfg", false, "train a PCFG on the candidate words and generate guesses in probability order")
+	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
@@ -217,8 +221,19 @@ func runCrack(args []string) int {
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
+
+	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
+	// the built-in list, and wordlist files, bounded), then cloned per file.
+	var pcfgModel *candidates.PCFG
+	if *pcfgF {
+		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
+	}
+
 	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
+		if pcfgModel != nil {
+			srcs = append(srcs, pcfgModel.Source(*pcfgMax))
+		}
 		// Root-name context: the engine derives name candidates for every nested
 		// node, but the top-level file's name is only known here, so seed it first.
 		if opts.ContextCandidates {
@@ -538,6 +553,8 @@ func usage() {
 USAGE:
   xcrack [flags] [sources...]      decrypt and recursively decompose sources
   xcrack identify [sources...]     detect format & encryption only
+  xcrack kp --plain P --cipher C   ZipCrypto known-plaintext key recovery
+                                   (no password; --bkcrack offloads the search)
   xcrack version
 
 COMMON FLAGS:

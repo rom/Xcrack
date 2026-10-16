@@ -107,6 +107,7 @@ archive that reuses a password is unlocked almost for free.
 | `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
 | `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
@@ -617,6 +618,65 @@ _ = rec.Password
 
 The envelope's `scheme` field is the stable discriminator an external bridge
 keys on; byte fields are hex-encoded.
+
+---
+
+## ZipCrypto known-plaintext attack
+
+Traditional PKWARE ("ZipCrypto") encryption is cryptographically broken: given
+~12+ bytes of known plaintext for an entry and the matching ciphertext, its
+internal key state can be recovered with **no password** (Biham–Kocher). The
+`xcrypto/scheme/zipcrypto` package implements the full attack in pure Go:
+
+```go
+import "github.com/rom/xcrypto/scheme/zipcrypto"
+
+// plain and cipher are the known plaintext and ciphertext at the same stream
+// positions (e.g. a file you know is in the archive). keys is the internal state.
+keys, ok := zipcrypto.RecoverKeys(plain, cipher)
+if ok {
+    // Roll back across the 12-byte header (recovering it) to reach the entry start,
+    // then decrypt the whole entry with keys.Decrypt.
+    start, _ := keys.RollBack(headerCiphertext)
+    _ = start
+}
+```
+
+**This is compute-heavy.** The keystream leaves a few ×10⁵ internal-key
+candidates and each needs a ~2¹⁶ key1 enumeration (a two-step *fiber* roll-back
+keeps it there rather than fanning out 256-wide per level — a ~34× per-window
+speedup). The candidates are independent, so the search runs across all CPU cores
+and scales **near-linearly** — measured ~16 / 28 / 62 candidates·s⁻¹ on 1 / 2 / 4
+cores. A representative full recovery (54-byte known plaintext) examined ~185k
+candidates and recovered the keys in **~57 min on a 4-core box**; expect roughly
+an hour on a laptop, a few minutes on a many-core server, and a further small
+constant factor from dedicated C++ tools such as *bkcrack*. More known plaintext
+does not shrink the candidate set. Use `RecoverKeysBudget(plain, cipher,
+maxCandidates)` to bound the effort and resume with a larger budget, hand the
+problem to a local *bkcrack* binary with `RecoverKeysWith(plain, cipher,
+zipcrypto.ExternalBkcrack{Bin: "bkcrack"})` (CLI `--bkcrack /path/to/bkcrack`),
+or offload the heavy search to an external/GPU engine via the challenge-export
+bridge above. The offload and this package's ZipCrypto primitives are
+cross-validated against the real *bkcrack* binary (`TestExternalBkcrackReal`,
+run with `XCRACK_BKCRACK=/path/to/bkcrack`); the offload's answer is always
+re-validated locally, so an external engine can never cause a false positive.
+
+`xcrack kp` exposes all of this: `--plain`/`--cipher` are the aligned known
+plaintext and ciphertext, `--bkcrack` offloads the search, and `--decrypt ENTRY
+--offset N` recovers the keys then decrypts a whole ZipCrypto entry — rolling the
+state back over the 12-byte header and any earlier data so a *mid-entry* known
+plaintext still unlocks the entire entry (`--keep-header` keeps the header
+bytes). `--recover-password MAXLEN:CHARSET` then recovers the actual password
+from the entry-start state via bkcrack (re-validated locally). The engine can do
+the same automatically for an archive entry via `Options.KnownPlaintext{For,
+Offload}` (e.g. a STORED entry whose content an embedder already holds).
+
+Two further knobs: the compute-heavy in-process attack honors context
+cancellation (`RecoverKeysCtx`), so an embedder can bound it; and *sparse* known
+plaintext (scattered known bytes) is available through the offload by passing
+bkcrack's `-x <offset> <hex>` via `ExternalBkcrack.Args` (the in-process attack
+is contiguous-only). Recovering a running key state from a broken cipher is
+legitimate cryptanalysis — no sound cipher is weakened.
 
 ---
 

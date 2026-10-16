@@ -31,6 +31,15 @@ func NewKeys(password []byte) Keys {
 	return k
 }
 
+// Words returns the three internal key words (key0, key1, key2). It exposes a
+// recovered state for reporting or for round-tripping through KeysFromWords.
+func (k Keys) Words() (key0, key1, key2 uint32) { return k.k0, k.k1, k.k2 }
+
+// KeysFromWords builds a Keys from the three internal words — e.g. the "X Y Z"
+// an external engine such as bkcrack reports. The caller is responsible for
+// validating them; the RecoverKeysWith offload path does so automatically.
+func KeysFromWords(key0, key1, key2 uint32) Keys { return Keys{k0: key0, k1: key1, k2: key2} }
+
 func (k *Keys) update(b byte) {
 	k.k0 = crc32update(k.k0, b)
 	k.k1 = k.k1 + (k.k0 & 0xff)
