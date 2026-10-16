@@ -4,7 +4,11 @@ import (
 	stdtar "archive/tar"
 	"bytes"
 	stdgzip "compress/gzip"
+	"os"
+	"path/filepath"
 	"testing"
+
+	"github.com/rom/xfileformats"
 )
 
 // FuzzEntries runs each archive parser on arbitrary bytes; invariant: no panic.
@@ -28,6 +32,23 @@ func FuzzEntries(f *testing.F) {
 	f.Add([]byte("Rar!\x1a\x07\x00"))
 	f.Add([]byte{0x1f, 0x8b})
 	f.Add([]byte{})
+	for _, name := range []string{"hdr.7z", "hdr.rar"} {
+		if b, err := os.ReadFile(filepath.Join("testdata", name)); err == nil {
+			f.Add(b)
+		}
+	}
+
+	probe := func(c xfileformats.Container, b []byte) {
+		entries, err := c.Entries(bytes.NewReader(b), int64(len(b)))
+		if err != nil {
+			return
+		}
+		for _, e := range entries {
+			if e.Verify != nil {
+				e.Verify([]byte("x")) // gated entries re-open with a candidate
+			}
+		}
+	}
 
 	f.Fuzz(func(t *testing.T, b []byte) {
 		r := bytes.NewReader(b)
@@ -43,7 +64,7 @@ func FuzzEntries(f *testing.F) {
 		bzip2Format{}.Entries(r, int64(len(b)))
 		tarFormat{}.Entries(r, int64(len(b)))
 		emlFormat{}.Entries(r, int64(len(b)))
-		sevenzipFormat{}.Entries(r, int64(len(b)))
-		rarFormat{}.Entries(r, int64(len(b)))
+		probe(sevenzipFormat{}, b)
+		probe(rarFormat{}, b)
 	})
 }

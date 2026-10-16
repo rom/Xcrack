@@ -25,13 +25,15 @@ func szIsDir(f *sevenzip.File) bool {
 	return f.Attributes&0x10 != 0 || strings.HasSuffix(f.Name, "/")
 }
 
-// Entries lists a 7z archive. Only content-encrypted archives (plaintext
-// headers) are enumerable without a password; header-encrypted archives report
-// unsupported.
+// Entries lists a 7z archive. Content-encrypted archives (plaintext headers)
+// are enumerated with per-entry encryption; a header-encrypted archive (names
+// hidden) becomes a single password-gated entry whose Open repacks the
+// decrypted members as a tar.
 func (sevenzipFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, error) {
 	rd, err := sevenzip.NewReaderWithPassword(r, size, "")
 	if err != nil {
-		return nil, xfileformats.ErrUnsupported // header-encrypted or invalid
+		// The header is encrypted (or the archive is invalid); offer a gated entry.
+		return []*xfileformats.Entry{gatedEntry("7z-aes256-header", szHdrVerify(r, size), szHdrTar(r, size))}, nil
 	}
 	// probe whether content is encrypted (uniform for `7z a -p`): opening without
 	// a password may succeed lazily, so actually attempt to read a byte.
@@ -73,6 +75,61 @@ func (sevenzipFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry,
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// szHdrVerify returns a verifier for a header-encrypted 7z: the password opens
+// the archive and the first member reads cleanly.
+func szHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
+	return func(pw []byte) (bool, error) {
+		rd, err := sevenzip.NewReaderWithPassword(r, size, string(pw))
+		if err != nil {
+			return false, nil
+		}
+		for _, f := range rd.File {
+			if szIsDir(f) {
+				continue
+			}
+			rc, oerr := f.Open()
+			if oerr != nil {
+				return false, nil
+			}
+			_, rerr := io.Copy(io.Discard, io.LimitReader(rc, 1))
+			rc.Close()
+			return rerr == nil, nil
+		}
+		return true, nil // header decrypted; archive has no files
+	}
+}
+
+// szHdrTar returns an opener that repacks a header-encrypted 7z's members as tar.
+func szHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
+	return func(pw []byte) ([]byte, error) {
+		rd, err := sevenzip.NewReaderWithPassword(r, size, string(pw))
+		if err != nil {
+			return nil, xcrypto.ErrWrongPassword
+		}
+		var members []packMember
+		for _, f := range rd.File {
+			if szIsDir(f) || len(members) >= maxEntries {
+				continue
+			}
+			name := sanitize(f.Name)
+			if name == "" {
+				continue
+			}
+			rc, oerr := f.Open()
+			if oerr != nil {
+				return nil, xcrypto.ErrWrongPassword
+			}
+			b, rerr := io.ReadAll(io.LimitReader(rc, maxDecompressed))
+			rc.Close()
+			if rerr != nil {
+				return nil, rerr
+			}
+			members = append(members, packMember{name: name, data: b})
+		}
+		return packTar(members)
+	}
 }
 
 func szOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {

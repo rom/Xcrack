@@ -181,7 +181,7 @@ xfileformats/
 │   ├─ msoffice/      ✓ legacy .doc/.xls/.ppt (RC4 CryptoAPI / RC4 97-2000 / XOR)
 │   ├─ age/           ✓ age scrypt passphrase (whole-file)
 │   ├─ pgp/           ✓ symmetric OpenPGP / gpg -c (whole-file)
-│   └─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar, eml/MIME (unpack-only)
+│   └─ archive/       ✓ tar, gzip, bzip2, xz/lzma, 7z, rar (+ header-encrypted), eml/MIME
 └─ internal/cfb/      ✓ bounded OLE2 / compound-file reader (+ writer for fixtures)
 ```
 

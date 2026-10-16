@@ -58,9 +58,12 @@ they are not date-bound. Each phase leaves `main` releasable.
 ## Phase 5 — Extended formats (demand-driven)
 - ✅ **age** (scrypt passphrase) and ✅ **GPG symmetric** (`gpg -c`, SEIPD v1/MDC),
   cross-validated against the `age` / `gpg` CLIs.
-- KeePass databases; Apple iWork; SQLCipher; encrypted DMG; header-encrypted
-  7z/RAR; RAR5 specifics. (Several need test oracles not present in the build
-  environment; implemented as fixtures become available.)
+- ✅ **Header-encrypted 7z/RAR** (`7z -mhe`, `rar -hp`): the whole archive is a
+  single password-gated entry that unlocks to a tar the engine re-decomposes,
+  cross-validated against the `7z` / `rar` CLIs.
+- KeePass databases; Apple iWork; SQLCipher; encrypted DMG; RAR5 specifics;
+  ODF AES-GCM. (Several need test oracles not present in the build environment;
+  implemented as fixtures become available.)
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate
   effort; gated on real demand and a dedicated threat review.
 
