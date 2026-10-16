@@ -5,6 +5,11 @@
 *.test
 *.out
 
+# `make build` writes compiled binaries here; keep the directory, ignore the
+# binaries that land in it.
+/bin/*
+!/bin/.gitkeep
+
 # Build / coverage
 /dist/
 coverage.*
