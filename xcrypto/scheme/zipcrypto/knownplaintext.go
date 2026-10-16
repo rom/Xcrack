@@ -15,7 +15,7 @@ package zipcrypto
 // trip (encrypt known plaintext, recover the state, decrypt the remainder). No
 // third-party code is used.
 //
-// Scope / status. This file ships the VERIFIED back half of the attack:
+// Scope / status. This file ships the key-recovery back half:
 //
 //   - RecoverInternalState: given the key2 (C) sequence over the known window
 //     plus the known plaintext, it reconstructs the full 96-bit internal state
@@ -24,13 +24,13 @@ package zipcrypto
 //     header (or any preceding ciphertext), recovering those plaintext bytes and
 //     the entry's start state so the whole entry decrypts.
 //
-// The FRONT half — reducing the key2 sequence from the keystream alone (the
-// "Zreduction" of Biham–Kocher / kimci86's bkcrack) — is intentionally NOT
-// shipped here: a naive enumeration is astronomically over-generating, and an
-// efficient, CORRECT reduction plus the fiber-table-based key1/key0 search is a
-// substantial, separately-verifiable effort. Until it lands, the key2 sequence
-// is expected to come from an external reducer (e.g. a GPU/bkcrack worker reached
-// through the challenge-export bridge). See docs/roadmap-enhancements.md.
+// The FRONT half — recovering the key2 sequence from the keystream alone (the
+// "Zreduction" + fiber-based key search of Biham–Kocher / kimci86's bkcrack) —
+// is implemented in zreduction.go, so the attack is now fully automatic:
+// RecoverKeys(plain, cipher) recovers the state with no password and no external
+// reducer. It is COMPUTE-HEAVY in pure Go (see that file); for time-sensitive
+// recovery the key2 sequence can still be supplied by an external engine through
+// the challenge-export bridge.
 //
 // Notation (per encrypted byte i, state BEFORE encrypting byte i):
 //

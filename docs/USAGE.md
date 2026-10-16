@@ -620,6 +620,38 @@ keys on; byte fields are hex-encoded.
 
 ---
 
+## ZipCrypto known-plaintext attack
+
+Traditional PKWARE ("ZipCrypto") encryption is cryptographically broken: given
+~12+ bytes of known plaintext for an entry and the matching ciphertext, its
+internal key state can be recovered with **no password** (Biham–Kocher). The
+`xcrypto/scheme/zipcrypto` package implements the full attack in pure Go:
+
+```go
+import "github.com/rom/xcrypto/scheme/zipcrypto"
+
+// plain and cipher are the known plaintext and ciphertext at the same stream
+// positions (e.g. a file you know is in the archive). keys is the internal state.
+keys, ok := zipcrypto.RecoverKeys(plain, cipher)
+if ok {
+    // Roll back across the 12-byte header (recovering it) to reach the entry start,
+    // then decrypt the whole entry with keys.Decrypt.
+    start, _ := keys.RollBack(headerCiphertext)
+    _ = start
+}
+```
+
+**This is compute-heavy.** The keystream leaves ~10⁵ internal-key candidates and
+each needs a ~2¹⁶ enumeration, so a full search can take hours in pure Go
+(dedicated C++ tools such as *bkcrack* do the same work in minutes). More known
+plaintext does not shrink the candidate set. Use `RecoverKeysBudget(plain,
+cipher, maxCandidates)` to bound the effort and resume with a larger budget, or
+offload the heavy search to an external engine via the challenge-export bridge
+above. Recovering a running key state from a broken cipher is legitimate
+cryptanalysis — no sound cipher is weakened.
+
+---
+
 ## Supported formats
 
 | Family | Formats | Notes |
