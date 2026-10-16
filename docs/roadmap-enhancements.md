@@ -15,7 +15,7 @@ Items marked **[batch]** are the current implementation batch.
 | | Feature | Notes |
 |--|---------|-------|
 | ⬜ | **ASCII-armored input** **[batch]** | Decode age armor (`-----BEGIN AGE ENCRYPTED FILE-----`) and OpenPGP armor (`-----BEGIN PGP MESSAGE-----`, base64 + CRC-24) before parsing. |
-| ⬜ | **Mask length incrementing** **[batch]** | `--increment[-min/-max]`: expand a mask over a length range. |
+| ✅ | **Mask length incrementing** | `pattern.ExpandIncrement(mask, min, max)` expands a mask over a length range (CLI wiring pending). |
 | ⬜ | **Live progress / rate / ETA (CLI)** **[batch]** | Opt-in `--progress`; candidates/sec and keyspace ETA to stderr via the existing `OnProgress` hook. |
 | ⬜ | **Potfile** **[batch]** | Record `digest → password`; skip already-cracked inputs (`--potfile`). |
 | ⬜ | **Structured logging** **[batch]** | Wire `Options.Logger` to `log/slog`; `--log-level`; never logs secrets. |
@@ -30,10 +30,10 @@ Items marked **[batch]** are the current implementation batch.
 | ⬜ | **Full rule engine** **[batch]** | Complete hashcat rule-function set, rule stacking, reject rules, `.rule` files. |
 | ⬜ | **Context / association candidates** **[batch]** | Seed candidates from filename, archive comments, document metadata, and strings harvested from already-decrypted siblings. |
 | ⬜ | **Per-format fast-reject** **[batch]** | A cheap pre-check hook run before the expensive KDF to discard hopeless candidates. |
-| ⬜ | **Candidate dedup** **[batch]** | A dedup wrapper (set / bloom filter) so masks×rules don't retry a string. |
+| ✅ | **Candidate dedup** | `candidates.Dedup` — bounded dedup wrapper so masks×rules don't retry a string. |
 | ⬜ | **Streaming large inputs** **[batch]** | Avoid materializing whole archives; stream bounded windows. |
 | ⬜ | **Prometheus-format metrics** **[batch]** | Text exposition of `Pool.Metrics()` at `/metrics`. |
-| ⬜ | **Combinator attack** **[batch]** | word₁+word₂ across two lists (+ optional separators/affixes). |
+| ✅ | **Combinator attack** | `candidates.Combinator(left, right, sep)` (CLI wiring pending). |
 | ⬜ | **Hybrid attack** | wordlist ± mask (dict+mask / mask+dict). |
 | ⬜ | `*2john` / hashcat hash-line emitters | Per-scheme `$…$` strings to complete the external-GPU bridge. |
 
@@ -42,7 +42,7 @@ Items marked **[batch]** are the current implementation batch.
 | | Feature | Notes |
 |--|---------|-------|
 | ⬜ | **Observability** **[batch]** | Audit log of what was decrypted (no secrets); optional trace spans. |
-| 🔬 | **Markov / PCFG generators** **[batch: Markov]** | Ordered statistical generation over a keyspace (Markov now; PCFG/OMEN later). |
+| 🚧 | **Markov / PCFG generators** | ✅ Markov generator (`candidates.MarkovGen`, best-first); PCFG/OMEN still 🔬. |
 | 🔬 | Distributed cracking | Keyspace sharding across a coordinator + workers. |
 | 🔬 | GPU/OpenCL offload (external) | Out of tree; reached via the hash-line bridge above. |
 | 🔬 | Adaptive scheduling | Order files/candidates by observed crackability; corpus-wide promotion. |
@@ -57,8 +57,8 @@ Items marked **[batch]** are the current implementation batch.
 | ✅ | Rule mangling (subset) | Implemented; full set is **[batch]** above. |
 | ✅ | Password promotion | Implemented. |
 | ✅ | Statistical **ordering** (Markov) | `candidates.ByScore` + `Markov`. |
-| ⬜ | **Combinator** **[batch]** | See §2. |
-| ⬜ | **Markov/PCFG generation** **[batch: Markov]** | See §3. |
+| ✅ | **Combinator** | `candidates.Combinator`. |
+| 🚧 | **Markov/PCFG generation** | Markov ✅ (`MarkovGen`); PCFG planned. |
 | ⬜ | **Known-plaintext attack on ZipCrypto** **[batch]** | Biham–Kocher key recovery (bkcrack-style): recover the internal keys from ~12 known plaintext bytes, no password. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). |
 | 🔬 | Hybrid, PRINCE, toggle/keyboard-walk | Additional generators. |
 
