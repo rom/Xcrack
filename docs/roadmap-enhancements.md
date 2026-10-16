@@ -66,14 +66,16 @@ Items marked **[batch]** are the current implementation batch.
 
 Implemented: ZIP (ZipCrypto/WinZip-AES), tar/gzip/bzip2/xz, 7z & RAR (incl.
 header-encrypted), OOXML, legacy MS Office (.doc/.xls/.ppt), PDF, ODF, MIME
-(.eml), age, symmetric OpenPGP.
+(.eml), age, symmetric OpenPGP, OpenSSH private keys, encrypted PEM/PKCS#8 keys.
 
 | | Format(s) | Notes |
 |--|-----------|-------|
+| ✅ | **OpenSSH private keys** | bcrypt-pbkdf + aes-ctr; verified via x/crypto/ssh, cross-checked against ssh-keygen. |
+| ✅ | **Encrypted PEM / PKCS#8 keys** | Traditional DEK-Info (EVP_BytesToKey) and PBES2 (PBKDF2 / scrypt + AES-CBC); cross-checked against OpenSSL. |
+| ⬜ | PuTTY `.ppk`, PKCS#12 `.p12`, JKS/BKS | Remaining key-store formats. |
 | ⬜ | Disk images: ISO/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack, not always crypto). |
 | ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack. |
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
-| ⬜ | Key stores: SSH private keys, PuTTY `.ppk`, PEM, PKCS#8/#12, JKS/BKS | Classic crack targets. |
 | ⬜ | KeePass `.kdbx`, SQLCipher | Staged pending test fixtures. |
 | ⬜ | Apple iWork, ODF AES-GCM, Hangul HWP | Document suites. |
 | 🔬 | Full-volume: BitLocker, VeraCrypt, LUKS, FileVault | Large, separate effort + threat review. |

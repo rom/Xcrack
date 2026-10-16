@@ -21,6 +21,7 @@ import (
 	"github.com/rom/xfileformats/formats/ooxml"
 	"github.com/rom/xfileformats/formats/pdf"
 	fpgp "github.com/rom/xfileformats/formats/pgp"
+	"github.com/rom/xfileformats/formats/privkey"
 	"github.com/rom/xfileformats/formats/sshkey"
 	"github.com/rom/xfileformats/formats/zip"
 )
@@ -138,6 +139,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	age.Register(r)
 	fpgp.Register(r)
 	sshkey.Register(r)
+	privkey.Register(r)
 	return r
 }
 
