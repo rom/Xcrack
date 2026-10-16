@@ -93,6 +93,50 @@ func TestContextSource(t *testing.T) {
 	}
 }
 
+func TestFromHint(t *testing.T) {
+	// A literal hint (the common case) comes out first and verbatim.
+	got := FromHint("Password", 0)
+	if len(got) == 0 || got[0] != "Password" {
+		t.Fatalf("FromHint(\"Password\")[0] = %q, want \"Password\"; all=%v", firstOr(got), got)
+	}
+	// A phrase yields the literal, its tokens, and the concatenation.
+	got = FromHint("my dog Rex", 0)
+	want := map[string]bool{"my dog Rex": true, "my": true, "dog": true, "Rex": true, "mydogRex": true}
+	for w := range want {
+		if !contains(got, w) {
+			t.Errorf("FromHint phrase missing %q; got %v", w, got)
+		}
+	}
+	// A "keyword: value" hint surfaces the value.
+	if got = FromHint("the password is hunter2", 0); !contains(got, "hunter2") {
+		t.Errorf("FromHint keyword extraction missing hunter2; got %v", got)
+	}
+	// Digit runs are pulled out.
+	if got = FromHint("born 1998", 0); !contains(got, "1998") {
+		t.Errorf("FromHint missing digit run 1998; got %v", got)
+	}
+	// Empty / whitespace hint yields nothing.
+	if got = FromHint("   ", 0); len(got) != 0 {
+		t.Errorf("FromHint(blank) = %v, want empty", got)
+	}
+}
+
+func contains(ss []string, s string) bool {
+	for _, x := range ss {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
+
+func firstOr(ss []string) string {
+	if len(ss) == 0 {
+		return ""
+	}
+	return ss[0]
+}
+
 func TestDigitRuns(t *testing.T) {
 	cases := []struct {
 		in   string

@@ -89,6 +89,14 @@ type Options struct {
 	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
+	HintCandidates    bool // seed each search with candidates derived from a format's embedded password hint (e.g. iWork .iwph, ZIP comment), tried right after promoted passwords (default: off)
+
+	// HintRules, when set, expands each hint-derived base word into variants
+	// (case/leet/append-digits/…) to also try. It is a word->variants function so
+	// the engine stays decoupled from the rule compiler; the CLI builds it from a
+	// hashcat-style rule file via --hint-rules. Applied only when HintCandidates
+	// is on. nil => try the hint-derived base words only.
+	HintRules func(base string) []string
 
 	Limits Limits
 	Budget Budget

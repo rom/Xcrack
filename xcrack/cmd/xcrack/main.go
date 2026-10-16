@@ -87,6 +87,8 @@ func runCrack(args []string) int {
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
+	hintF := fs_.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment), tried first")
+	hintRulesF := fs_.String("hint-rules", "", "hashcat-style rule file applied to hint-derived words (implies --hint)")
 	pcfgF := fs_.Bool("pcfg", false, "train a PCFG on the candidate words and generate guesses in probability order")
 	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
 
@@ -136,6 +138,15 @@ func runCrack(args []string) int {
 	}
 	opts.FindAll = *findAll
 	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
+	opts.HintCandidates = *hintF || *hintRulesF != "" || (cfg != nil && (cfg.Search.Hint || len(cfg.Search.HintRules) > 0))
+	if opts.HintCandidates {
+		mangler, herr := buildHintRules(*hintRulesF, cfg)
+		if herr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: hint-rules: %v\n", herr)
+			return 2
+		}
+		opts.HintRules = mangler
+	}
 
 	opts.Limits = xcrack.DefaultLimits()
 	opts.Limits.MaxDepth = resolveInt(set["max-depth"], *maxDepth, "", cfgInt(cfg, func(c *fileConfig) int { return c.Limits.MaxDepth }), opts.Limits.MaxDepth)
@@ -566,6 +577,9 @@ COMMON FLAGS:
       --format text|json|jsonl
       --workers N  --file-jobs N  --max-procs N
       --timeout D  --max-duration D  --batch-size N  --throttle PCT
+      --context                  derive guesses from names + plain siblings
+      --hint                     derive guesses from an embedded password hint
+      --hint-rules FILE          rule file applied to hint-derived words
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list
@@ -577,6 +591,39 @@ Authorized use only: operate on files you own or are permitted to access.
 
 // buildPatternSet merges the pattern-file DSL (--pattern) and the config's
 // patterns block into one compiled pattern.Set (masks + rules + custom charsets).
+// buildHintRules compiles the hint-mangling ruleset from the --hint-rules file
+// (hashcat-style, one rule per line) plus any inline rules in the config, and
+// returns a word->variants function for Options.HintRules. It returns nil when
+// there are no rules, so only the hint-derived base words are tried.
+func buildHintRules(file string, cfg *fileConfig) (func(string) []string, error) {
+	var lines []string
+	if file != "" {
+		data, err := os.ReadFile(file)
+		if err != nil {
+			return nil, err
+		}
+		lines = append(lines, strings.Split(string(data), "\n")...)
+	}
+	if cfg != nil {
+		lines = append(lines, cfg.Search.HintRules...)
+	}
+	rs, err := pattern.CompileRules(lines)
+	if err != nil {
+		return nil, err
+	}
+	if rs.Len() == 0 {
+		return nil, nil
+	}
+	return func(base string) []string {
+		mangled := rs.Apply([]byte(base))
+		out := make([]string, 0, len(mangled))
+		for _, v := range mangled {
+			out = append(out, string(v))
+		}
+		return out
+	}, nil
+}
+
 func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, error) {
 	spec := pattern.Spec{CustomCharsets: map[rune]string{}}
 	for _, f := range files {

@@ -69,12 +69,14 @@ func (f *Format) Probe(r io.ReaderAt, size int64) (*xcrypto.Challenge, error) {
 	if err != nil {
 		return nil, xfileformats.ErrUnknownFormat // not a valid zip => not iWork
 	}
-	var verifier *stdzip.File
+	var verifier, hint *stdzip.File
 	isIWork := false
 	for _, zf := range zr.File {
 		switch {
 		case zf.Name == xiwork.VerifierName:
 			verifier = zf
+		case zf.Name == xiwork.HintName:
+			hint = zf
 		case strings.HasPrefix(zf.Name, "Index/") && strings.HasSuffix(zf.Name, ".iwa"):
 			isIWork = true
 		}
@@ -101,7 +103,30 @@ func (f *Format) Probe(r io.ReaderAt, size int64) (*xcrypto.Challenge, error) {
 		ch.Extra = map[string][]byte{}
 	}
 	ch.Extra["iwpv2"] = raw
+	// The optional `.iwph` member is a plaintext password hint the user set; it is
+	// untrusted and often equals (or strongly suggests) the passphrase.
+	if hint != nil {
+		if hb, herr := readMember(hint, maxVerifier); herr == nil {
+			ch.Hint = sanitizeHint(hb)
+		}
+	}
 	return ch, nil
+}
+
+// sanitizeHint trims an untrusted hint and drops control characters, capping its
+// length. The result is only ever used to derive candidate strings.
+func sanitizeHint(b []byte) string {
+	const maxHint = 256
+	if len(b) > maxHint {
+		b = b[:maxHint]
+	}
+	s := strings.Map(func(r rune) rune {
+		if r == '\t' || (r >= 0x20 && r != 0x7f) {
+			return r
+		}
+		return -1
+	}, string(b))
+	return strings.TrimSpace(s)
 }
 
 // Verify tests a passphrase against the probed `.iwpv2`.
