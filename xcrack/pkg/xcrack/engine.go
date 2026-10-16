@@ -266,7 +266,17 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	}
 	spill := newSpillSet(p.opts.Limits.SpillThreshold, p.opts.Limits.TempDir)
 	e := &engine{opts: p.opts, cracker: p.cracker, spill: spill}
-	data, err := readAllAt(src, size, p.opts.Limits.MaxEntrySize)
+	// Stream the input into a source (to disk when large), capping at
+	// MaxEntrySize: the section reader is pre-bounded, so an oversize root file
+	// is truncated to the cap rather than rejected (as the whole-file read was).
+	if size < 0 {
+		size = 0
+	}
+	limit := size
+	if m := p.opts.Limits.MaxEntrySize; m > 0 && limit > m {
+		limit = m
+	}
+	rootSrc, err := spill.materializeReader(io.NewSectionReader(src, 0, limit), 0)
 	if err != nil {
 		p.metrics.processingErrors.Add(1)
 		return nil, err
@@ -285,7 +295,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 		shared = p.learned
 	}
 	prom := newPromoter(!p.opts.NoPromote, shared)
-	root := e.decompose(ctx, "", data, 0, nil, prom, acc, effective, nil)
+	root := e.decompose(ctx, "", rootSrc, 0, nil, prom, acc, effective, nil)
 	stats := acc.snapshot()
 	stats.Elapsed = time.Since(start)
 	res := &Result{Root: root, Stats: stats, spills: spill}
@@ -308,24 +318,6 @@ func Process(ctx context.Context, src io.ReaderAt, size int64, candidates Candid
 	p := NewPool(opts)
 	defer p.Close()
 	return p.Process(ctx, src, size, candidates)
-}
-
-// readAllAt reads up to max+1 bytes from an io.ReaderAt so oversize can be
-// detected, then returns exactly the content or an error if it exceeds max.
-func readAllAt(src io.ReaderAt, size, max int64) ([]byte, error) {
-	if size < 0 {
-		size = 0
-	}
-	limit := size
-	if max > 0 && limit > max {
-		limit = max
-	}
-	buf := make([]byte, limit)
-	n, err := io.ReadFull(io.NewSectionReader(src, 0, limit), buf)
-	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
-		return nil, err
-	}
-	return buf[:n], nil
 }
 
 // tighter returns the smaller positive duration of a and b (0 means "no bound").

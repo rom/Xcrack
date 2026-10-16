@@ -10,14 +10,14 @@ import (
 // engine's defense against decompression bombs and runaway recursion. A caller
 // may relax them but not below the safety floors applied by (Options).normalize.
 type Limits struct {
-	MaxDepth       int   // nesting ceiling
-	MaxTotalBytes  int64 // cumulative decompressed budget across the whole tree
-	MaxNodes       int   // total nodes (entries) produced
-	MaxEntrySize   int64 // single-entry content cap
-	MaxRatio       int   // reserved: per-entry compression-ratio cap
-	MaxCandidates  int64 // candidates tested per encrypted node (0 => unlimited)
-	SpillThreshold int64 // reserved: spill intermediates to disk above this size
-	TempDir        string
+	MaxDepth       int    // nesting ceiling
+	MaxTotalBytes  int64  // cumulative decompressed budget across the whole tree
+	MaxNodes       int    // total nodes (entries) produced
+	MaxEntrySize   int64  // single-entry content cap
+	MaxRatio       int    // reserved: per-entry compression-ratio cap
+	MaxCandidates  int64  // candidates tested per encrypted node (0 => unlimited)
+	SpillThreshold int64  // stream entry/decrypted content to a temp file above this size (0 => always in memory)
+	TempDir        string // directory for spill temp files ("" => the OS default)
 }
 
 // DefaultLimits returns conservative, bomb-resistant defaults.

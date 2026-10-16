@@ -1,9 +1,7 @@
 package xcrack
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -26,7 +24,7 @@ type engine struct {
 // a Node. It is the single node factory: callers that have already decrypted an
 // entry still route its plaintext bytes through here so nested containers are
 // handled uniformly.
-func (e *engine) decompose(ctx context.Context, path string, data []byte, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
+func (e *engine) decompose(ctx context.Context, path string, src *source, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) *Node {
 	n := &Node{Path: path}
 
 	if err := ctx.Err(); err != nil {
@@ -44,7 +42,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		acc.limitHit()
 		return n
 	}
-	sum := sha256.Sum256(data)
+	sum := src.sum
 	for _, a := range ancestors {
 		if a == sum { // this content is one of its own ancestors => cycle/quine
 			n.Status = StatusLimitExceeded
@@ -52,7 +50,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 			return n
 		}
 	}
-	if !acc.reserveBytes(int64(len(data))) {
+	if !acc.reserveBytes(src.size) {
 		n.Status = StatusLimitExceeded
 		acc.limitHit()
 		return n
@@ -69,10 +67,10 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		enc       xfileformats.Encrypted
 		encrypted bool
 	)
-	for _, cand := range e.opts.Registry.DetectAll(peek(data)) {
+	for _, cand := range e.opts.Registry.DetectAll(src.peek()) {
 		cc := cand.Caps()
 		if ce, ok := cand.(xfileformats.Encrypted); ok && cc.Encrypted {
-			c, perr := safeProbe(ce, bytes.NewReader(data), int64(len(data)))
+			c, perr := safeProbe(ce, src.readerAt(), src.size)
 			if perr != nil {
 				if errors.Is(perr, xfileformats.ErrUnsupported) || errors.Is(perr, xfileformats.ErrUnknownFormat) {
 					continue // recognizes the magic but not this file; try next
@@ -81,7 +79,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 				if errors.Is(perr, xfileformats.ErrNotEncrypted) {
 					// recognized but plaintext: a plain leaf.
 					n.Status = StatusPlain
-					n.Content = e.spill.materialize(data)
+					n.Content = src
 					return n
 				}
 				n.Status = StatusError
@@ -100,7 +98,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if fm == nil {
 		// Unknown format, or every encrypted candidate declined => plaintext leaf.
 		n.Status = StatusPlain
-		n.Content = e.spill.materialize(data)
+		n.Content = src
 		return n
 	}
 	n.Format = fm.Name()
@@ -108,7 +106,6 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	// Whole-file encryption (e.g. an encrypted OOXML/PDF wrapper). ZIP is NOT
 	// handled here -- its encryption is per-entry (see the Container branch).
 	if encrypted {
-		ra := bytes.NewReader(data)
 		verify := func(pw []byte) (bool, error) {
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
@@ -121,14 +118,16 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		}
 		prom.add(pw)
 		_, key, _ := enc.Verify(ch, []byte(pw))
-		pr, derr := safeDecrypt(enc, ra, int64(len(data)), ch, key)
+		pr, derr := safeDecrypt(enc, src.readerAt(), src.size, ch, key)
 		if derr != nil {
 			n.WasEncrypted = true
 			n.Status = StatusError
 			n.Err = derr
 			return n
 		}
-		plain, rerr := readBounded(pr, e.opts.Limits.MaxEntrySize)
+		// Stream the decrypted payload into a fresh source (to disk if large), so
+		// a big decrypted blob is never fully held in RAM.
+		plainSrc, rerr := e.spill.materializeReader(pr, e.opts.Limits.MaxEntrySize)
 		if rerr != nil {
 			n.WasEncrypted = true
 			n.Status = StatusError
@@ -144,10 +143,10 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 		// the candidates rather than the single best format -- a non-container
 		// format that merely outranks it (e.g. the whole-file iwork detector,
 		// which shares the ZIP magic) must not shadow the real zip container.
-		data = plain
-		sum = sha256.Sum256(data)
+		src = plainSrc
+		sum = src.sum
 		caps = xfileformats.Caps{}
-		for _, cand := range e.opts.Registry.DetectAll(peek(data)) {
+		for _, cand := range e.opts.Registry.DetectAll(src.peek()) {
 			if cand.Caps().Container {
 				fm = cand
 				caps = cand.Caps()
@@ -158,7 +157,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 
 	// Container with child entries.
 	if cont, ok := fm.(xfileformats.Container); ok && caps.Container && !e.opts.NoRecurse && (!caps.Explodable || e.opts.ExplodeDocuments) {
-		entries, eerr := safeEntries(cont, bytes.NewReader(data), int64(len(data)))
+		entries, eerr := safeEntries(cont, src.readerAt(), src.size)
 		if eerr != nil {
 			// A container that recognizes the magic but not this specific file
 			// (e.g. an OLE2 compound file that is neither encrypted OOXML nor a
@@ -167,7 +166,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 				if !n.WasEncrypted {
 					n.Status = StatusPlain
 				}
-				n.Content = e.spill.materialize(data)
+				n.Content = src
 				return n
 			}
 			if !n.WasEncrypted {
@@ -194,7 +193,7 @@ func (e *engine) decompose(ctx context.Context, path string, data []byte, depth 
 	if !n.WasEncrypted {
 		n.Status = StatusPlain
 	}
-	n.Content = e.spill.materialize(data)
+	n.Content = src
 	return n
 }
 
@@ -231,11 +230,11 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if oerr != nil {
 			return e.errNode(childPath, oerr, acc)
 		}
-		data, rerr := readBounded(r, e.opts.Limits.MaxEntrySize)
+		childSrc, rerr := e.spill.materializeReader(r, e.opts.Limits.MaxEntrySize)
 		if rerr != nil {
 			return e.errNode(childPath, rerr, acc)
 		}
-		child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+		child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 		child.WasEncrypted = true
 		child.Password = pw
 		if child.Status == StatusPlain {
@@ -248,11 +247,11 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 	if oerr != nil {
 		return e.errNode(childPath, oerr, acc)
 	}
-	data, rerr := readBounded(r, e.opts.Limits.MaxEntrySize)
+	childSrc, rerr := e.spill.materializeReader(r, e.opts.Limits.MaxEntrySize)
 	if rerr != nil {
 		return e.errNode(childPath, rerr, acc)
 	}
-	return e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+	return e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 }
 
 // recoverWithPlaintext attempts a known-plaintext key recovery for an encrypted
@@ -265,14 +264,14 @@ func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, ent
 	if err != nil || !ok {
 		return nil, false
 	}
-	data, rerr := readBounded(r, e.opts.Limits.MaxEntrySize)
+	childSrc, rerr := e.spill.materializeReader(r, e.opts.Limits.MaxEntrySize)
 	if rerr != nil {
 		return e.errNode(childPath, rerr, acc), true
 	}
 	if e.opts.OnFound != nil {
 		e.opts.OnFound(Found{Path: childPath, KeyRecovered: true})
 	}
-	child := e.decompose(ctx, childPath, data, depth, ancestors, prom, acc, base, ctxText)
+	child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 	child.WasEncrypted = true
 	child.KeyRecovered = true
 	if child.Status == StatusPlain {
