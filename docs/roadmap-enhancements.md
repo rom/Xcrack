@@ -59,7 +59,7 @@ Items marked **[batch]** are the current implementation batch.
 | ✅ | Statistical **ordering** (Markov) | `candidates.ByScore` + `Markov`. |
 | ✅ | **Combinator** | `candidates.Combinator`. |
 | 🚧 | **Markov/PCFG generation** | Markov ✅ (`MarkovGen`); PCFG planned. |
-| ⬜ | **Known-plaintext attack on ZipCrypto** **[batch]** | Biham–Kocher key recovery (bkcrack-style): recover the internal keys from ~12 known plaintext bytes, no password. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). |
+| 🚧 | **Known-plaintext attack on ZipCrypto** | Biham–Kocher key recovery (bkcrack-style): recover the 96-bit internal state from known plaintext, no password. ZipCrypto is cryptographically broken, so this is legitimate cryptanalysis (not weakening a sound cipher). **Shipped & verified** (`xcrypto/scheme/zipcrypto`): the exact cipher-inverse primitives (crc32 inverse, mult inverse, keystream↔key2 table — unit-tested as exact inverses); `RecoverInternalState(key2Seq, plain)` — reconstructs the full state from the key2 sequence over the window + the known plaintext (round-trip validated); `Keys.RollBack` — rolls a recovered state back across the header, recovering it. **Staged (front half):** the keystream-only *Zreduction* of the key2 sequence + the fiber-table key1/key0 search — a naive enumeration over-generates astronomically, so an efficient, separately-verifiable reduction is still to land; until then the key2 sequence comes from an external reducer (e.g. a GPU/bkcrack worker via the challenge-export bridge). |
 | 🔬 | Hybrid, PRINCE, toggle/keyboard-walk | Additional generators. |
 
 ## 5. Application file formats
