@@ -31,9 +31,9 @@ func (ei *encInfo) verify(pw []byte) (bool, error) {
 func (ei *encInfo) challenge() *xcrypto.Challenge {
 	switch ei.kind {
 	case "rc4-cryptoapi":
-		return officebinary.ChallengeCryptoAPI(ei.salt, ei.keyBits, ei.encVerifierHash)
+		return officebinary.ChallengeCryptoAPI(ei.salt, ei.keyBits, ei.encVerifier, ei.encVerifierHash)
 	case "rc4":
-		return officebinary.ChallengeRC4(ei.salt, ei.encVerifierHash)
+		return officebinary.ChallengeRC4(ei.salt, ei.encVerifier, ei.encVerifierHash)
 	case "xor":
 		return officebinary.ChallengeXOR(ei.xorVerifier)
 	}
