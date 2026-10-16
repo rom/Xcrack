@@ -668,6 +668,22 @@ xcrackd -addr :8080 -max-procs 16
 | `-allow-default-list` | off | permit `?defaults=true` to use the embedded wordlist |
 | `-read-timeout` / `-write-timeout` | 30s / 150s | HTTP timeouts |
 | `-shutdown-grace` | 20s | graceful-shutdown window |
+| `-gpu` | off | enable the optional OpenCL GPU tier (needs a `-tags opencl` build + OpenCL hardware; otherwise logs why and runs on CPU) |
+| `-gpu-selftest` | off | validate the OpenCL PBKDF2 kernel against the CPU reference, then exit |
+
+**Optional GPU tier (server only).** The default `xcrackd` is pure-Go and
+CPU-only. On a server with OpenCL hardware you can build an accelerated binary
+and opt in:
+
+```sh
+go build -tags opencl -o bin/xcrackd-gpu ./xcrack/cmd/xcrackd
+bin/xcrackd-gpu -gpu-selftest        # prove the kernel matches the CPU reference
+bin/xcrackd-gpu -gpu -addr :8080     # hardware-gated; falls back to CPU if absent
+```
+
+The GPU tier only accelerates PBKDF2-HMAC-SHA1 key derivation (the shared KDF);
+it never parses or opens file content, and the default build / CI never include
+it (ADR 0001 amendment).
 
 **Endpoints:**
 

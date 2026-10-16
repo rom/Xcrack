@@ -85,7 +85,9 @@ they are not date-bound. Each phase leaves `main` releasable.
 - Documentation kept in lock-step (ADR per significant decision).
 
 ## Explicitly out (all phases)
-- GPU/OpenCL cracking.
+- GPU/OpenCL cracking in the default build — **except** the opt-in, hardware-gated
+  `xcrackd` server tier (`-tags opencl`, `pkg/accel`), which never ships in the
+  pure-Go default or in CI (see ADR 0001 amendment).
 - Any network/online/remote attack.
 - Cryptographic weakening/exploitation of sound algorithms.
 - Executing or rendering file content.
