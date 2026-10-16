@@ -30,8 +30,10 @@ type fileConfig struct {
 		ExplodeDocuments bool  `yaml:"explode_documents"`
 	} `yaml:"recursion"`
 	Search struct {
-		Promote *bool `yaml:"promote_passwords"`
-		Context bool  `yaml:"context_candidates"`
+		Promote   *bool    `yaml:"promote_passwords"`
+		Context   bool     `yaml:"context_candidates"`
+		Hint      bool     `yaml:"hint_candidates"`
+		HintRules []string `yaml:"hint_rules"` // hashcat-style rule lines applied to hint-derived words
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`

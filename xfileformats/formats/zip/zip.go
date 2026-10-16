@@ -120,6 +120,26 @@ func (f *Format) makeEntry(zf *stdzip.File, name string) (*xfileformats.Entry, e
 	return f.makeZipCryptoEntry(zf, name)
 }
 
+// zipHint normalizes an untrusted ZIP entry comment into a password hint: it
+// trims whitespace, drops control characters, and caps the length. Empty when
+// there is no useful comment.
+func zipHint(comment string) string {
+	const maxHint = 256
+	if comment == "" {
+		return ""
+	}
+	if len(comment) > maxHint {
+		comment = comment[:maxHint]
+	}
+	s := strings.Map(func(r rune) rune {
+		if r == '\t' || (r >= 0x20 && r != 0x7f) {
+			return r
+		}
+		return -1
+	}, comment)
+	return strings.TrimSpace(s)
+}
+
 func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats.Entry, error) {
 	method := zf.Method
 	if method != methodStore && method != methodDeflate {
@@ -127,6 +147,7 @@ func (f *Format) makeZipCryptoEntry(zf *stdzip.File, name string) (*xfileformats
 	}
 	crc, flags, dosTime := zf.CRC32, zf.Flags, zf.ModifiedTime
 	ch := zipcrypto.Challenge(int64(zf.UncompressedSize64))
+	ch.Hint = zipHint(zf.Comment) // a per-entry comment is sometimes a password hint
 
 	decryptPlain := func(password []byte) ([]byte, error) {
 		raw, err := readRawBytes(zf, maxEntryRaw)
@@ -228,6 +249,7 @@ func (f *Format) makeAESEntry(zf *stdzip.File, name string, p winzipaes.Params) 
 		KDF:               xcrypto.KDFSpec{Algo: "pbkdf2-hmac-sha1", Iterations: winzipaes.PBKDF2Iter, KeyLen: p.KeyLen()},
 		Cipher:            xcrypto.CipherSpec{Algo: "aes-ctr", KeyBits: p.KeyLen() * 8},
 		DecryptedSizeHint: int64(zf.UncompressedSize64),
+		Hint:              zipHint(zf.Comment),
 	}
 	if hdr, err := readRawBytes(zf, int64(p.SaltLen()+winzipaes.PWVerifLen)); err == nil && len(hdr) >= p.SaltLen()+winzipaes.PWVerifLen {
 		ch.KDF.Salt = append([]byte(nil), hdr[:p.SaltLen()]...)

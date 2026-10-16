@@ -107,6 +107,8 @@ archive that reuses a password is unlocked almost for free.
 | `--password-env VAR` | a candidate password read from an environment variable (not visible in `ps`) |
 | `--potfile FILE` | load recovered passwords from `FILE` (tried first everywhere) and append newly recovered ones |
 | `--context` | seed guesses from the file/entry name and plaintext harvested from plain sibling entries (see [Context candidates](#context-candidates)) |
+| `--hint` | derive guesses from a file's embedded password hint (iWork `.iwph`, ZIP comment), tried first (see [Hint candidates](#hint-candidates)) |
+| `--hint-rules FILE` | hashcat-style rule file applied to hint-derived words (implies `--hint`) |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
@@ -149,6 +151,33 @@ first. Harvesting is bounded (64 KiB per plain entry, 256 KiB per container) and
 reads only *unencrypted* siblings. The feature is **off by default** (it widens
 the search a little); enable it per run with `--context` or in a config file
 with `search: { context_candidates: true }`.
+
+#### Hint candidates
+
+Some formats carry an in-file **password hint** that the author set — Apple
+iWork stores one in a `.iwph` member, and a ZIP entry can have a comment. The
+hint is often the password itself or a thin clue. With `--hint`, the engine
+derives candidates from it and tries them **first** (right after promoted
+passwords): the literal hint, its alphanumeric tokens and their concatenation,
+embedded digit runs, and any value the hint quotes or names (`pw: hunter2`).
+
+`--hint-rules FILE` (or `search: { hint_rules: [...] }`) applies a
+hashcat-style ruleset to each hint-derived word, so a hint like `sesame` also
+tries `Sesame`, `SESAME`, `Sesame!`, `Sesame2024`, `s3s4m3`, … — exactly the
+rule DSL used by `--pattern`. Giving `--hint-rules` implies `--hint`.
+
+```sh
+# Unlock an iWork doc straight from its .iwph hint (often the password):
+xcrack --hint protected.pages
+
+# Treat the hint as a stem and mangle it into likely passwords:
+xcrack --hint --hint-rules rules/best64.rule secret.zip
+```
+
+The hint is untrusted, attacker-influenced text; only candidate strings are
+derived from it. The feature is **off by default**. See
+[`config/hint-and-context.yaml`](../config/hint-and-context.yaml) for a worked
+config.
 
 #### Checkpoint / resume
 
@@ -288,6 +317,11 @@ recursion:
 
 search:
   promote_passwords: true
+  context_candidates: false
+  hint_candidates: false    # derive guesses from an embedded password hint
+  hint_rules:               # hashcat-style rules applied to hint-derived words
+    - "c"
+    - "$2 $0 $2 $4"
 
 candidates:
   passwords: [infected, Welcome1]
@@ -315,6 +349,10 @@ budget:
 xcrack -c xcrack.yaml /inbox/
 xcrack -c xcrack.yaml --workers 2 /inbox/     # flag overrides the config
 ```
+
+Ready-to-adapt example configs live in [`config/`](../config/) — basic wordlist,
+mask+rules, hint+context, fast triage, and deep batch — see its
+[`README`](../config/README.md).
 
 ### Environment variables
 
@@ -686,11 +724,11 @@ legitimate cryptanalysis — no sound cipher is weakened.
 | ------ | ------- | ----- |
 | Archives | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** | 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | MS Office | OOXML (`.docx/.xlsx/.pptx`, agile + standard), legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI / RC4 97-2000 / XOR) | legacy XOR body reconstruction: Excel only |
-| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC) | |
+| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC), **Apple iWork** (Pages/Numbers/Keynote, '13+ `.iwpv2`) | iWork recovers the passphrase only (body not reconstructed) |
 | Mail / passphrase | MIME (`.eml`) attachments, **age** (scrypt), **symmetric OpenPGP** (`gpg -c`) | |
+| Keys / key stores | **OpenSSH** private keys, **PEM/PKCS#8** (PBES2 + DEK-Info), **JKS**, **PKCS#12** (`.p12/.pfx`), **PuTTY** `.ppk` (v3/v2), **SQLCipher** (library-only) | |
 
-Not yet implemented (staged, pending test fixtures): KeePass, SQLCipher, Apple
-iWork, encrypted DMG, ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream
-decryption. Out of scope: GPU cracking in-tree, any online/network attack, and
-public-key PDF (needs a private key, not a password). See the
-[roadmap](roadmap.md).
+Not yet implemented (staged): KeePass (needs in-tree Argon2d), encrypted DMG,
+ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream decryption. Out of
+scope: GPU cracking in-tree, any online/network attack, and public-key PDF
+(needs a private key, not a password). See the [roadmap](roadmap.md).

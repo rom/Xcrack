@@ -17,6 +17,7 @@ import (
 	"github.com/rom/xfileformats"
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
+	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
@@ -88,6 +89,14 @@ type Options struct {
 	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
+	HintCandidates    bool // seed each search with candidates derived from a format's embedded password hint (e.g. iWork .iwph, ZIP comment), tried right after promoted passwords (default: off)
+
+	// HintRules, when set, expands each hint-derived base word into variants
+	// (case/leet/append-digits/…) to also try. It is a word->variants function so
+	// the engine stays decoupled from the rule compiler; the CLI builds it from a
+	// hashcat-style rule file via --hint-rules. Applied only when HintCandidates
+	// is on. nil => try the hint-derived base words only.
+	HintRules func(base string) []string
 
 	Limits Limits
 	Budget Budget
@@ -165,6 +174,10 @@ func DefaultRegistry() *xfileformats.Registry {
 	msoffice.Register(r)
 	pdf.Register(r)
 	odf.Register(r)
+	// iWork documents (.pages/.numbers/.key) are ZIP archives; iwork outranks the
+	// generic zip format in Detect and declines non-iWork zips in Probe, so it
+	// must be registered alongside zip (ranking is by Detect confidence).
+	iwork.Register(r)
 	archive.Register(r)
 	age.Register(r)
 	fpgp.Register(r)

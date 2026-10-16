@@ -85,6 +85,12 @@ func Open(data []byte) (*File, error) {
 		return data[off : off+sectorSize], nil
 	}
 
+	// A DIFAT or FAT sector is itself a physical sector, so neither kind can be
+	// more numerous than the file has sectors. This physical ceiling bounds the
+	// sector-table walks below no matter what the (attacker-controlled) header
+	// counts claim.
+	maxSectors := len(data)/sectorSize + 2
+
 	// Collect FAT sector ids: header DIFAT (109 entries) + DIFAT sector chain.
 	var fatSids []uint32
 	for i := 0; i < 109; i++ {
@@ -93,7 +99,15 @@ func Open(data []byte) (*File, error) {
 			fatSids = append(fatSids, v)
 		}
 	}
-	for sid, steps := firstDIFAT, 0; sid < 0xFFFFFFFC && numDIFAT > 0 && steps < int(numDIFAT)+1; steps++ {
+	// Walk the DIFAT sector chain to its end-of-chain terminator. Bound the walk
+	// by maxSectors rather than the header's numDIFAT (which a crafted file can
+	// inflate to ~4e9): a chain that outruns the file's sector count, or that
+	// revisits a sector in a cycle, would otherwise loop and grow fatSids
+	// without bound (hang / OOM). Reject it instead.
+	for sid, steps := firstDIFAT, 0; sid < 0xFFFFFFFC && numDIFAT > 0; steps++ {
+		if steps > maxSectors || len(fatSids) > maxSectors {
+			return nil, ErrMalformed
+		}
 		sec, err := readSector(sid)
 		if err != nil {
 			return nil, err
@@ -106,7 +120,8 @@ func Open(data []byte) (*File, error) {
 		sid = u32(sec, sectorSize-4)
 	}
 
-	// Build the FAT.
+	// Build the FAT. fatSids is bounded by maxSectors above, so this allocation
+	// and walk stay proportional to the input size.
 	fat := make([]uint32, 0, len(fatSids)*(sectorSize/4))
 	for _, fs := range fatSids {
 		sec, err := readSector(fs)
@@ -118,7 +133,6 @@ func Open(data []byte) (*File, error) {
 		}
 	}
 
-	maxSectors := len(data)/sectorSize + 2
 	readChain := func(start uint32) ([]byte, error) {
 		var out []byte
 		for sid, seen := start, 0; sid < 0xFFFFFFFC; seen++ {

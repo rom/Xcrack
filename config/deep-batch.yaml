@@ -1,0 +1,51 @@
+# Deep batch: throw everything at a hard target on a big box -- wordlists, masks,
+# rules, context + hint derivation, promotion -- with generous limits and high
+# concurrency. Expect it to run long; pair with --checkpoint for resumable runs.
+#
+#   xcrack --config config/deep-batch.yaml --checkpoint run.ckpt hard.7z
+
+candidates:
+  wordlists:
+    - /usr/share/wordlists/rockyou.txt
+    - /usr/share/wordlists/seclists/Passwords/xato-net-10-million-passwords.txt
+  use_default_list: true
+
+search:
+  promote_passwords: true
+  context_candidates: true
+  hint_candidates: true
+  hint_rules:
+    - ":"
+    - "c"
+    - "u"
+    - "$!"
+    - "c $2 $0 $2 $4"
+    - "sa@ so0 se3 si1 sl1"
+
+patterns:
+  rules:
+    - ":"
+    - "c"
+    - "$1"
+    - "$2 $0 $2 $4"
+    - "sa@ so0 se3"
+  masks:
+    - "?u?l?l?l?l?d?d"
+    - "?l?l?l?l?d?d?d?d"
+
+concurrency:
+  max_procs: 32              # ceiling on concurrent candidate testers
+  file_jobs: 8               # files processed in parallel
+  batch_size: 256            # amortize channel overhead
+
+limits:
+  max_depth: 64
+  max_total_bytes: 8589934592   # 8 GiB decompressed budget
+  max_nodes: 100000
+  max_entry_size: 2147483648    # 2 GiB per entry
+  max_candidates: 0             # unlimited per node
+
+output:
+  format: json
+  results_file: results.json
+  log_level: info

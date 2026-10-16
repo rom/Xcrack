@@ -32,6 +32,12 @@ type Challenge struct {
 	// DecryptedSizeHint is the expected plaintext size, or -1 if unknown. A hint
 	// only; never trust it for allocation.
 	DecryptedSizeHint int64
+	// Hint is a human-readable password/decryption hint embedded in the file, when
+	// the format carries one (e.g. the iWork `.iwph` hint or a ZIP entry comment).
+	// It is UNTRUSTED attacker-influenced text: a caller may derive candidate
+	// passwords from it, but must not display it unescaped or act on it otherwise.
+	// Empty when there is no hint.
+	Hint string
 }
 
 // KDFSpec describes a key-derivation function and its parameters.

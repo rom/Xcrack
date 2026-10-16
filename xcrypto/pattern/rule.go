@@ -307,6 +307,9 @@ func compileRule(line string) (Rule, error) {
 // application stays memory-bounded on hostile rule input.
 const maxRuleWordLen = 256
 
+// Len reports the number of compiled rules.
+func (rs *RuleSet) Len() int { return len(rs.rules) }
+
 // Apply returns the word as transformed by each rule, one output per rule that
 // is not rejected, in order.
 func (rs *RuleSet) Apply(word []byte) [][]byte {
