@@ -84,8 +84,13 @@ func keysReproduce(keys Keys, plain, cipher []byte) bool {
 // reported keys forward through that dummy header to land on the state before
 // cipher[0]. The result is finally re-validated by RecoverKeysWith.
 type ExternalBkcrack struct {
-	Bin     string        // path or PATH name of the bkcrack binary (required)
-	Args    []string      // extra arguments inserted before the -p/-c pair (optional)
+	Bin string // path or PATH name of the bkcrack binary (required)
+	// Args are extra arguments inserted before the -p/-c pair. This is where
+	// advanced bkcrack options go — notably sparse known plaintext via
+	// "-x <offset> <hexbytes>" (offsets are relative to the data, i.e. the dummy
+	// 12-byte header this type prepends is not counted). The in-process attack has
+	// no sparse mode; sparse recovery is offload-only.
+	Args    []string
 	Timeout time.Duration // wall-clock limit for one run (0 => no limit)
 	Dir     string        // parent dir for the scratch temp dir (empty => os.TempDir)
 }
@@ -155,6 +160,83 @@ func (b ExternalBkcrack) Recover(ctx context.Context, plain, cipher []byte) (Key
 		return Keys{}, false, fmt.Errorf("zipcrypto: bkcrack: %w", runErr)
 	}
 	return Keys{}, false, nil
+}
+
+// bkcrack prints the recovered password as "as bytes: <hex> <hex> ...".
+var bkcrackPwRe = regexp.MustCompile(`as bytes:((?:[ \t]+[0-9a-fA-F]{2})+)`)
+
+// RecoverPassword recovers a password that produces the given INITIAL key state
+// — NewKeys(password), i.e. the state before the entry's first encrypted byte —
+// by running bkcrack's password search (-k … -r). maxLen bounds the length and
+// charset is bkcrack's charset syntax (e.g. "?l?d", "?a", "?p"). bkcrack may
+// return an equivalent password; either way the result is re-validated locally
+// (NewKeys(pw) == keys), so a wrong parse or a non-matching answer is reported as
+// not-found rather than returned. ok=false with nil error means bkcrack ran but
+// found nothing in the given length/charset.
+func (b ExternalBkcrack) RecoverPassword(ctx context.Context, keys Keys, maxLen int, charset string) ([]byte, bool, error) {
+	if b.Bin == "" {
+		return nil, false, errors.New("zipcrypto: ExternalBkcrack.Bin is empty")
+	}
+	if charset == "" {
+		return nil, false, errors.New("zipcrypto: empty charset")
+	}
+	if maxLen <= 0 {
+		return nil, false, errors.New("zipcrypto: maxLen must be positive")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if b.Timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, b.Timeout)
+		defer cancel()
+	}
+	k0, k1, k2 := keys.Words()
+	args := append([]string{}, b.Args...)
+	args = append(args,
+		"-k", fmt.Sprintf("%08x", k0), fmt.Sprintf("%08x", k1), fmt.Sprintf("%08x", k2),
+		"-r", strconv.Itoa(maxLen), charset)
+	cmd := exec.CommandContext(ctx, b.Bin, args...)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	runErr := cmd.Run()
+
+	if pw, ok := parseBkcrackPassword(out.Bytes()); ok {
+		if NewKeys(pw) == keys { // local re-validation: no false positive
+			return pw, true, nil
+		}
+		return nil, false, nil
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return nil, false, fmt.Errorf("zipcrypto: bkcrack: %w", ctx.Err())
+		}
+		var ee *exec.ExitError
+		if errors.As(runErr, &ee) {
+			return nil, false, nil
+		}
+		return nil, false, fmt.Errorf("zipcrypto: bkcrack: %w", runErr)
+	}
+	return nil, false, nil
+}
+
+// parseBkcrackPassword extracts the recovered password bytes from the "as bytes:"
+// line of bkcrack's output (unambiguous even for passwords with spaces).
+func parseBkcrackPassword(output []byte) ([]byte, bool) {
+	m := bkcrackPwRe.FindSubmatch(output)
+	if m == nil {
+		return nil, false
+	}
+	var pw []byte
+	for _, tok := range bytes.Fields(m[1]) {
+		v, err := strconv.ParseUint(string(tok), 16, 8)
+		if err != nil {
+			return nil, false
+		}
+		pw = append(pw, byte(v))
+	}
+	return pw, len(pw) > 0
 }
 
 // parseBkcrackKeys extracts the last X Y Z triple from bkcrack's output.

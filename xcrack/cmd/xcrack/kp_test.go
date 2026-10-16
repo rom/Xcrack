@@ -2,9 +2,11 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/rom/xcrypto/scheme/zipcrypto"
@@ -136,5 +138,72 @@ func TestKPOffsetMismatch(t *testing.T) {
 func TestKPMissingArgs(t *testing.T) {
 	if code := runKP([]string{"--offset", "0"}); code != 2 {
 		t.Fatalf("runKP with no --plain/--cipher returned %d, want 2", code)
+	}
+}
+
+// TestKPRecoverPasswordRequiresDecrypt rejects --recover-password without the
+// context (--decrypt + --bkcrack) needed to reach the entry-start keys.
+func TestKPRecoverPasswordRequiresDecrypt(t *testing.T) {
+	dir, _, _ := kpEntry(t, "hunter2",
+		"STORED entry contents: the quick brown fox jumps over the lazy dog 0123456789!!", 0, 16)
+	code := runKP([]string{
+		"--plain", filepath.Join(dir, "plain.bin"),
+		"--cipher", filepath.Join(dir, "cipher.bin"),
+		"--recover-password", "7:?l?d", // no --decrypt / --bkcrack
+	})
+	if code != 2 {
+		t.Fatalf("runKP returned %d, want 2 (recover-password needs decrypt+bkcrack)", code)
+	}
+}
+
+// TestKPRecoverPassword exercises the end-to-end --recover-password path with a
+// stub bkcrack that emits both the key-recovery triple and the password line.
+func TestKPRecoverPassword(t *testing.T) {
+	const pw = "hunter2"
+	dir, data, stubKeys := kpEntry(t, pw,
+		"STORED entry contents: the quick brown fox jumps over the lazy dog 0123456789!!", 30, 20)
+	// One stub answers both invocations: the Keys triple (for key recovery) and
+	// the password bytes (for -r). Each parser ignores the other's lines.
+	k0, k1, k2 := stubKeys.Words()
+	var pwHex string
+	for i := 0; i < len(pw); i++ {
+		pwHex += fmt.Sprintf(" %02x", pw[i])
+	}
+	body := fmt.Sprintf("#!/bin/sh\necho 'Keys'\necho '%08x %08x %08x'\necho 'Password'\necho 'as bytes:%s'\n", k0, k1, k2, pwHex)
+	if runtime.GOOS == "windows" {
+		t.Skip("stub uses /bin/sh")
+	}
+	stub := filepath.Join(dir, "bkboth.sh")
+	if err := os.WriteFile(stub, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	out := filepath.Join(dir, "out.bin")
+
+	// Capture stdout to read the "password: ..." line.
+	old := os.Stdout
+	r, w, _ := os.Pipe()
+	os.Stdout = w
+	code := runKP([]string{
+		"--plain", filepath.Join(dir, "plain.bin"),
+		"--cipher", filepath.Join(dir, "cipher.bin"),
+		"--offset", "30",
+		"--bkcrack", stub,
+		"--decrypt", filepath.Join(dir, "entry.bin"),
+		"--recover-password", "7:?l?d",
+		"--out", out,
+	})
+	w.Close()
+	os.Stdout = old
+	stdout, _ := io.ReadAll(r)
+
+	if code != 0 {
+		t.Fatalf("runKP returned %d, want 0\nstdout: %s", code, stdout)
+	}
+	got, err := os.ReadFile(out)
+	if err != nil || string(got) != string(data) {
+		t.Fatalf("decrypt mismatch (err=%v)", err)
+	}
+	if want := "password: " + pw; !strings.Contains(string(stdout), want) {
+		t.Fatalf("stdout %q missing %q", stdout, want)
 	}
 }

@@ -138,6 +138,41 @@ func TestRecoverKeysWithNilOffloader(t *testing.T) {
 	}
 }
 
+// TestParseBkcrackPassword checks the password parser directly.
+func TestParseBkcrackPassword(t *testing.T) {
+	out := []byte("[10:00:00] Password\nas bytes: 68 75 6e 74 65 72 32\nas text: hunter2\n")
+	pw, ok := parseBkcrackPassword(out)
+	if !ok || string(pw) != "hunter2" {
+		t.Fatalf("parsed %q ok=%v, want hunter2", pw, ok)
+	}
+	if _, ok := parseBkcrackPassword([]byte("no password here\n")); ok {
+		t.Fatal("parsed a password from output with none")
+	}
+}
+
+// TestExternalBkcrackRecoverPasswordReal cross-validates password recovery
+// against the real bkcrack (gated on XCRACK_BKCRACK): bkcrack must recover a
+// password whose NewKeys equals the one we fed it.
+func TestExternalBkcrackRecoverPasswordReal(t *testing.T) {
+	bin := os.Getenv("XCRACK_BKCRACK")
+	if bin == "" {
+		t.Skip("set XCRACK_BKCRACK to a bkcrack binary to run the oracle cross-check")
+	}
+	for _, pw := range []string{"hunter2", "abc123"} {
+		keys := NewKeys([]byte(pw))
+		got, ok, err := ExternalBkcrack{Bin: bin}.RecoverPassword(context.Background(), keys, len(pw), "?l?d")
+		if err != nil {
+			t.Fatalf("pw=%q: %v", pw, err)
+		}
+		if !ok {
+			t.Fatalf("pw=%q: bkcrack recovered no password", pw)
+		}
+		if NewKeys(got) != keys {
+			t.Fatalf("pw=%q: recovered %q does not reproduce the keys", pw, got)
+		}
+	}
+}
+
 // TestParseBkcrackKeys checks the parser directly, including taking the last
 // triple when several are printed.
 func TestParseBkcrackKeys(t *testing.T) {

@@ -666,8 +666,17 @@ plaintext and ciphertext, `--bkcrack` offloads the search, and `--decrypt ENTRY
 --offset N` recovers the keys then decrypts a whole ZipCrypto entry — rolling the
 state back over the 12-byte header and any earlier data so a *mid-entry* known
 plaintext still unlocks the entire entry (`--keep-header` keeps the header
-bytes). Recovering a running key state from a broken cipher is legitimate
-cryptanalysis — no sound cipher is weakened.
+bytes). `--recover-password MAXLEN:CHARSET` then recovers the actual password
+from the entry-start state via bkcrack (re-validated locally). The engine can do
+the same automatically for an archive entry via `Options.KnownPlaintext{For,
+Offload}` (e.g. a STORED entry whose content an embedder already holds).
+
+Two further knobs: the compute-heavy in-process attack honors context
+cancellation (`RecoverKeysCtx`), so an embedder can bound it; and *sparse* known
+plaintext (scattered known bytes) is available through the offload by passing
+bkcrack's `-x <offset> <hex>` via `ExternalBkcrack.Args` (the in-process attack
+is contiguous-only). Recovering a running key state from a broken cipher is
+legitimate cryptanalysis — no sound cipher is weakened.
 
 ---
 

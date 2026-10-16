@@ -6,6 +6,9 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/rom/xcrypto/scheme/zipcrypto"
 )
@@ -25,6 +28,7 @@ func runKP(args []string) int {
 	decryptF := fs_.String("decrypt", "", "after recovery, decrypt this full ZipCrypto entry (12-byte header + data)")
 	offsetF := fs_.Int("offset", 0, "data offset (post-header) of --plain within the --decrypt entry (bkcrack -o)")
 	keepHeaderF := fs_.Bool("keep-header", false, "keep the 12-byte encryption header in --decrypt output (default: drop it)")
+	recoverPwF := fs_.String("recover-password", "", "recover the password via bkcrack as MAXLEN:CHARSET, e.g. 8:?l?d (requires --bkcrack and --decrypt)")
 	outF := fs_.String("out", "", "where --decrypt writes its plaintext (default: stdout)")
 	fs_.Usage = func() {
 		fmt.Fprint(os.Stderr, `xcrack kp -- ZipCrypto known-plaintext key recovery (Biham-Kocher)
@@ -52,6 +56,10 @@ FLAGS:
   --offset N           data offset (post-header) of --plain within ENTRY (as in
                        bkcrack's -o; default 0 = known plaintext at data start)
   --keep-header        keep the 12-byte header in --decrypt output (default: drop)
+  --recover-password MAXLEN:CHARSET
+                       after rolling back to the entry start, recover the actual
+                       password via bkcrack (e.g. 8:?l?d). Requires --bkcrack and
+                       --decrypt. The result is re-validated locally.
   --out FILE           where --decrypt writes (default: stdout)
 
 Needs at least 12 contiguous known-plaintext bytes; more recovers faster.
@@ -63,6 +71,10 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 	}
 	if *plainF == "" || *cipherF == "" {
 		fmt.Fprintln(os.Stderr, "xcrack kp: --plain and --cipher are required (see --help)")
+		return 2
+	}
+	if *recoverPwF != "" && (*decryptF == "" || *bkcrackF == "") {
+		fmt.Fprintln(os.Stderr, "xcrack kp: --recover-password requires --bkcrack and --decrypt (the entry start is needed)")
 		return 2
 	}
 	plain, err := os.ReadFile(*plainF)
@@ -128,6 +140,7 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 		// ciphertext (header + any earlier data) to the entry start, then decrypt
 		// the whole entry forward.
 		start, _ := keys.RollBack(entry[:abs])
+		entryStart := start // state before the entry = NewKeys(password); copy before Decrypt mutates start
 		full := append([]byte(nil), entry...)
 		start.Decrypt(full)
 		out := full
@@ -140,6 +153,38 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 			fmt.Fprintf(os.Stderr, "xcrack kp: %v\n", err)
 			return 2
 		}
+		if *recoverPwF != "" {
+			if code := recoverPassword(entryStart, *recoverPwF, *bkcrackF, *bkTimeout); code != 0 {
+				return code
+			}
+		}
 	}
+	return 0
+}
+
+// recoverPassword runs bkcrack's password search from the entry-start key state
+// (NewKeys(password)) and prints the recovered password. spec is "MAXLEN:CHARSET".
+func recoverPassword(entryStart zipcrypto.Keys, spec, bin string, timeout time.Duration) int {
+	maxLenStr, charset, ok := strings.Cut(spec, ":")
+	if !ok || charset == "" {
+		fmt.Fprintln(os.Stderr, "xcrack kp: --recover-password must be MAXLEN:CHARSET, e.g. 8:?l?d")
+		return 2
+	}
+	maxLen, err := strconv.Atoi(maxLenStr)
+	if err != nil || maxLen <= 0 {
+		fmt.Fprintf(os.Stderr, "xcrack kp: invalid --recover-password length %q\n", maxLenStr)
+		return 2
+	}
+	fmt.Fprintf(os.Stderr, "xcrack kp: recovering password (<=%d chars, charset %s) via bkcrack\n", maxLen, charset)
+	pw, found, err := zipcrypto.ExternalBkcrack{Bin: bin, Timeout: timeout}.RecoverPassword(context.Background(), entryStart, maxLen, charset)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack kp: %v\n", err)
+		return 1
+	}
+	if !found {
+		fmt.Fprintln(os.Stderr, "xcrack kp: password not recovered in the given length/charset")
+		return 0
+	}
+	fmt.Printf("password: %s\n", pw)
 	return 0
 }
