@@ -20,6 +20,7 @@ import (
 	"github.com/rom/xfileformats/formats/msoffice"
 	"github.com/rom/xfileformats/formats/odf"
 	"github.com/rom/xfileformats/formats/ooxml"
+	fp12 "github.com/rom/xfileformats/formats/p12"
 	"github.com/rom/xfileformats/formats/pdf"
 	fpgp "github.com/rom/xfileformats/formats/pgp"
 	"github.com/rom/xfileformats/formats/privkey"
@@ -142,6 +143,7 @@ func DefaultRegistry() *xfileformats.Registry {
 	sshkey.Register(r)
 	privkey.Register(r)
 	jks.Register(r)
+	fp12.Register(r)
 	return r
 }
 
