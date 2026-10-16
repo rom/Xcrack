@@ -11,7 +11,7 @@ LDFLAGS ?=
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build cli server run-server test race check vet fmt fmt-check fuzz tidy clean install help
+.PHONY: all build cli server run-server test race check vet fmt fmt-check fuzz samples tidy clean install help
 
 all: build ## Build everything (alias for build)
 
@@ -48,6 +48,9 @@ fuzz: ## Run every fuzz target briefly (override duration: make fuzz DUR=60s)
 	./scripts/fuzz.sh $(DUR)
 
 check: fmt-check vet race ## Run everything CI runs (fmt check, vet, race tests)
+
+samples: ## (Re)generate the demo sample files in ./samples
+	bash samples/generate.sh
 
 tidy: ## go mod tidy for every module
 	cd xcrypto && $(GO) mod tidy

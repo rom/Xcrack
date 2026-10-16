@@ -53,6 +53,9 @@ make check                    # gofmt check + vet + race tests (what CI runs)
 # Decrypt + recursively decompose, writing the tree + manifest.json to ./out:
 bin/xcrack -p infected -p Welcome1 -w rockyou.txt -o ./out invoice.zip
 
+# Try it on the bundled samples (every passphrase is "opensesame"):
+bin/xcrack -w samples/wordlist.txt samples/zipcrypto.zip samples/secret.pdf
+
 # Detect format / encryption only:
 bin/xcrack identify suspicious.bin
 
@@ -99,6 +102,7 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 │    ├─ pkg/api/            HTTP service wrapping the engine (Pool)
 │    ├─ cmd/xcrack/         CLI
 │    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
+├─ samples/                 encrypted demo files (pw "opensesame") + generate.sh
 └─ docs/                    usage, architecture, design, ASR, MVP, threat model, ADRs
 ```
 
