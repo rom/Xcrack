@@ -190,6 +190,24 @@ type PDFRC4KeySearcher interface {
 	PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int, start, count uint64) (key []byte, found bool, err error)
 }
 
+// PDFThunderChainer is an optional capability of an Accelerator that generates
+// PDF V1/R2 "Thunder Table" rainbow-chain endpoints on the device — the heavy,
+// one-time cost of building a precomputed TMTO for the 2^40 R2 file-key space.
+// Each chain is an independent sequential walk, so the device runs one work-item
+// per chain. The engine/CLI type-asserts for it and offloads thunder-table
+// generation, falling back to the pure-Go CPU walk when unavailable. The chain is
+// byte-identical to the CPU walk (pdf.ChainComputer), so a table built here is
+// inverted by the same CPU Lookup; table hits are always re-checked against the
+// real /U, so the device never decides correctness.
+type PDFThunderChainer interface {
+	// PDFThunderChain computes rainbow-chain endpoints for start indices
+	// [startIdx, startIdx+count): for each, it walks chainLen columns of
+	// k = (RC4(k, pad)[:8] as LE u64 + seed + col) mod n and returns the endpoint,
+	// in order. n must be a power of two (the R2 key space is 2^bits). It matches
+	// pdf's r2Image + reduce exactly.
+	PDFThunderChain(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error)
+}
+
 // BatchTuner is an optional capability of an Accelerator that can recommend a
 // per-dispatch batch size tuned to its device(s) (count, compute units,
 // throughput). The engine type-asserts for it and sizes its offload batches

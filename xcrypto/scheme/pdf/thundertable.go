@@ -59,9 +59,22 @@ type TableParams struct {
 	// Tables is the number of independent sub-tables (distinct reductions). More
 	// sub-tables raise coverage toward ~100% at a linear storage/lookup cost.
 	Tables int
-	// Workers is the generation parallelism (0 => GOMAXPROCS).
+	// Workers is the CPU generation parallelism (0 => GOMAXPROCS).
 	Workers int
+	// Chain, when non-nil, sources chain endpoints from an external computer (a
+	// GPU offload) instead of the CPU walk. It must be byte-identical to the CPU
+	// chain — the same R2 image and the same reduction — or lookups will miss.
+	// GenerateTable falls back to the CPU walk if it returns an error or a
+	// short/empty result, so correctness never depends on the offload.
+	Chain ChainComputer
 }
+
+// ChainComputer computes rainbow-chain endpoints for the R2 key space: for each
+// start index in [startIdx, startIdx+count) it walks chainLen columns of
+// k = reduce(r2Image(k), col, seed, n) and returns the endpoints in order. n is a
+// power of two (the key space is 2^bits). It is the seam the GPU thunder-chain
+// kernel plugs into; a nil ChainComputer means the pure-Go walk.
+type ChainComputer func(n uint64, chainLen int, seed, startIdx, count uint64) (ends []uint64, err error)
 
 // Table is a precomputed rainbow table over the R2 file-key space. It is safe
 // for concurrent Lookup once built/loaded.
@@ -162,7 +175,7 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 			return nil, err
 		}
 		seed := uint64(s) * 0x9E3779B97F4A7C15 // golden-ratio stride per sub-table
-		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers)
+		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain)
 		if err != nil {
 			return nil, err
 		}
@@ -174,45 +187,60 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 // generateSub builds one sub-table. Chain i starts at index i (distinct,
 // reproducible starts); endpoints are deduplicated (a merge keeps one chain) and
 // sorted so Lookup can binary-search.
-func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int) (subTable, error) {
+func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int, chain ChainComputer) (subTable, error) {
 	type pair struct{ start, end uint64 }
 	starts := chains
 	if uint64(starts) > n {
 		starts = int(n)
 	}
 	out := make([]pair, starts)
-	var wg sync.WaitGroup
-	var cancelled sync.Once
-	var cerr error
-	chunk := (starts + workers - 1) / workers
-	for w := 0; w < workers; w++ {
-		lo := w * chunk
-		if lo >= starts {
-			break
-		}
-		hi := lo + chunk
-		if hi > starts {
-			hi = starts
-		}
-		wg.Add(1)
-		go func(lo, hi int) {
-			defer wg.Done()
-			for i := lo; i < hi; i++ {
-				if i%4096 == 0 && ctx.Err() != nil {
-					cancelled.Do(func() { cerr = ctx.Err() })
-					return
-				}
-				k := uint64(i)
-				for col := 0; col < chainLen; col++ {
-					k = reduce(r2Image(k), col, seed, n)
-				}
-				out[i] = pair{start: uint64(i), end: k}
+
+	// Offloaded (GPU) endpoints, when a byte-identical ChainComputer is supplied;
+	// a short result or an error silently falls back to the CPU walk below.
+	computed := false
+	if chain != nil {
+		if ends, err := chain(n, chainLen, seed, 0, uint64(starts)); err == nil && len(ends) == starts {
+			for i := range ends {
+				out[i] = pair{start: uint64(i), end: ends[i]}
 			}
-		}(lo, hi)
+			computed = true
+		}
 	}
-	wg.Wait()
-	if cerr != nil {
-		return subTable{}, cerr
+
+	if !computed {
+		var wg sync.WaitGroup
+		var cancelled sync.Once
+		var cerr error
+		chunk := (starts + workers - 1) / workers
+		for w := 0; w < workers; w++ {
+			lo := w * chunk
+			if lo >= starts {
+				break
+			}
+			hi := lo + chunk
+			if hi > starts {
+				hi = starts
+			}
+			wg.Add(1)
+			go func(lo, hi int) {
+				defer wg.Done()
+				for i := lo; i < hi; i++ {
+					if i%4096 == 0 && ctx.Err() != nil {
+						cancelled.Do(func() { cerr = ctx.Err() })
+						return
+					}
+					k := uint64(i)
+					for col := 0; col < chainLen; col++ {
+						k = reduce(r2Image(k), col, seed, n)
+					}
+					out[i] = pair{start: uint64(i), end: k}
+				}
+			}(lo, hi)
+		}
+		wg.Wait()
+		if cerr != nil {
+			return subTable{}, cerr
+		}
 	}
 	sort.Slice(out, func(a, b int) bool { return out[a].end < out[b].end })
 	// Deduplicate endpoints: chains that merge share an endpoint; keep the first.
