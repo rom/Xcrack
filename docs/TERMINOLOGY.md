@@ -102,7 +102,9 @@ cross-validation is in [`FILEFORMATS.md`](FILEFORMATS.md).
 | **Magic** | The fixed leading bytes that identify a format (e.g. `PK\x03\x04` for ZIP, `28 B5 2F FD` for zstd). |
 | **OOXML** (Office Open XML) | The modern `.docx/.xlsx/.pptx` family — a ZIP of XML parts; encrypted ones are an OLE/CFB wrapper around the ZIP. |
 | **OLE2 / CFB** (Compound File Binary) | Microsoft's "compound file" container (a FAT-like filesystem in a file) holding legacy `.doc/.xls/.ppt` streams and the encrypted-OOXML package. *CFB here is the container, distinct from CFB the cipher mode in §3.* |
-| **VBA** | Visual Basic for Applications — Office macro streams; their auxiliary encryption is staged, not shipped. |
+| **VBA** | Visual Basic for Applications — Office macro streams (MS-OVBA). The **project-protection password** (the IDE "lock project for viewing" lock) is recovered by `vba-recover` / `--as vbaproject`; the macro source itself is never encrypted. |
+| **DPB** | The field of a VBA `PROJECT` stream that stores the project password — MS-OVBA "Data Encryption" (reversible) wrapping a plaintext password or a `SHA1(pw‖4-byte salt)` hash. |
+| **MBCS** | Multi-Byte Character Set — the code-page byte encoding a password is hashed in for the VBA project hash (ASCII passwords are unchanged). |
 | **ZipCrypto** | ZIP's legacy encryption (see §3/§5). |
 | **WinZip-AES** (AE-1 / AE-2) | ZIP's AES extension (extra field `0x9901`): PBKDF2-HMAC-SHA1 ×1000 + AES-CTR + HMAC-SHA1. **AE-2** omits the CRC that **AE-1** keeps (the AE-1 CRC leak is a plaintext-only weakness, §5). |
 | **ODF** (OpenDocument Format) | LibreOffice/OpenOffice `.odt/.ods/.odp`: a ZIP with PBKDF2-HMAC-SHA1 + AES-256-CBC (or authenticated -GCM in 1.3). |

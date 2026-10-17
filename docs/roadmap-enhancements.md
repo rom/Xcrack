@@ -146,7 +146,8 @@ Apple iWork (Pages/Numbers/Keynote), KeePass KDBX4 (.kdbx), Apple encrypted DMG
 | ✅ | **SQLCipher** | Passphrase recovery via the page-1 HMAC (PBKDF2 → HMAC subkey → HMAC-SHA512/SHA1 over page 1), SQLCipher v4 and v3 profiles; cross-checked against the sqlcipher CLI. SQLCipher files have no cleartext magic, so they are not engine-autodetected; now reachable from the CLI via `xcrack --as sqlcipher FILE` (force-format), backed by the `xfileformats/formats/sqlcipher` wrapper over the scheme. |
 | ✅ | **KeePass `.kdbx`** (KDBX4 **and KDBX3.1**) | KDBX4: passphrase recovery via the header HMAC-SHA256 (default **Argon2d** via the in-tree `xcrypto/prim/argon2`, cross-validated against the `argon2` CLI and x/crypto; Argon2id and legacy AES-KDF also handled). **KDBX3.1**: AES-KDF (TransformSeed/Rounds) + AES-256-CBC, verified by the header stream-start bytes. Cross-validated against pykeepass databases and (KDBX3) a fixture accepted by both KeePassXC 2.7.6 and pykeepass. Verify-only. |
 | ✅ | **Crypto wallets — Ethereum keystore** | Web3 Secret Storage Definition v3 (`ethwallet`): the geth/MetaMask/MyEtherWallet keystore JSON, scrypt or PBKDF2-HMAC-SHA256 → 32-byte key, verified by the Keccak-256 MAC. Detected on the keystore JSON markers (never claims a non-wallet file); verify-only (the passphrase is the deliverable). Cross-validated against the two canonical Web3 test vectors (pbkdf2 MAC verbatim; scrypt MAC reproduced by a pycryptodome oracle and the Go path). |
-| ✅ | **Legacy Office 40-bit RC4 key attack** | Office 97/2000 `.doc/.xls/.ppt` RC4 (`xcrypto/scheme/officebinary`): the password enters only as `trunc = MD5(UTF16LE(pw))[:5]` (40 bits), so `xcrack office-keyattack FILE` sweeps the 2^40 trunc keyspace against the verifier and recovers the document key regardless of password length ("Thunder Tables"). Shardable (`--shard i/N`), parallel, resumable, allocation-free inner loop. Office XP/2003 CryptoAPI RC4 is excluded (160-bit intermediate). Cross-validated against the msoffcrypto-tool KAT. |
+| ✅ | **Legacy Office 40-bit RC4 key attack** | Office 97/2000 `.doc/.xls/.ppt` RC4 (`xcrypto/scheme/officebinary`): the password enters only as `trunc = MD5(UTF16LE(pw))[:5]` (40 bits), so `xcrack office-keyattack FILE` sweeps the 2^40 trunc keyspace against the verifier and recovers the document key regardless of password length ("Thunder Tables"). Shardable (`--shard i/N`), parallel, resumable, allocation-free inner loop. Office XP/2003 CryptoAPI RC4 is excluded (160-bit intermediate). Cross-validated against the msoffcrypto-tool KAT. Matches hashcat thread-3665 / mode 9710. |
+| ✅ | **MS VBA project password** (MS-OVBA) | `xcrack vba-recover FILE` / `--as vbaproject` (`xcrypto/scheme/vbaproject`, `xfileformats/formats/vbaproject`): decodes the DPB field of the VBA `PROJECT` stream (MS-OVBA 2.4.3 reversible Data Encryption). A plaintext password is read with no cracking; a hashed one yields `SHA1(pw‖4-byte salt)` — a fast salted-SHA-1 crack (John `dynamic_24` / hashcat `-m 110 --hex-salt`). Works on legacy `.doc/.xls/.ppt`, standalone `vbaProject.bin`, and OOXML `.docm/.xlsm/.pptm`. Cross-validated against an independent MS-OVBA + hashlib reference (incl. NUL-byte key/hash cases); parsers fuzzed. The VBA source is never encrypted, so the password is the deliverable. |
 | ✅ | **Apple iWork** (Pages/Numbers/Keynote) | Passphrase recovery for the modern '13+ format (.pages/.numbers/.key ZIP archives). The `.iwpv2` verifier is PBKDF2-HMAC-SHA1 → AES-128-CBC → `sha256(plain[:32])==plain[32:64]`; reverse-engineered from Pages/Numbers/Keynote 14.5 files and cross-validated against the known passphrase. Only the passphrase is recovered (document body not reconstructed). |
 | ✅ | **ODF AES-256-GCM** | ODF 1.3's authenticated AES-256-GCM variant, alongside the existing AES-256-CBC (the GCM tag is the verifier; no false positives). Validated by round-trip (Go stdlib GCM) and the CBC path cross-validated against a real LibreOffice 24.2 document. |
 | ⬜ | Hangul HWP | Remaining document suite. |
@@ -154,6 +155,40 @@ Apple iWork (Pages/Numbers/Keynote), KeePass KDBX4 (.kdbx), Apple encrypted DMG
 | ✅ | **Codecs — zstd & lz4** | Single-stream compressors wired as containers (`xfileformats/formats/archive/codec.go`), so a file wrapped in a modern codec — most importantly `.tar.zst` / `.tar.lz4`, where the inner tar and any encrypted file in it were previously unreachable — is decompressed and recursed into. Pure-Go decoders already in the module (`klauspost/compress`, `pierrec/lz4`); bounded by `maxDecompressed` and the engine budgets. Round-trip + `.tar.zst` recursion tests. |
 | ⬜ | More codecs: brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth (zstd/lz4 shipped above). |
 | ⬜ | More container parsers: cpio, ar, CAB, ISO 9660/UDF | New parsers (no pure-Go dep in tree yet); needed for installer/image carriers. |
+
+## Gap review (2026-10) — candidates not yet tracked above
+
+A sweep of the current feature set turned up these as the notable remaining gaps
+(basic/intermediate UX is otherwise essentially complete):
+
+**Search UX / interop (intermediate):**
+- ⬜ Rule *generation* (`--generate-rules`, hashcat `-g`) and random-rule search.
+- ⬜ `.hcstat2` Markov stats import/export (interop with hashcat's trained models).
+- ⬜ Association attack (hashcat `-a 9`): a specific hint bound 1:1 to a target.
+- ⬜ Wordlist utilities (dedupe/sort/split, set ops — hashcat-utils `rli`/`splitlen`).
+- ⬜ Outfile-format control / hashcat-style `hash:plain` potfile line format.
+
+**Approaches / cryptanalysis (advanced):**
+- ⬜ **GPU kernels for the 40-bit key-space attacks** (Office 97/2000 MD5+RC4 and
+  PDF R2–R4) — today CPU-only; the single biggest practical speedup. The VBA
+  salted-SHA-1 is now a trivial GPU candidate too (hashcat-110 shape).
+- ⬜ **Precomputed TMTO / "Thunder Tables"** for the 2^40 sweeps (turns minutes
+  into sub-second) — large, needs a table store.
+- 🔬 Neural candidate models (PassGAN / RNN), beyond the shipped Markov + PCFG.
+- 🔬 Native CUDA / ROCm back-ends (OpenCL already runs on both via the ICD).
+- (Staged cryptanalysis already catalogued in CRACKING.md §3: ZipCrypto Stay
+  weak-RNG + reduced-known-plaintext, pure-Go ZipCrypto password-from-keys.)
+
+**Formats (demand-driven):**
+- 🔬 **Full-volume: BitLocker, VeraCrypt/TrueCrypt, LUKS, FileVault** (DFIR-critical; large, threat-review-gated).
+- ⬜ **Crypto wallets beyond Ethereum**: Bitcoin `wallet.dat` (Berkeley DB), Electrum, Exodus, MetaMask vault.
+- ⬜ **OS / browser credential stores**: Mozilla NSS (`key4.db` + `logins.json`), Windows DPAPI / Credential Manager, macOS Keychain, Chrome "Login Data".
+- ⬜ **Password-manager vaults**: 1Password (`.opvault`/`.1pux`), Bitwarden/LastPass exports (KeePass already ships).
+- ⬜ **Mail / notes carriers**: Outlook `.msg` / PST, MBOX, OneNote `.one` (malware delivery).
+- ⬜ **Installers / disk images**: MSI, CAB, NSIS/Inno, SFX; ISO 9660/UDF, VHD(X), IMG (unpack-and-recurse).
+- ⬜ **Java key stores**: BKS, JCEKS (JKS/PKCS#12 already ship).
+- ⬜ **Regional / legacy docs**: Hangul HWP/HWPX; WordPerfect; Lotus 1-2-3.
+- ⬜ **Apple**: `.sparseimage` / `.sparsebundle`, iOS/iTunes backup keybag (DMG v1/v2 already ship).
 
 ## Out of scope (non-goals)
 
