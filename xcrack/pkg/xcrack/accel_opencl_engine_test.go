@@ -131,6 +131,31 @@ func TestOpenCLRAR5Live(t *testing.T) {
 	}
 }
 
+// TestOpenCLVBALive cracks a Microsoft VBA project salted-SHA-1 fixture through
+// the engine with the OpenCL accelerator running the batch SHA1(password||salt)
+// kernel (hashcat-110). VBA is force-only (never autodetected), so the test
+// supplies ForceRegistry; a hit is re-checked on the CPU (xvba.Verify) by the
+// AccelKDF Finish closure, so the device never decides correctness.
+func TestOpenCLVBALive(t *testing.T) {
+	acc := realAccel(t)
+	reg, ok := ForceRegistry("vbaproject")
+	if !ok {
+		t.Fatal("ForceRegistry(vbaproject) not ok")
+	}
+	data, err := os.ReadFile("../../../xfileformats/formats/vbaproject/testdata/vba-hashed-welcome1.bin")
+	if err != nil {
+		t.Fatalf("read VBA fixture: %v", err)
+	}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("wrong", "nope", "Welcome1"), Options{Registry: reg, Accelerator: acc})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != "Welcome1" {
+		t.Fatalf("GPU VBA path did not recover the password (node=%+v)", n)
+	}
+}
+
 // TestOpenCLOfficeAgileLive cracks an agile OOXML (Office 2010+, SHA-512 spin)
 // document through the engine with the OpenCL accelerator running the Office
 // iterated-hash spin — the dominant cost of every modern Office document.

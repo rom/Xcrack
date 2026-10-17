@@ -137,6 +137,24 @@ type OfficeHasher interface {
 	OfficeSpin(seeds [][]byte, spin int, algo string) ([][]byte, error)
 }
 
+// SaltedSHA1Hasher is an optional capability of an Accelerator that computes a
+// batch of salted SHA-1 digests — SHA1(password || salt) — on the device, one
+// per candidate. This is hashcat's sha1($pass.$salt) shape (mode 110), used by
+// the Microsoft VBA project-protection verifier (MS-OVBA 2.4.4.4). Unlike the
+// iterated PBKDF2/Office kernels it is a single un-iterated hash, so it is cheap
+// per candidate and the device's role is bulk throughput: the engine compares
+// each returned digest to the target and re-checks any apparent hit on the CPU
+// (vbaproject.Verify), so the device never decides correctness. The engine
+// type-asserts for it (via AccelKDF.SaltedSHA1) and falls back to the per-
+// candidate CPU hash when the accelerator lacks it or returns ErrUnsupported.
+type SaltedSHA1Hasher interface {
+	// SaltedSHA1 returns SHA1(password || salt) for each password, in input
+	// order. It returns ErrUnsupported for inputs the backend cannot serve (e.g.
+	// a message longer than the kernel's bound), so the caller uses the CPU. It is
+	// byte-for-byte identical to crypto/sha1 over (password || salt).
+	SaltedSHA1(passwords [][]byte, salt []byte) ([][]byte, error)
+}
+
 // OldOfficeKeySearcher is an optional capability of an Accelerator that sweeps
 // the Office 97/2000 RC4 (MS-OFFCRYPTO 2.3.6) 40-bit trunc keyspace on the
 // device — a key-SEARCH kernel (not the per-password batch shape): the password

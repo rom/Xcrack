@@ -838,9 +838,14 @@ passwords are still tried on the CPU first, and any unsupported parameter or
 device error falls back transparently to the pure-Go CPU search — so the GPU
 only ever changes speed, never results.
 
-The GPU tier only accelerates PBKDF2-HMAC-SHA1 key derivation (the shared KDF);
-it never parses or opens file content, never decides a match on its own, and the
-default build / CI never include it (ADR 0001 amendment).
+The GPU tier accelerates the heavy, embarrassingly-parallel key-derivation step
+across several kernels — PBKDF2-HMAC-SHA1/256/512, the Office 2010+ iterated-hash
+spin, and the VBA project salted-SHA-1 batch (`SHA1(pass‖salt)`, hashcat mode
+110) — plus two standalone 2^40 key-search sweeps (`office-keyattack --gpu`,
+`pdf-keyattack --gpu`). It never parses or opens file content, never decides a
+match on its own (the CPU re-checks every hit), and the default build / CI never
+include it (ADR 0001 amendment). See [`CRACKING.md`](CRACKING.md) §4 for the full
+kernel list and what stays CPU-only.
 
 **Endpoints:**
 

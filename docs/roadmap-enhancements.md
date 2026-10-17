@@ -172,11 +172,14 @@ A sweep of the current feature set turned up these as the notable remaining gaps
 - ⬜ Association attack (hashcat `-a 9`): a specific hint bound 1:1 to a target — niche in a file-content model (the broad `--hint`/`--context` cover the common case); revisit on demand.
 
 **Approaches / cryptanalysis (advanced):**
-- 🚧 **GPU kernels for the 40-bit key-space attacks.** ✅ Office 97/2000 MD5+RC4
-  shipped (`office-keyattack --gpu`, `oldoffice_md5rc4` kernel, validated on
-  pocl); ✅ PDF R2–R4 RC4 shipped (`pdf-keyattack --gpu`, `pdf_rc4keysearch`
-  RC4-only kernel reusing the same cores and key-search shape, validated on pocl);
-  ⬜ the VBA salted-SHA-1 (hashcat-110 shape) remains.
+- ✅ **GPU kernels for the fast-hash attacks.** Office 97/2000 MD5+RC4
+  (`office-keyattack --gpu`, `oldoffice_md5rc4` kernel) and PDF R2–R4 RC4
+  (`pdf-keyattack --gpu`, `pdf_rc4keysearch` RC4-only kernel) — both 2^40
+  key-search sweeps — plus the VBA project salted-SHA-1 batch (`vba_sha1` kernel,
+  hashcat's `sha1($pass.$salt)` / mode 110), which offloads through the live crack
+  loop on the OpenCL server tier (`xcrackd --gpu`), the same path WinZip-AES /
+  DMG / ODF / RAR5 / Office-agile already use. All three reuse the shared
+  MD5/RC4/SHA-1 cores and are validated against the CPU reference on pocl.
 - ⬜ **Precomputed TMTO / "Thunder Tables"** for the 2^40 sweeps (turns minutes
   into sub-second) — large, needs a table store.
 - 🔬 Neural candidate models (PassGAN / RNN), beyond the shipped Markov + PCFG.

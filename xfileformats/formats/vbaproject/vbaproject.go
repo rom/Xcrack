@@ -218,3 +218,32 @@ func (f *Format) Verify(ch *xcrypto.Challenge, password []byte) (bool, []byte, e
 func (f *Format) Decrypt(r io.ReaderAt, size int64, ch *xcrypto.Challenge, key []byte) (io.Reader, error) {
 	return bytes.NewReader(nil), nil
 }
+
+// AccelKDF implements xfileformats.Accelerable: the VBA hash verifier is a single
+// SHA1(password||salt), so a GPU tier can compute the whole candidate batch at
+// once (hashcat's sha1($pass.$salt), mode 110). It applies only to the hashed
+// case; the plaintext case has nothing to derive. The device returns the digest,
+// but ak.Finish re-checks any apparent hit on the CPU (xvba.Verify), so the
+// accelerator can never cause a false positive.
+func (f *Format) AccelKDF(ch *xcrypto.Challenge) (xfileformats.AccelKDF, bool) {
+	if ch == nil || ch.Scheme != "vba-project" {
+		return xfileformats.AccelKDF{}, false
+	}
+	key := ch.Extra["key"]
+	hash := ch.Extra["hash"]
+	if len(key) != 4 || len(hash) != 20 {
+		return xfileformats.AccelKDF{}, false
+	}
+	salt := append([]byte(nil), key...)
+	target := append([]byte(nil), hash...)
+	return xfileformats.AccelKDF{
+		SaltedSHA1: true,
+		Salt:       salt,
+		// dk is the device's SHA1(password||salt). Trust only a non-match (a byte
+		// compare), and re-derive on the CPU for an apparent hit so the device
+		// never decides correctness.
+		Finish: func(dk, password []byte) bool {
+			return len(dk) == 20 && bytes.Equal(dk, target) && xvba.Verify(salt, target, password)
+		},
+	}, true
+}

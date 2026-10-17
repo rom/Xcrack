@@ -154,6 +154,45 @@ func TestGPUPDFKeySearch(t *testing.T) {
 	}
 }
 
+// TestGPUSaltedSHA1 cross-validates the salted SHA-1 batch kernel (hashcat-110 /
+// VBA) against crypto/sha1 over (password || salt): every digest in the batch must
+// match, across one- and two-block messages and an empty password, and a message
+// longer than the kernel's bound must return ErrUnsupported (CPU fallback).
+func TestGPUSaltedSHA1(t *testing.T) {
+	a, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	defer a.Close()
+	sh, ok := a.(SaltedSHA1Hasher)
+	if !ok {
+		t.Skip("accelerator does not implement SaltedSHA1Hasher")
+	}
+	salt := []byte{0x01, 0x02, 0x03, 0x04} // 4-byte VBA key
+	pws := [][]byte{}
+	for _, s := range []string{"", "a", "Welcome1", "hashcat", "Σecretü", "x\x00y",
+		"this-password-is-long-enough-to-need-a-second-sha1-compression-block"} {
+		pws = append(pws, []byte(s))
+	}
+	got, err := sh.SaltedSHA1(pws, salt)
+	if err != nil {
+		t.Fatalf("SaltedSHA1: %v", err)
+	}
+	if len(got) != len(pws) {
+		t.Fatalf("got %d results, want %d", len(got), len(pws))
+	}
+	for i, pw := range pws {
+		want := sha1.Sum(append(append([]byte(nil), pw...), salt...))
+		if !bytes.Equal(got[i], want[:]) {
+			t.Errorf("pw %q:\n gpu %x\n cpu %x", pw, got[i], want[:])
+		}
+	}
+	// A message past the kernel's bound must fall back, not silently truncate.
+	if _, err := sh.SaltedSHA1([][]byte{make([]byte, 1024)}, salt); err != ErrUnsupported {
+		t.Errorf("oversize message: err = %v, want ErrUnsupported", err)
+	}
+}
+
 // TestGPUBatchMatchesReference derives a batch of distinct passwords against one
 // salt and checks every result equals prim.PBKDF2 (WinZip-AES-256 parameters:
 // 1000 iters, 66-byte derived key).

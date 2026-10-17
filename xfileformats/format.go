@@ -100,6 +100,14 @@ type AccelKDF struct {
 	// authoritative verifier. Finish re-checks every hit, so the device never
 	// decides correctness.
 	Office *OfficeKDF
+	// SaltedSHA1, when true, makes this a single un-iterated SHA1(password||Salt)
+	// derivation rather than PBKDF2 (PRF/Iter/DKLen/PreHash/Office are then
+	// ignored). It is hashcat's sha1($pass.$salt) shape (mode 110), used by the VBA
+	// project verifier. The engine offloads the batch of digests to a
+	// SaltedSHA1Hasher-capable accelerator; because the hash is cheap, Finish
+	// trusts only a device NON-match (a byte compare) and re-computes the hash on
+	// the CPU for an apparent hit, so the device never decides correctness.
+	SaltedSHA1 bool
 	// Salt, Iter, DKLen are the exact PBKDF2 parameters the accelerator must
 	// derive with -- byte-identical to what the CPU verifier uses (e.g. the DMG
 	// verifier's fixed 20-byte salt, not the raw stored salt).
