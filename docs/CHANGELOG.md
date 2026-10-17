@@ -14,6 +14,23 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
+### Added
+- **Precomputed "Thunder Tables" (rainbow TMTO) for PDF V1/R2.** `xcrack
+  thunder-gen` builds a rainbow time-memory trade-off and `xcrack pdf-keyattack
+  --table FILE` inverts the R2 user-verifier `/U = RC4(fileKey, pad)` → 40-bit
+  file key in sub-second, replacing the ~week-of-CPU 2^40 sweep. Because R2 `/U`
+  is a salt- and ID-free function of the key, one table inverts every V1/R2
+  document — the capability Elcomsoft markets as "Thunder Tables"
+  (`xcrypto/scheme/pdf/thundertable.go`: column-indexed rainbow chains, multiple
+  independent sub-tables for coverage, compact 5-byte-key binary store, parallel
+  cancellable generation). Every lookup hit is re-checked against the real `/U`
+  and `VerifyFileKey`, so a chain false-alarm is rejected and the table never
+  yields a wrong key; a miss (or an R3/R4 / Office file, which are per-document
+  and not cross-file-invertible) falls back to the live sweep. `thunder-gen
+  --dry-run` estimates the generation work/size/time. Cross-validated in
+  `thundertable_test.go` (coverage, exact correctness vs. `VerifyFileKey` and the
+  live `RC4KeyAttack`, serialization round-trip, false-alarm rejection).
+
 ### Changed
 - **Embedded dictionaries moved to `xcrypto/candidates/dictionaries/`.** The
   shipped Swedish wordlist is now `dictionaries/swedish.txt` (embed path and the

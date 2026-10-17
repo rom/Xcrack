@@ -181,15 +181,20 @@ A sweep of the current feature set turned up these as the notable remaining gaps
   loop on the OpenCL server tier (`xcrackd --gpu`), the same path WinZip-AES /
   DMG / ODF / RAR5 / Office-agile already use. All three reuse the shared
   MD5/RC4/SHA-1 cores and are validated against the CPU reference on pocl.
-- ⬜ **Precomputed TMTO / "Thunder Tables" / rainbow tables** for the 2^40 Office
-  97/2000 and PDF RC4 sweeps. Turns the ~week-of-CPU (or GPU-minutes) full sweep
-  into **sub-second, guaranteed** recovery — the capability Elcomsoft's "Thunder
-  Tables" give for 40-bit Word/Excel, and the one precompute gap vs. Ophcrack/
-  RainbowCrack. Large: needs a generated table store (time-memory trade-off; a
-  full 2^40 table is terabyte-class, so ship a chain/TMTO variant, not a flat
-  table) and a lookup path beside the shipped live sweep
-  (`office-keyattack`/`pdf-keyattack`, incl. `--gpu`, which stays the
-  no-precompute route). Validate a lookup hit against the live verifier.
+- 🚧 **Precomputed TMTO / "Thunder Tables" / rainbow tables** for the 2^40 RC4
+  sweeps. **PDF V1/R2 shipped**: `xcrack thunder-gen` builds a rainbow table and
+  `xcrack pdf-keyattack --table FILE` inverts `/U = RC4(fileKey, pad)` →
+  40-bit file key in **sub-second**, no sweep. This is the ideal target because
+  R2 `/U` is a salt- and ID-free function of the key, so **one table inverts every
+  V1/R2 document** (`xcrypto/scheme/pdf/thundertable.go`: column-indexed rainbow
+  chains, multi-sub-table coverage, compact binary store; every hit re-checked
+  against the real `/U` and `VerifyFileKey`, so false alarms are rejected). The
+  live sweep (`pdf-keyattack`, incl. `--gpu`) stays the no-precompute route and
+  the miss fallback. ⬜ Remaining: **PDF R3/R4** (its `/U` hashes the per-file
+  `/ID`) and **Office 97/2000** (per-file salt) are not cross-file-invertible, so
+  a table there would be per-document — not worth it; they keep the sweep.
+  ⬜ A GPU-accelerated generator (the full 2^40 table is a long CPU job today —
+  `thunder-gen --dry-run` estimates it) and shipping/hosting a prebuilt table.
 - ⬜ **Dual CPU+GPU parallel pipeline** (per-file race). On a host with both a CPU
   and a GPU, run **two cracking pipelines for the same file at once** — the GPU
   batch/key-search on one side and a CPU dictionary+rules pass on the other — and

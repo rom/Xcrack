@@ -163,6 +163,22 @@ bypass or shrink the search:
   (`--shard i/N`) and parallel (`--workers`). 128-bit RC4 and the AES schemes
   (AESV2/AESV3) have no such bottleneck and the command declines them. Validated
   against a real 40-bit PDF produced by qpdf (`keyattack_test.go`).
+- **PDF V1/R2 precomputed "Thunder Tables" (rainbow TMTO).** For R2, `/U =
+  RC4(fileKey, pad)` where `pad` is the fixed 32-byte PDF padding — a salt- and
+  ID-free function of the 40-bit key, so **one precomputed table inverts every
+  V1/R2 document**. `xcrack thunder-gen` builds a rainbow time-memory trade-off
+  (Oechslin 2003: column-indexed chains, multiple independent sub-tables for
+  coverage, only chain endpoints stored), and `xcrack pdf-keyattack --table FILE`
+  recovers the file key in **sub-second** instead of the ~week-of-CPU full sweep
+  — the capability Elcomsoft markets as "Thunder Tables" for 40-bit Office. The
+  one-time generation cost is ≈ the sweep (`thunder-gen --dry-run` estimates it);
+  storage is the endpoints (tunable via chain length). Every lookup hit is
+  re-checked against the real `/U` and `pdf.Handler.VerifyFileKey`, so a chain
+  false-alarm is rejected and the table never yields a wrong key; a miss falls
+  back to the live sweep. It does **not** apply to R3/R4 (whose `/U` hashes the
+  per-file `/ID`) or to Office 97/2000 (per-file salt) — those stay on the sweep
+  (`xcrypto/scheme/pdf/thundertable.go`, cross-validated in `thundertable_test.go`
+  against `VerifyFileKey` and the live `RC4KeyAttack`).
 - **PDF R5 (Acrobat 9 AESV3) single-round SHA-256 verifier.** Revision 5 — Adobe's
   deprecated pre-ISO AES-256 extension (Acrobat 9, 2008) — checks the password
   with a **single** SHA-256 of `password ‖ 8-byte validation salt` and no

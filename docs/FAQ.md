@@ -558,7 +558,8 @@ those.
 
 **Where's the full list?** `xcrack --help`. Subcommands: `xcrack` (crack),
 `identify`, `kp` (ZipCrypto known-plaintext), `hashline`, `export-challenge`,
-`office-keyattack`, `pdf-keyattack`, `access-recover`, `version`.
+`office-keyattack`, `pdf-keyattack`, `thunder-gen` (precomputed R2 table),
+`access-recover`, `vba-recover`, `wordlist`, `version`.
 
 **The most useful flags.**
 
