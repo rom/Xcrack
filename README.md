@@ -27,7 +27,7 @@ many worked examples.
 | Family | Formats |
 | ------ | ------- |
 | **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **zstd**, **lz4**, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
-| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** — Jet (`.mdb`) password recovered from the header with no cracking (`access-recover`), ACE (`.accdb`) detected |
+| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **VBA project** macro password (`vba-recover` / `--as vbaproject`); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** — Jet (`.mdb`) password recovered from the header with no cracking (`access-recover`), ACE (`.accdb`) detected |
 | **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC **and AES-256-GCM**); **Apple iWork** (Pages/Numbers/Keynote) |
 | **Disk images** | Apple **encrypted DMG** (v2 AES-128/256) read on-disk directly, plus v1/v2 via the `dmg2john` `$dmg$` line |
 | **Mail / passphrase** | MIME (`.eml`) attachments; **age** (scrypt); **symmetric OpenPGP** (`gpg -c`) |
@@ -58,6 +58,37 @@ hashcat / John the Ripper. **Distributed cracking** (`--server`,
 `xcrackd` workers; each server also has an optional, opt-in **built-in** OpenCL
 tier (`-tags opencl`, `--gpu`) that batches the PBKDF2-HMAC-SHA1 sweep of the
 live search onto the device.
+
+## How it works
+
+Xcrack detects each file **by content**, probes its encryption once, then tests
+an ordered stream of candidate passwords against a cheap verifier — and recurses
+into whatever it unpacks or decrypts, so a password-protected file nested inside
+archives and documents is found and cracked automatically.
+
+```mermaid
+flowchart TD
+  IN["input file / bytes"] --> DET{"detect by content<br/>(magic + structure, not extension)"}
+  DET -->|"container"| UNP["enumerate entries<br/>ZIP · tar · 7z · RAR · CFB · zstd/lz4 · eml"]
+  DET -->|"encrypted"| PRB["probe once → Challenge<br/>salt · iterations · verifier"]
+  DET -->|"leaf"| OUT["hand real content to the caller / scanner"]
+  UNP --> RE["re-detect each entry"] --> DET
+  PRB --> CS["ordered candidate stream"]
+  CS --> FR{"fast-reject<br/>1–2 byte check"}
+  FR -->|"fail"| CS
+  FR -->|"pass"| VF{"verify<br/>run the KDF, check the verifier"}
+  VF -->|"wrong"| CS
+  VF -->|"right"| DC["decrypt with the recovered key"]
+  DC --> RE2["re-detect plaintext"] --> DET
+  CS -. "opt-in GPU tier" .-> GPU["batch the KDF on device"] -. "every hit re-checked on CPU" .-> VF
+  PRB -. "shortcut where one exists" .-> SC["key attack · known-plaintext · header decode<br/>— no password search"] --> DC
+```
+
+Candidates are tried highest-yield first: cached/promoted passwords and the
+potfile → the built-in default list (empty password, `VelvetSweatshop`) → hints
+and context → wordlists (± rules) → masks / hybrid / combinator → PRINCE /
+Markov / PCFG generation. The **verifier** is always re-run on anything the
+fast-reject or the GPU flags, so neither can cause a false positive.
 
 ## Quick start
 
@@ -166,8 +197,10 @@ the service tier and several Phase 3/4 engine features landed:
 
 Non-brute-force recoveries also ship: ZipCrypto known-plaintext **and**
 cross-entry key recovery (`kp`), the Office 97/2000 and PDF V1/R2 **40-bit key
-attacks** (`office-keyattack` / `pdf-keyattack`), and the **MS Access Jet**
-header-XOR decode (`access-recover`) — see [`docs/CRACKING.md`](docs/CRACKING.md).
+attacks** (`office-keyattack` / `pdf-keyattack`), the **MS Access Jet**
+header-XOR decode (`access-recover`), and the **MS VBA project** password decode
+(`vba-recover` — plaintext read directly, otherwise a salted-SHA-1 crack) — see
+[`docs/CRACKING.md`](docs/CRACKING.md).
 
 **Staged** (implemented as test fixtures / oracles become available): MS Access
 **ACE** (`.accdb`) password *recovery* (detection ships now; Jet `.mdb` recovery

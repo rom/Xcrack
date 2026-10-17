@@ -35,6 +35,7 @@ import (
 	"github.com/rom/xfileformats/formats/puttykey"
 	"github.com/rom/xfileformats/formats/sqlcipher"
 	"github.com/rom/xfileformats/formats/sshkey"
+	fvba "github.com/rom/xfileformats/formats/vbaproject"
 	"github.com/rom/xfileformats/formats/zip"
 )
 
@@ -240,6 +241,9 @@ func ForceRegistry(name string) (*xfileformats.Registry, bool) {
 	switch strings.ToLower(name) {
 	case "sqlcipher":
 		sqlcipher.Register(r)
+		return r, true
+	case "vbaproject", "vba":
+		fvba.Register(r)
 		return r, true
 	default:
 		return nil, false

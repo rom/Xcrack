@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **MS VBA project password recovery (MS-OVBA).** `xcrack vba-recover FILE` and
+  `--as vbaproject` recover the VBA IDE "lock project for viewing" password from
+  the DPB field of the VBA `PROJECT` stream (MS-OVBA 2.4.3 reversible Data
+  Encryption). A plaintext password is read out with no cracking; a hashed one is
+  `SHA1(password‖4-byte salt)` — a fast salted-SHA-1 verifier crackable in-engine
+  (`--as vbaproject`) or via the emitted John `dynamic_24` / hashcat `-m 110
+  --hex-salt` lines. Works on legacy `.doc/.xls/.ppt`, a standalone
+  `vbaProject.bin`, and OOXML `.docm/.xlsm/.pptm` (the `word/vbaProject.bin` part
+  is unwrapped). New `xcrypto/scheme/vbaproject` (transform round-trip tested,
+  salted-SHA-1 cross-validated against an independent MS-OVBA + hashlib reference
+  over golden fixtures incl. NUL-byte key/hash cases) and
+  `xfileformats/formats/vbaproject` (force-only; parsers fuzzed). The VBA source
+  is never encrypted, so only the password is the deliverable.
 - **Codecs: zstd & lz4 containers.** Two single-stream compressors are registered
   as containers (`xfileformats/formats/archive/codec.go`), so a password-protected
   file wrapped in a modern codec — most importantly `.tar.zst` / `.tar.lz4`, where
@@ -64,6 +77,18 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   (no `/` or `..`) so it can never redirect the write outside `--out`.
 
 ### Docs
+- **Mermaid attack-pipeline diagram** added to README.md ("How it works") and
+  docs/CRACKING.md §1 (replacing the ASCII sketch): detect → probe → candidate
+  stream → fast-reject → verify → decrypt → re-detect, with the opt-in GPU tier
+  and the verification-shortcut branch shown.
+- CRACKING.md §3 + REFERENCES.md: record hashcat forum **thread-3665**
+  ("Colliding password protected MS office 97-2003 documents") as the canonical
+  reference for the Office 97/2000 40-bit MD5+RC4 key attack Xcrack already ships
+  as `office-keyattack` — its collider `-m 9710` opens the document without the
+  real password, `-m 9720` finds the password, and SHA1+RC4 CryptoAPI is the
+  separate `-m 9800` (correctly out of scope). VBA documented across CRACKING.md
+  (§2 table + §3), FILEFORMATS.md, FAQ.md, TERMINOLOGY.md (VBA/DPB/MBCS) and
+  roadmap-enhancements.md; MS-OVBA + Didier Stevens added to REFERENCES.md §8.
 - README: add the `docs/CRACKING.md` and `docs/FAQ.md` references to the
   documentation index; correct the MS Access rows now that Jet `.mdb` recovery
   ships (ACE `.accdb` recovery remains staged).

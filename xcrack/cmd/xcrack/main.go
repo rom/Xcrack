@@ -47,6 +47,8 @@ func run(args []string) int {
 			return runPDFKeyAttack(args[1:])
 		case "access-recover":
 			return runAccessRecover(args[1:])
+		case "vba-recover":
+			return runVBARecover(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -1126,6 +1128,9 @@ USAGE:
                                    R3/R4) RC4 PDFs (recovers the key; --shard i/N)
   xcrack access-recover FILE       recover a Jet (.mdb) database password from the
                                    header, no cracking (ACE .accdb not shortcuttable)
+  xcrack vba-recover FILE          recover a VBA project password from a .doc/.xls/
+                                   .ppt, .docm/.xlsm/.pptm or vbaProject.bin (plaintext
+                                   is read directly; a hash emits John/hashcat lines)
   xcrack version
 
 COMMON FLAGS:

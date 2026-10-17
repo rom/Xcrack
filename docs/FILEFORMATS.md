@@ -33,7 +33,7 @@ appears in challenges, JSON output, and the `identify` command.
 | Family | Formats | Caps |
 | ------ | ------- | ---- |
 | [Archives & mail](#archives--mail) | ZIP, tar, gzip, bzip2, xz, zstd, lz4, 7-Zip, RAR, MIME `.eml` | 📦 🔓 🧩 |
-| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), Access detection | 🔓 📦 |
+| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), VBA project password, Access detection | 🔓 📦 |
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
 | [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass | 🔑 |
@@ -66,6 +66,7 @@ the internal key state with no password — in pure Go, or offloaded to a local
 | ------ | ------ | -------------------- | --- | ------ | ------ |
 | **OOXML** `.docx/.xlsx/.pptx` 🔓 | OLE2/CFB compound file holding `EncryptionInfo` | `ooxml-agile` (Office 2010 & 2013) and `ooxml-standard` (Office 2007) | agile: iterated hash (configurable **SHA-1 / SHA-256 / SHA-384 / SHA-512**, `spinCount` ~100 000); standard: SHA-1 × 50 000 | agile: AES-128 or **AES-256**-CBC; standard: AES-128-ECB | gold-standard decrypted docs; `$office$` hashcat export (see below) |
 | **Legacy binary** `.doc/.xls/.ppt` 🔓 | OLE2/CFB compound file | `office-rc4-cryptoapi-sha1` (Office XP/2003), `office-rc4-md5` (Office 97/2000), `office-xor` (XOR obfuscation) | RC4 CryptoAPI: SHA-1; RC4 97-2000: MD5; XOR: table | RC4 / XOR | RC4 CryptoAPI: byte-for-byte vs reference decrypted Word/Excel/PowerPoint |
+| **VBA project** `vbaProject.bin` / macros in `.doc*`/`.xls*`/`.ppt*` 🔓 | OLE2/CFB with a `PROJECT` stream carrying `DPB=` (force-only: `--as vbaproject` / `vba-recover`) | `vba-project` (MS-OVBA) | `DPB` = MS-OVBA "Data Encryption" (reversible) wrapping either a plaintext password or `SHA1(pw‖4-byte salt)` | none (the VBA source is not encrypted; the password is the deliverable) | independent MS-OVBA + hashlib reference; John `dynamic_24` / hashcat `-m 110` |
 
 **Legacy-Office scope.** RC4 CryptoAPI is fully decrypted and cross-validated
 for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR obfuscation are

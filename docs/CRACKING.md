@@ -18,14 +18,27 @@ cross-validation notes) see [`FILEFORMATS.md`](FILEFORMATS.md). For the attack
 
 ## 1. The attack pipeline (all formats)
 
-```
-detect  → probe (once)              → verify (per candidate)        → decrypt
-magic/    extract salt, iters,         run the KDF, check the          stream the
-JSON/     verifier into a Challenge    verifier — the expensive step   plaintext with
-header                                                                 the found key
+```mermaid
+flowchart TD
+  IN["input file / bytes"] --> DET{"detect by content<br/>(magic + structure, not extension)"}
+  DET -->|"container"| UNP["enumerate entries<br/>ZIP · tar · 7z · RAR · CFB · zstd/lz4 · eml"]
+  DET -->|"encrypted"| PRB["probe once → Challenge<br/>salt · iterations · verifier"]
+  DET -->|"leaf"| OUT["hand real content to the caller"]
+  UNP --> RE["re-detect each entry"] --> DET
+  PRB --> CS["ordered candidate stream"]
+  CS --> FR{"fast-reject<br/>1–2 byte check"}
+  FR -->|"fail"| CS
+  FR -->|"pass"| VF{"verify<br/>run the KDF, check the verifier — the expensive step"}
+  VF -->|"wrong"| CS
+  VF -->|"right"| DC["decrypt / stream plaintext with the recovered key"]
+  DC --> RE2["re-detect plaintext"] --> DET
+  CS -. "opt-in GPU tier (§4)" .-> GPU["batch the KDF on device"] -. "every hit re-checked on CPU" .-> VF
+  PRB -. "shortcut where one exists (§3)" .-> SC["key attack · known-plaintext · header decode<br/>— recovers the key/password with no search"] --> DC
 ```
 
-Candidates come from the ordered pipeline (highest-yield first):
+The engine probes a file's crypto once, then tests many candidates cheaply, and
+re-detects whatever it unpacks or decrypts so nested layers are followed to the
+real content. Candidates come from the ordered pipeline (highest-yield first):
 
 1. **Cached / recovered passwords** — the found-password cache / potfile and
    ancestor passwords (promotion / `--adaptive`), plus `--loopback` re-mangles.
@@ -68,6 +81,7 @@ check · **attack** = the primary recovery path.
 | **Office XOR obfuscation** | 16-byte XOR key array | 16-bit verifier | Passwords crack essentially instantly. |
 | **OOXML agile** (2010+) | iterated SHA-1/256/384/512 ×~100k; AES-CBC | hash of a decrypted verifier block | Dictionary/rules; the spin loop is the GPU target. **VelvetSweatshop** for read-only-recommended workbooks (§3). |
 | **OOXML standard** (2007) | SHA-1 ×50000; AES-128-ECB | hash of a decrypted verifier block | As above. |
+| **VBA project password** | MS-OVBA "Data Encryption" obfuscation; `SHA1(pw‖4-byte salt)` (hashed form) | the stored 20-byte SHA-1 — or none (a plaintext password is stored directly) | `vba-recover` reads a plaintext password with **no cracking**; a hashed one is a fast salted-SHA-1 crack (`--as vbaproject`; John `dynamic_24` / hashcat `-m 110 --hex-salt`) — see §3. |
 
 ### Documents & media
 
@@ -128,7 +142,13 @@ bypass or shrink the search:
   enters only as `trunc = MD5(UTF16LE(pw))[:5]` — 40 bits — and the verifier and
   every block key derive from `trunc` and the salt alone. `xcrack office-keyattack`
   sweeps the 2^40 trunc space against the verifier and recovers the document key
-  regardless of password length/complexity. Shardable and GPU-friendly.
+  regardless of password length/complexity. Shardable and GPU-friendly. This is
+  the attack hashcat documents in forum thread-3665 ("Colliding password
+  protected MS office 97-2003 documents"): its collider mode `-m 9710` recovers
+  the RC4 key to *open the document* with no real password (what `office-keyattack`
+  does), while `-m 9720` would recover the actual password; the SHA1+RC4 CryptoAPI
+  variant is the separate `-m 9800`, correctly out of scope for this key attack
+  (see below).
 - **PDF 40-bit RC4 key attack (V1/R2, and 40-bit R3/R4).** The PDF file key is a
   single MD5 truncated to 5 bytes — 40 bits — independent of the password's
   length, and the `/U` verifier, every per-object key and the whole document are
@@ -161,6 +181,21 @@ bypass or shrink the search:
   Access 2007+) uses a real Office-style KDF and is declined. Cross-validated
   against jackcess (an independent implementation that produced a known-password
   Jet4 fixture; `jet_test.go`), with the decoder fuzzed against hostile headers.
+- **MS VBA project password (MS-OVBA).** The VBA IDE's "lock project for viewing"
+  password is stored in the DPB field of the PROJECT stream, wrapped in the
+  reversible, keyless MS-OVBA "Data Encryption" (section 2.4.3). `xcrack
+  vba-recover` reverses it: a password stored in the clear is read out with **no
+  cracking** (like the Access Jet decode), and a password stored as the 29-byte
+  Password Hash Data Structure (2.4.4.1) yields a 4-byte salt and a 20-byte
+  `SHA1(password‖salt)` (2.4.4.4) — a fast, salted-SHA-1 verifier (John
+  `dynamic_24` / hashcat `-m 110 --hex-salt`) crackable in-engine with `xcrack
+  --as vbaproject`. It works on legacy `.doc/.xls/.ppt`, a standalone
+  `vbaProject.bin`, and macro-enabled OOXML (`.docm/.xlsm/.pptm`, whose
+  `vbaProject.bin` part is unwrapped). The VBA source is never encrypted, so the
+  password is the only deliverable. The Data-Encryption transform is round-trip
+  tested and the salted-SHA-1 is cross-validated against an independent MS-OVBA +
+  hashlib reference (`xcrypto/scheme/vbaproject`), including hashes/keys with
+  embedded NUL bytes; parsers fuzzed.
 - **VelvetSweatshop / empty password.** Excel "encrypts" a read-only-recommended
   workbook with the fixed key `VelvetSweatshop`; owner/permission-only PDFs and
   read-only Office documents open with the **empty** password. Both are the first

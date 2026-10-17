@@ -31,8 +31,19 @@ confidence from a bounded peek of the file head. Container formats (ZIP, Office
 CFB) are decomposed recursively, so an encrypted document inside an encrypted
 archive is found automatically.
 
-**A format has no magic bytes (SQLCipher).** Force it with `--as sqlcipher`
-(magic-less formats are not auto-detected so they cannot mis-claim other files).
+**A format has no magic bytes (SQLCipher, VBA project).** Force it with
+`--as sqlcipher` / `--as vbaproject` (magic-less or carrier-embedded formats are
+not auto-detected so they cannot mis-claim other files).
+
+**Can it crack a VBA macro / "lock project for viewing" password?** Yes.
+`xcrack vba-recover FILE` reads the VBA project password out of a legacy
+`.doc/.xls/.ppt`, a macro-enabled OOXML (`.docm/.xlsm/.pptm`), or a standalone
+`vbaProject.bin`. If the password is stored in the clear (older projects) it is
+printed with no cracking; otherwise it is a salted SHA-1 (`SHA1(pw‖salt)`), which
+`vba-recover` emits as John `dynamic_24` / hashcat `-m 110 --hex-salt` lines, and
+`xcrack --as vbaproject -w LIST FILE` cracks in-engine. The VBA source itself is
+never encrypted — the password only gates the IDE — so the password is the
+deliverable.
 
 **Does it decrypt the file or just find the password?** For whole-file formats it
 decrypts and writes the tree out (`--out DIR`). For key/credential stores and

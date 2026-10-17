@@ -195,6 +195,18 @@ and titles as published. What Xcrack took from each:
 ## 8. Format & standard specifications
 
 - [MS-OFFCRYPTO] — Microsoft Office document encryption (RC4, CryptoAPI, agile, standard).
+- [MS-OVBA] — VBA project storage, incl. §2.4.3 Data Encryption, §2.3.1.16
+  ProjectPassword, §2.4.4 Password Hash. The VBA project-protection password
+  (`xcrack vba-recover` / `--as vbaproject`): SHA1(password‖4-byte salt),
+  independently corroborated by Didier Stevens, *Cracking VBA Project Passwords*
+  (<https://blog.didierstevens.com/2020/07/20/cracking-vba-project-passwords/>) —
+  John `dynamic_24` / hashcat `-m 110 --hex-salt`.
+- hashcat forum **thread-3665**, *Colliding password protected MS office 97-2003
+  documents* (<https://hashcat.net/forum/thread-3665.html>) — the Office 97/2000
+  40-bit MD5+RC4 key-space attack: the RC4 key derives from a 40-bit MD5 input, so
+  a 2⁴⁰ sweep recovers it and opens the document with no real password (collider
+  `-m 9710`; `-m 9720` finds the actual password; SHA1+RC4 CryptoAPI is `-m 9800`).
+  **Confirms** Xcrack's `office-keyattack`.
 - ISO 32000-1 / ISO 32000-2 — PDF, incl. the Adobe-extension Algorithm 2.B (AES-256 / R6).
 - PKWARE `.ZIP` APPNOTE — ZIP, ZipCrypto, WinZip-AES extra field 0x9901.
 - RARLAB RAR 5.0 archive format; unrar source (`crypt5.cpp`) — RAR5 crypt record.
