@@ -35,6 +35,11 @@ func TestGPUSelfTest(t *testing.T) {
 	for _, d := range a.Devices() {
 		t.Logf("device: %s / %s (%s, %d CU)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
 	}
+	// GPUSelfTestWith must validate this already-open accelerator — the context
+	// reused on a --gpu launch — not a freshly detected one.
+	if err := GPUSelfTestWith(a); err != nil {
+		t.Fatalf("GPUSelfTestWith(open accelerator): %v", err)
+	}
 }
 
 // TestGPUOldOfficeKeySearch cross-validates the Office 97/2000 40-bit MD5+RC4

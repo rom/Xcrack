@@ -24,7 +24,10 @@ func enableGPU(opts *xcrack.Options, logger *slog.Logger) (cleanup func()) {
 		logger.Warn("--gpu requested but no usable OpenCL device; continuing on CPU", "err", err)
 		return noop
 	}
-	if err := accel.GPUSelfTest(); err != nil {
+	// Validate the context we just opened (and will hand to the engine), rather
+	// than opening a second one: GPUSelfTestWith reuses acc, so device/kernel
+	// init is paid once and the proven context is the one actually used.
+	if err := accel.GPUSelfTestWith(acc); err != nil {
 		logger.Warn("GPU self-test failed; not using the GPU tier, continuing on CPU", "err", err)
 		acc.Close()
 		return noop

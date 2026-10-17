@@ -20,6 +20,9 @@ func TestDefaultBuildHasNoGPU(t *testing.T) {
 	if err := GPUSelfTest(); !errors.Is(err, ErrNotBuilt) {
 		t.Errorf("GPUSelfTest() err = %v, want ErrNotBuilt", err)
 	}
+	if err := GPUSelfTestWith(nil); !errors.Is(err, ErrNotBuilt) {
+		t.Errorf("GPUSelfTestWith() err = %v, want ErrNotBuilt", err)
+	}
 }
 
 // TestVendorArch classifies vendor strings across GPU families.

@@ -124,7 +124,10 @@ func run() int {
 			logger.Warn("--gpu requested but this binary is pure-Go; rebuild with -tags opencl. Continuing on CPU.")
 		} else if acc, err := accel.Detect(); err != nil {
 			logger.Warn("--gpu requested but no usable OpenCL device; continuing on CPU", "err", err)
-		} else if err := accel.GPUSelfTest(); err != nil {
+		} else if err := accel.GPUSelfTestWith(acc); err != nil {
+			// Validate the context we just opened (the one handed to the engine
+			// below) instead of opening a second one, so device/kernel init is
+			// paid once and the proven context is the one actually used.
 			logger.Warn("GPU self-test failed; not using the GPU tier, continuing on CPU", "err", err)
 			acc.Close()
 		} else {
