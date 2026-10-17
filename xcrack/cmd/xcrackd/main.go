@@ -2,9 +2,12 @@
 //
 // It is intended to run on a hardened backend host (optionally fronting a
 // GPU/OpenCL cracking tier) and be called by clients such as an Impex kiosk or
-// an Impex DataLock appliance. The service ships no authentication; run it
-// behind a reverse proxy / mesh that provides authn/z, and never expose it
-// directly to untrusted networks.
+// an Impex DataLock appliance. It can terminate TLS itself (--tls-cert/--tls-key,
+// with optional mutual-TLS client-certificate verification via --tls-client-ca;
+// see scripts/gen-selfsigned-cert.sh and scripts/gen-letsencrypt-cert.sh), or run
+// plaintext behind a TLS-terminating reverse proxy / mesh. It ships no
+// authentication, so put authn/z in front of it and never expose it directly to
+// untrusted networks.
 //
 // Logging is an audit trail: every request that completes emits a structured
 // record (client address, endpoint, bytes, elapsed) and, for each file that was
@@ -15,6 +18,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -49,6 +54,11 @@ func run() int {
 		gpu           = flag.Bool("gpu", false, "enable the optional OpenCL GPU acceleration tier (requires a binary built with -tags opencl on a host with OpenCL hardware; the default build is pure-Go)")
 		gpuSelfTest   = flag.Bool("gpu-selftest", false, "validate the OpenCL PBKDF2 kernel against the CPU reference and exit (requires -tags opencl)")
 		dualPipeline  = flag.Bool("dual-pipeline", false, "dual CPU+GPU pipeline: race the CPU search and the GPU sweep over one shared keyspace per file, first to find wins (needs --gpu; the CPU no longer sits idle while the device works)")
+
+		tlsCert     = flag.String("tls-cert", "", "serve HTTPS with this PEM certificate chain (requires --tls-key; see scripts/gen-selfsigned-cert.sh and scripts/gen-letsencrypt-cert.sh)")
+		tlsKey      = flag.String("tls-key", "", "private key (PEM) for --tls-cert")
+		tlsClientCA = flag.String("tls-client-ca", "", "require and verify client certificates against this PEM CA bundle (mutual TLS); empty disables client-cert auth")
+		tlsMinVer   = flag.String("tls-min-version", "1.2", "minimum TLS version: 1.2 or 1.3")
 
 		logLevel      = flag.String("log-level", "info", "log level: debug|info|warn|error")
 		logFormat     = flag.String("log-format", "text", "log/audit output format: text|json")
@@ -158,18 +168,47 @@ func run() int {
 		},
 	})
 
+	// TLS: when a certificate/key pair is configured, serve HTTPS with a hardened
+	// config (TLS 1.2+ floor, optional mutual-TLS client-cert verification). The
+	// cert/key are loaded by ListenAndServeTLS; the rest comes from TLSConfig.
+	tlsEnabled := *tlsCert != "" || *tlsKey != ""
+	var tlsConf *tls.Config
+	if tlsEnabled {
+		if *tlsCert == "" || *tlsKey == "" {
+			fmt.Fprintln(os.Stderr, "xcrackd: --tls-cert and --tls-key must be given together")
+			return 1
+		}
+		c, err := serverTLSConfig(*tlsMinVer, *tlsClientCA)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrackd: tls: %v\n", err)
+			return 1
+		}
+		tlsConf = c
+	}
+
 	httpSrv := &http.Server{
 		Addr:         *addr,
 		Handler:      srv.Handler(),
 		ReadTimeout:  *readTimeout,
 		WriteTimeout: *writeTimeout,
 		IdleTimeout:  120 * time.Second,
+		TLSConfig:    tlsConf,
 	}
 
 	serveErr := make(chan error, 1)
 	go func() {
-		logger.Info("xcrackd listening", "addr", *addr)
-		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		scheme := "http"
+		if tlsEnabled {
+			scheme = "https"
+		}
+		logger.Info("xcrackd listening", "addr", *addr, "scheme", scheme, "mutual_tls", tlsConf != nil && tlsConf.ClientAuth == tls.RequireAndVerifyClientCert)
+		var err error
+		if tlsEnabled {
+			err = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)
+		} else {
+			err = httpSrv.ListenAndServe()
+		}
+		if err != nil && err != http.ErrServerClosed {
 			serveErr <- err
 		}
 	}()
@@ -191,4 +230,33 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// serverTLSConfig builds the server's TLS configuration: a minimum-version floor
+// (TLS 1.2 or 1.3) and, when clientCAFile is set, mutual TLS — client
+// certificates are required and verified against that PEM CA bundle. The server
+// certificate itself is loaded from the files by ListenAndServeTLS.
+func serverTLSConfig(minVer, clientCAFile string) (*tls.Config, error) {
+	conf := &tls.Config{}
+	switch minVer {
+	case "", "1.2":
+		conf.MinVersion = tls.VersionTLS12
+	case "1.3":
+		conf.MinVersion = tls.VersionTLS13
+	default:
+		return nil, fmt.Errorf("--tls-min-version must be 1.2 or 1.3, got %q", minVer)
+	}
+	if clientCAFile != "" {
+		pem, err := os.ReadFile(clientCAFile)
+		if err != nil {
+			return nil, fmt.Errorf("read client CA: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("client CA %q contained no PEM certificates", clientCAFile)
+		}
+		conf.ClientCAs = pool
+		conf.ClientAuth = tls.RequireAndVerifyClientCert
+	}
+	return conf, nil
 }

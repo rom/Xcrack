@@ -163,6 +163,11 @@ func runCrack(args []string) int {
 	clusterDefaults := fs_.Bool("cluster-allow-defaults", false, "in distributed mode, let each server also try its own default list")
 	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
 	clusterSession := fs_.String("cluster-session", "", "persist/resume distributed progress to FILE: an interrupted run skips the candidates already confirmed tried per file (cross-worker dedup across runs)")
+	tlsCAF := fs_.String("tls-ca", "", "distributed mode (https:// servers): verify the server certificate against this PEM CA bundle (for a private CA or self-signed cert)")
+	tlsCertF := fs_.String("tls-cert", "", "distributed mode: client certificate (PEM) for mutual TLS to the xcrackd servers (requires --tls-key)")
+	tlsKeyF := fs_.String("tls-key", "", "distributed mode: private key (PEM) for --tls-cert")
+	tlsServerNameF := fs_.String("tls-server-name", "", "distributed mode: expected server certificate name (SNI/verification override, e.g. when connecting by IP)")
+	tlsInsecureF := fs_.Bool("tls-insecure", false, "distributed mode: skip server certificate verification (INSECURE — testing only)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	stdoutF := fs_.Bool("stdout", false, "don't crack: print the candidate stream (wordlists + rules + masks + generators) to stdout and exit")
@@ -843,6 +848,18 @@ func runCrack(args []string) int {
 		fmt.Fprintf(os.Stderr, "xcrack: %v\n", derr)
 		return 2
 	} else if distributed {
+		client, cerr := buildClusterHTTPClient(tlsClientOpts{
+			CAFile: *tlsCAF, CertFile: *tlsCertF, KeyFile: *tlsKeyF,
+			ServerName: *tlsServerNameF, Insecure: *tlsInsecureF,
+		}, cfg)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: tls: %v\n", cerr)
+			return 2
+		}
+		copts.Client = client
+		if *tlsInsecureF {
+			fmt.Fprintln(os.Stderr, "xcrack: WARNING: --tls-insecure disables server certificate verification")
+		}
 		return runDistributed(files, servers, copts, buildCandidates, pot, *clusterSession)
 	}
 

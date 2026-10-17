@@ -85,6 +85,13 @@ type fileConfig struct {
 		Batch         int             `yaml:"batch"`          // candidates shipped per server request
 		AllowDefaults bool            `yaml:"allow_defaults"` // let each server also use its own default list
 		PerRequest    string          `yaml:"per_request"`    // per-request server deadline hint (e.g. 30s)
+		TLS           struct {
+			CA         string `yaml:"ca"`          // PEM CA bundle to verify the server cert (private CA / self-signed)
+			Cert       string `yaml:"cert"`        // client certificate (PEM) for mutual TLS
+			Key        string `yaml:"key"`         // private key (PEM) for cert
+			ServerName string `yaml:"server_name"` // expected server cert name (SNI / verification override)
+			Insecure   bool   `yaml:"insecure"`    // skip server verification (INSECURE — testing only)
+		} `yaml:"tls"`
 	} `yaml:"cluster"`
 }
 

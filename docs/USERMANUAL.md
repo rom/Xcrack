@@ -258,9 +258,50 @@ collective|partition`, `--cluster-batch N` (candidates per request), and
 `--cluster-session FILE` to **resume** an interrupted fleet run (already-tried
 candidates are skipped).
 
-> **Security:** `xcrackd` ships **no authentication or TLS** by design. Run it
-> only on a trusted network, or put your own authn/TLS proxy in front. Never
-> expose it to the internet.
+### Securing the link with TLS
+
+Uploaded files, recovered passwords and decrypted content cross the wire to the
+workers, so the link must be encrypted. `xcrackd` can terminate TLS itself, and
+the client verifies it. Generate a certificate first (self-signed for an
+internal fleet, Let's Encrypt for a public endpoint):
+
+```sh
+scripts/gen-selfsigned-cert.sh -o tls -h "w1.internal,10.0.0.5"   # server.crt + server.key
+# or, for a public name:  scripts/gen-letsencrypt-cert.sh -d crack.example.net -m you@example.net -o tls
+```
+
+Serve HTTPS on the worker, and point the client at `https://` with the cert it
+should trust:
+
+```sh
+# worker:
+xcrackd -addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key -gpu
+
+# controller (trust the self-signed cert; omit --tls-ca for a public CA):
+xcrack --server https://w1.internal:8443 --tls-ca tls/server.crt -w rockyou.txt big.7z
+```
+
+For **mutual TLS** (the server also authenticates each client), generate a CA +
+server + client kit and require client certs:
+
+```sh
+scripts/gen-selfsigned-cert.sh -o tls -h "w1.internal" -m        # ca/server/client .crt/.key
+xcrackd -addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key --tls-client-ca tls/ca.crt
+xcrack --server https://w1.internal:8443 --tls-ca tls/ca.crt \
+       --tls-cert tls/client.crt --tls-key tls/client.key -w rockyou.txt big.7z
+```
+
+Client TLS flags: `--tls-ca` (trust a private/self-signed server cert),
+`--tls-cert`/`--tls-key` (client cert for mTLS), `--tls-server-name` (verify a
+name other than the URL host, e.g. when connecting by IP), and `--tls-insecure`
+(skip verification — **testing only**). The same settings live under
+`cluster.tls.*` in a config file. Server TLS flags: `--tls-cert`, `--tls-key`,
+`--tls-client-ca` (mTLS), `--tls-min-version 1.2|1.3`.
+
+> **Security:** TLS encrypts and authenticates the transport, but `xcrackd`
+> still ships **no user authentication** — anyone who can reach the port (and
+> pass mTLS, if required) can submit work. Keep it on a trusted network or
+> behind an authenticating proxy, and never expose it to the internet unguarded.
 
 See [`USAGE.md`](USAGE.md#http-service-xcrackd) for the HTTP API and the
 challenge-export bridge.

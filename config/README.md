@@ -135,3 +135,14 @@ environment variables override the config.
 | `batch` | int | candidates shipped per server request |
 | `allow_defaults` | bool | let each server also try its own default list |
 | `per_request` | duration | per-request server deadline hint (e.g. `30s`) |
+| `tls.ca` | string | PEM CA bundle to verify `https://` server certs (private CA / self-signed) |
+| `tls.cert` | string | client certificate (PEM) for mutual TLS to the servers |
+| `tls.key` | string | private key (PEM) for `tls.cert` |
+| `tls.server_name` | string | expected server cert name (SNI / verification override) |
+| `tls.insecure` | bool | skip server certificate verification (**insecure** — testing only) |
+
+> Server-side TLS is an `xcrackd` runtime flag, not a config key: run
+> `xcrackd --tls-cert server.crt --tls-key server.key` (add `--tls-client-ca
+> ca.crt` for mutual TLS). Generate certs with
+> [`scripts/gen-selfsigned-cert.sh`](../scripts/gen-selfsigned-cert.sh) or
+> [`scripts/gen-letsencrypt-cert.sh`](../scripts/gen-letsencrypt-cert.sh).

@@ -15,6 +15,21 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **TLS for the REST API and the distributed client.** `xcrackd` can now
+  terminate HTTPS itself: `--tls-cert`/`--tls-key` serve TLS (1.2 floor, or
+  `--tls-min-version 1.3`), and `--tls-client-ca` turns on **mutual TLS**
+  (client certificates required and verified against a CA bundle). The `xcrack`
+  distributed client gained matching flags for `https://` servers: `--tls-ca`
+  (trust a private/self-signed server cert), `--tls-cert`/`--tls-key` (present a
+  client cert for mTLS), `--tls-server-name` (SNI/verification override) and
+  `--tls-insecure` (skip verification — testing only, with a loud warning); the
+  same settings live under `cluster.tls.*` in a config file. Two helper scripts
+  create the certificates: `scripts/gen-selfsigned-cert.sh` (a self-signed server
+  cert with SANs, or a full CA + server + client mTLS kit) and
+  `scripts/gen-letsencrypt-cert.sh` (a certbot/ACME wrapper for a public
+  endpoint). Verified end to end — `xcrackd` over HTTPS cracking for the `xcrack`
+  client that trusts its cert — plus unit tests for the server/client TLS config
+  builders and an HTTPS round-trip test.
 - **Dual CPU+GPU parallel pipeline (`--dual-pipeline`).** For an
   acceleration-capable target, the CPU search and the GPU sweep now run
   **concurrently over one shared, de-duplicated candidate stream** instead of the
