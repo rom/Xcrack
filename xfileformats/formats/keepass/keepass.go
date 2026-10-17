@@ -1,8 +1,9 @@
-// Package keepass detects KeePass KDBX4 databases (.kdbx, version 4) and
-// recovers their master passphrase via the header HMAC (see
-// xcrypto/scheme/keepass). The default Argon2d KDF, Argon2id, and the legacy
-// AES-KDF are all handled. Only the passphrase is attacked; the inner database
-// is surfaced unchanged (the recovered password is the deliverable).
+// Package keepass detects KeePass KDBX databases (.kdbx) and recovers their
+// master passphrase (see xcrypto/scheme/keepass). KDBX4 is verified via the
+// header HMAC (Argon2d, Argon2id, or the legacy AES-KDF) and the legacy KDBX3.1
+// via its stream-start bytes (AES-KDF + AES-256-CBC). Only the passphrase is
+// attacked; the inner database is surfaced unchanged (the recovered password is
+// the deliverable).
 package keepass
 
 import (

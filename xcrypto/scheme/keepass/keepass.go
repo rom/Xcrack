@@ -1,12 +1,20 @@
-// Package keepass implements passphrase recovery for KeePass KDBX4 databases
-// (.kdbx, format version 4). A KDBX4 file authenticates its header with an
-// HMAC-SHA256 whose key is derived from the master password through the chosen
-// KDF — Argon2d (the default), Argon2id, or the legacy AES-KDF — so a password
-// is verified by recomputing that header HMAC, with no need to decrypt the
-// database body. Only verification is implemented; the inner database is not
-// reconstructed.
+// Package keepass implements passphrase recovery for KeePass KDBX databases
+// (.kdbx). Both the current KDBX4 and the legacy KDBX3 (version 3.1) layouts are
+// supported.
 //
-// Master-key chain (password only):
+// A KDBX4 file authenticates its header with an HMAC-SHA256 whose key is derived
+// from the master password through the chosen KDF — Argon2d (the default),
+// Argon2id, or the legacy AES-KDF — so a password is verified by recomputing
+// that header HMAC, with no need to decrypt the database body.
+//
+// A KDBX3 file has no header HMAC: it always uses the AES-KDF (TransformSeed /
+// TransformRounds in the header) and a password is verified by AES-256-CBC
+// decrypting the first payload block and comparing it to the header's
+// stream-start bytes (see verifyKDBX3).
+//
+// Only verification is implemented; the inner database is not reconstructed.
+//
+// KDBX4 master-key chain (password only):
 //
 //	composite      = SHA256( SHA256(password) )
 //	transformed    = KDF(composite)                       // Argon2d/id or AES-KDF
@@ -20,6 +28,7 @@ package keepass
 
 import (
 	"crypto/aes"
+	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -38,7 +47,10 @@ const (
 	hdrCipherID      = 2
 	hdrCompression   = 3
 	hdrMasterSeed    = 4
+	hdrTransformSeed = 5 // KDBX3 AES-KDF seed
+	hdrTransformRnds = 6 // KDBX3 AES-KDF rounds (uint64)
 	hdrEncryptionIV  = 7
+	hdrStreamStart   = 9 // KDBX3 stream-start-bytes verifier
 	hdrKdfParameters = 11
 
 	// bounds against crafted parameters (verification is deliberately costly;
@@ -55,6 +67,10 @@ var (
 	uuidArgon2d  = [16]byte{0xEF, 0x63, 0x6D, 0xDF, 0x8C, 0x29, 0x44, 0x4B, 0x91, 0xF7, 0xA9, 0xA4, 0x03, 0xE3, 0x0A, 0x0C}
 	uuidArgon2id = [16]byte{0x9E, 0x29, 0x8B, 0x19, 0x56, 0xDB, 0x47, 0x73, 0xB2, 0x3D, 0xFE, 0x5F, 0x03, 0xFA, 0x5C, 0xB1}
 	uuidAESKDF   = [16]byte{0xC9, 0xD9, 0xF3, 0x9A, 0x62, 0x8A, 0x44, 0x60, 0xBF, 0x74, 0x0D, 0x08, 0xC1, 0x8A, 0x4F, 0xEA}
+
+	// uuidCipherAES is the AES-256 block-cipher UUID (the KDBX3 default). Twofish
+	// and ChaCha20 variants are not handled.
+	uuidCipherAES = [16]byte{0x31, 0xC1, 0xF2, 0xE6, 0xBF, 0x71, 0x43, 0x50, 0xBE, 0x58, 0x05, 0x21, 0x6A, 0xFC, 0x5A, 0xFF}
 )
 
 type kdfParams struct {
@@ -76,6 +92,17 @@ type KDBX struct {
 	kdfRaw       []byte // raw KdfParameters VariantDictionary, parsed by parseKDF
 	kdf          kdfParams
 	prefix       []byte // the minimal self-contained bytes (header + SHA + HMAC)
+
+	// KDBX3 (version 3) fields. KDBX3 carries its AES-KDF parameters as plain
+	// header fields (not a VariantDictionary) and verifies a password by
+	// AES-256-CBC decrypting the payload and checking the stream-start bytes,
+	// rather than by a header HMAC.
+	cipherID      [16]byte
+	transformSeed []byte
+	transformRnds uint64
+	encIV         []byte
+	streamStart   []byte
+	firstCipher   []byte // first 32 bytes of the encrypted payload (2 AES blocks)
 }
 
 // Serialized returns the minimal leading bytes of the file needed to verify a
@@ -151,7 +178,9 @@ func parseVariantDict(b []byte) (map[string]vdVal, error) {
 
 func le32(b []byte) uint32 { return binary.LittleEndian.Uint32(b) }
 
-// Parse reads a KDBX4 file header and the stored header HMAC.
+// Parse reads a KDBX file header. For KDBX4 it captures the stored header HMAC
+// (the verifier); for KDBX3 it captures the AES-KDF parameters and the first
+// ciphertext block (verified against the stream-start bytes).
 func Parse(data []byte) (*KDBX, error) {
 	if len(data) < 12 || le32(data[0:]) != sig1 || le32(data[4:]) != sig2 {
 		return nil, xcrypto.ErrMalformed
@@ -160,8 +189,15 @@ func Parse(data []byte) (*KDBX, error) {
 		Minor: binary.LittleEndian.Uint16(data[8:]),
 		Major: binary.LittleEndian.Uint16(data[10:]),
 	}
-	if k.Major != 4 {
-		// KDBX3 uses a different (stream-start-bytes) verifier; not handled here.
+	switch k.Major {
+	case 3:
+		if err := k.parseKDBX3(data); err != nil {
+			return nil, err
+		}
+		return k, nil
+	case 4:
+		// handled by the loop below
+	default:
 		return nil, xcrypto.ErrUnsupported
 	}
 	off := 12
@@ -201,6 +237,66 @@ func Parse(data []byte) (*KDBX, error) {
 		}
 		if off > maxHeader {
 			return nil, xcrypto.ErrMalformed
+		}
+	}
+}
+
+// parseKDBX3 reads a KDBX3 (version 3) header. KDBX3 header fields are
+// uint16-sized (KDBX4 uses uint32), the AES-KDF parameters live directly in the
+// header (TransformSeed/TransformRounds, not a VariantDictionary), and the
+// encrypted payload begins immediately after the end-of-header field. The
+// password is verified by AES-256-CBC decrypting the first two blocks and
+// comparing them to the stored stream-start bytes.
+func (k *KDBX) parseKDBX3(data []byte) error {
+	off := 12
+	for {
+		if off+3 > len(data) {
+			return xcrypto.ErrMalformed
+		}
+		id := data[off]
+		n := int(binary.LittleEndian.Uint16(data[off+1:]))
+		off += 3
+		if off+n > len(data) || off+n > maxHeader {
+			return xcrypto.ErrMalformed
+		}
+		field := data[off : off+n]
+		off += n
+		switch id {
+		case hdrCipherID:
+			if n == 16 {
+				copy(k.cipherID[:], field)
+			}
+		case hdrMasterSeed:
+			k.masterSeed = append([]byte(nil), field...)
+		case hdrTransformSeed:
+			k.transformSeed = append([]byte(nil), field...)
+		case hdrTransformRnds:
+			if n >= 8 {
+				k.transformRnds = binary.LittleEndian.Uint64(field)
+			}
+		case hdrEncryptionIV:
+			k.encIV = append([]byte(nil), field...)
+		case hdrStreamStart:
+			k.streamStart = append([]byte(nil), field...)
+		case hdrEndOfHeader:
+			k.header = data[:off]
+			// The encrypted payload starts here; grab its first two AES blocks.
+			if off+32 > len(data) {
+				return xcrypto.ErrMalformed
+			}
+			k.firstCipher = append([]byte(nil), data[off:off+32]...)
+			k.prefix = append([]byte(nil), data[:off+32]...)
+			if k.cipherID != uuidCipherAES {
+				return xcrypto.ErrUnsupported // only AES-256-CBC KDBX3 is handled
+			}
+			if len(k.masterSeed) != 32 || len(k.transformSeed) != 32 ||
+				len(k.encIV) != aes.BlockSize || len(k.streamStart) != 32 {
+				return xcrypto.ErrMalformed
+			}
+			return nil
+		}
+		if off > maxHeader {
+			return xcrypto.ErrMalformed
 		}
 	}
 }
@@ -281,9 +377,44 @@ func aesKDF(composite, seed []byte, rounds uint64) ([]byte, error) {
 	return h[:], nil
 }
 
-// Verify reports whether password unlocks the database, by recomputing the
-// header HMAC. It is deliberately expensive (runs the KDF).
+// verifyKDBX3 reports whether password unlocks a KDBX3 database: run the
+// AES-KDF, form the master key, AES-256-CBC decrypt the first payload block, and
+// compare it to the stored stream-start bytes.
+//
+//	composite   = SHA256( SHA256(password) )
+//	transformed = AES-KDF(composite, TransformSeed, TransformRounds)
+//	masterKey   = SHA256( MasterSeed || transformed )
+//	ok          = AES-256-CBC(masterKey, IV)[0:32] == StreamStartBytes
+func (k *KDBX) verifyKDBX3(password []byte) (bool, error) {
+	if k.transformRnds == 0 || k.transformRnds > maxAESRounds {
+		return false, xcrypto.ErrUnsupported
+	}
+	pw := sha256.Sum256(password)
+	composite := sha256.Sum256(pw[:])
+	transformed, err := aesKDF(composite[:], k.transformSeed, k.transformRnds)
+	if err != nil {
+		return false, err
+	}
+	mh := sha256.New()
+	mh.Write(k.masterSeed)
+	mh.Write(transformed)
+	masterKey := mh.Sum(nil)
+	block, err := aes.NewCipher(masterKey)
+	if err != nil {
+		return false, err
+	}
+	dec := make([]byte, 32)
+	cipher.NewCBCDecrypter(block, k.encIV).CryptBlocks(dec, k.firstCipher)
+	return subtle.ConstantTimeCompare(dec, k.streamStart) == 1, nil
+}
+
+// Verify reports whether password unlocks the database. For KDBX4 it recomputes
+// the header HMAC; for KDBX3 it checks the stream-start bytes. It is
+// deliberately expensive (runs the KDF).
 func (k *KDBX) Verify(password []byte) (bool, error) {
+	if k.Major == 3 {
+		return k.verifyKDBX3(password)
+	}
 	pw := sha256.Sum256(password)
 	composite := sha256.Sum256(pw[:])
 	transformed, err := k.transformKey(composite[:])
@@ -307,8 +438,16 @@ func (k *KDBX) Verify(password []byte) (bool, error) {
 	return subtle.ConstantTimeCompare(got, k.storedHMAC) == 1, nil
 }
 
-// Challenge returns a reporting challenge for a KDBX4 database.
+// Challenge returns a reporting challenge for the database.
 func (k *KDBX) Challenge() *xcrypto.Challenge {
+	if k.Major == 3 {
+		return &xcrypto.Challenge{
+			Scheme:   "keepass-kdbx3-aeskdf",
+			KDF:      xcrypto.KDFSpec{Algo: "keepass-kdbx3-aeskdf", Iterations: int(k.transformRnds), Salt: k.transformSeed, KeyLen: 32},
+			Cipher:   xcrypto.CipherSpec{Algo: "aes-256-cbc", KeyBits: 256},
+			Verifier: k.streamStart,
+		}
+	}
 	algo := "keepass-kdbx4-"
 	switch k.kdf.uuid {
 	case uuidArgon2d:
