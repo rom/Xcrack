@@ -192,7 +192,12 @@ func DefaultList() Source {
 }
 
 var defaultPasswords = []string{
-	"", "infected", "virus", "malware", "password", "Password", "PASSWORD",
+	// "" and "VelvetSweatshop" first: the empty password opens owner/permission-
+	// only PDFs and read-only-recommended Office docs, and VelvetSweatshop is the
+	// fixed key Excel uses to "encrypt" a merely read-only-recommended workbook
+	// (.xls and .xlsx) — both recover with zero search when they apply.
+	"", "VelvetSweatshop",
+	"infected", "virus", "malware", "password", "Password", "PASSWORD",
 	"123456", "1234", "12345", "123456789", "0000", "1111",
 	"test", "abc123", "letmein", "changeme", "secret", "admin",
 	"attachment", "invoice", "document", "confidential", "open", "unzip",
