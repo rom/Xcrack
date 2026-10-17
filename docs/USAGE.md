@@ -1055,8 +1055,10 @@ The 40-bit **PDF** RC4 schemes have the same password-independent key
 bottleneck as legacy Office: `xcrack pdf-keyattack FILE` sweeps the 2^40 file-key
 space against the `/U` verifier and recovers the key for a V1/R2 (or 40-bit
 R3/R4) PDF with no password, shardable with `--shard i/N` and parallel over
-`--workers`. 128-bit RC4 and the AES PDF schemes have no such shortcut and the
-command declines them.
+`--workers`. `--gpu` offloads the sweep to an OpenCL device in a `-tags opencl`
+build (every hit re-checked on the CPU; falls back to CPU otherwise), exactly as
+`office-keyattack --gpu` does for the Office 97/2000 trunc sweep. 128-bit RC4 and
+the AES PDF schemes have no such shortcut and the command declines them.
 
 **Microsoft Access** goes further still: a Jet (`.mdb`, Access 97–2003) database
 stores its password merely XOR-obfuscated in the header, so there is nothing to

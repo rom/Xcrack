@@ -313,7 +313,7 @@ verifies, and the seam derives one profile per candidate, so offloading could
 sweep the keyspace against the wrong profile and miss the real one — it stays on
 the CPU where both profiles are tried.
 
-The GPU also accelerates one **key-search** attack (a different kernel shape from
+The GPU also accelerates two **key-search** attacks (a different kernel shape from
 the per-password batch above): the **Office 97/2000 2^40 MD5+RC4 trunc sweep**
 (`xcrack office-keyattack --gpu`). The `oldoffice_md5rc4` kernel reproduces the
 CPU verifier for every trunc index — `trunc2 = MD5(16×(trunc‖salt))[:5]`,
@@ -324,6 +324,19 @@ in a pure-Go build or with no device it falls back to the CPU sweep. The kernel
 is validated against the CPU reference `officebinary.RC4KeyAttack` on pocl
 (`OldOfficeKeySearcher`, `GPUSelfTest`).
 
+The second is the **PDF Standard Security Handler 2^40 RC4 file-key sweep**
+(`xcrack pdf-keyattack --gpu`), for V1/R2 and 40-bit R3/R4 documents. The file
+key is `MD5(…)[:5]` and the `/U` verifier is a function of that 5-byte key alone,
+so the `pdf_rc4keysearch` kernel is **RC4-only**: the one per-document MD5 the
+R3/R4 path needs (`MD5(pad‖ID)`) is constant across keys and is precomputed on
+the host, then each work-item RC4s the input `rounds` times (round `r` keyed by
+`key5 XOR r` — R2: 1 round over the 32-byte pad; R3/R4: 20 rounds over the 16-byte
+seed) and compares to `/U`. It reuses the same MD5+RC4 cores and the same hit/
+atomic plumbing as the Office sweep. The CPU re-checks every hit
+(`pdf.Handler.VerifyFileKey`) and the whole thing falls back to the CPU
+(`pdf.Handler.RC4KeyAttack`) in a pure-Go build or with no device; validated
+against the CPU reference on pocl (`PDFRC4KeySearcher`, `GPUSelfTest`).
+
 **Good candidates for additional kernels** (catalogued from a survey of the
 schemes):
 
@@ -331,10 +344,9 @@ schemes):
 |-----------|----------|------------|
 | **Office standard iterated hash** (SHA-1 ×50000) | Office 2007 | the spin kernel already exists (shared with agile); only the standard `Finish` wiring (the post-spin `H(cur‖0)` + 0x36/0x5c derive) remains |
 | **KeePass AES-KDF** (KDBX3 / KDBX4 AES) | KeePass AES-KDF files | moderate; needs an AES-256 core; the seed is shared across candidates |
-| **PDF R2–R4 MD5+RC4 key search** | PDF dictionaries | low — reuse the shipped `oldoffice_md5rc4` MD5+RC4 cores; same key-search shape as the Office 97/2000 sweep, different per-index derivation |
 
-(The **Office 97/2000 2^40 MD5+RC4 trunc sweep** has shipped — see the key-search
-paragraph above.)
+(The **Office 97/2000 2^40 MD5+RC4 trunc sweep** and the **PDF R2–R4 2^40 RC4
+file-key sweep** have both shipped — see the two key-search paragraphs above.)
 
 **Deliberately CPU-only / out of scope for a kernel:** Argon2 (KeePass/PuTTY) and
 scrypt (Ethereum/age/PBES2) are **memory-hard** — each work-item needs its whole
