@@ -770,6 +770,16 @@ func (e *engine) accelBatchSize() int {
 // HMAC variant the AccelKDF asks for. An unknown PRF returns ErrUnsupported so
 // the caller falls back to the CPU.
 func accelDerive(a Accelerator, ak *xfileformats.AccelKDF, batch [][]byte) ([][]byte, error) {
+	// Salted SHA-1 (hashcat-110 / VBA): a single un-iterated SHA1(pw||salt). The
+	// device returns a digest per candidate; ak.Finish compares it to the target
+	// and re-checks any apparent hit on the CPU, so the device never decides.
+	if ak.SaltedSHA1 {
+		sh, ok := a.(accel.SaltedSHA1Hasher)
+		if !ok {
+			return nil, accel.ErrUnsupported
+		}
+		return sh.SaltedSHA1(batch, ak.Salt)
+	}
 	// Office agile/standard iterated hash: not a PBKDF2 at all. The CPU does the
 	// one variable-length first hash cur0 = H(salt || UTF16LE(pw)) per candidate,
 	// and the device runs the fixed-size spin loop (the dominant cost).

@@ -62,6 +62,14 @@ var oldofficeSrc string
 //go:embed kernel_pdf_rc4keysearch.cl
 var pdfKeySrc string
 
+//go:embed kernel_vba_sha1.cl
+var vbaSHA1Src string
+
+// maxSaltedMsg bounds the padded message (password + salt) the batch salted-SHA-1
+// kernel handles: its MSGBUF is 256 bytes and SHA-1 padding needs 9, so the true
+// message must be <= 247 bytes. Anything longer returns ErrUnsupported.
+const maxSaltedMsg = 247
+
 // Host-side limits that keep each kernel single-block per PRF message. SHA-1 and
 // SHA-256 use a 64-byte block (salt||INT fits when saltlen+4 <= 55); SHA-512
 // uses a 128-byte block (saltlen+4 <= 111). A request outside these falls back
@@ -105,6 +113,8 @@ type clAccel struct {
 	oldofficeProg  C.cl_program          // released in Close
 	pdfKey         []C.cl_kernel         // PDF 40-bit RC4 key search, one per device
 	pdfKeyProg     C.cl_program          // released in Close
+	vbaSHA1        []C.cl_kernel         // salted SHA-1 batch (hashcat-110 / VBA), one per device
+	vbaSHA1Prog    C.cl_program          // released in Close
 	optimalBatch   int                   // autotuned per-dispatch batch size (BatchTuner)
 }
 
@@ -232,6 +242,15 @@ func Detect() (Accelerator, error) {
 	a.pdfKeyProg = pkProg
 	a.pdfKey = pkKerns
 
+	// Salted SHA-1 batch kernel (SaltedSHA1Hasher — hashcat-110 / VBA).
+	vbProg, vbKerns, berr := buildKernels(ctx, devs, vbaSHA1Src, "vba_sha1")
+	if berr != nil {
+		a.Close()
+		return nil, berr
+	}
+	a.vbaSHA1Prog = vbProg
+	a.vbaSHA1 = vbKerns
+
 	for _, d := range devs {
 		a.devices = append(a.devices, describeDevice(d))
 	}
@@ -353,6 +372,14 @@ func (a *clAccel) Close() error {
 	}
 	if a.pdfKeyProg != nil {
 		C.clReleaseProgram(a.pdfKeyProg)
+	}
+	for _, k := range a.vbaSHA1 {
+		if k != nil {
+			C.clReleaseKernel(k)
+		}
+	}
+	if a.vbaSHA1Prog != nil {
+		C.clReleaseProgram(a.vbaSHA1Prog)
 	}
 	for _, q := range a.queues {
 		if q != nil {
@@ -782,6 +809,151 @@ func (a *clAccel) PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int
 	return nil, false, nil
 }
 
+// SaltedSHA1 computes SHA1(password || salt) for a batch of passwords on the
+// device, implementing SaltedSHA1Hasher (hashcat-110 / VBA). It splits the batch
+// across backing devices like run and reassembles in input order. A message
+// (password + salt) longer than the kernel's bound returns ErrUnsupported so the
+// caller uses the CPU. The result is byte-for-byte identical to crypto/sha1 over
+// (password || salt); the caller re-checks any apparent hit, so the device never
+// decides correctness.
+func (a *clAccel) SaltedSHA1(passwords [][]byte, salt []byte) ([][]byte, error) {
+	if len(passwords) == 0 {
+		return nil, nil
+	}
+	maxpw := 0
+	for _, pw := range passwords {
+		if len(pw) > maxpw {
+			maxpw = len(pw)
+		}
+	}
+	if maxpw+len(salt) > maxSaltedMsg {
+		return nil, ErrUnsupported
+	}
+	n := len(passwords)
+	nd := len(a.queues)
+	if nd <= 1 {
+		return a.saltedSHA1One(0, passwords, salt)
+	}
+	res := make([][]byte, n)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (n + nd - 1) / nd
+	for d := 0; d < nd; d++ {
+		lo := d * chunk
+		if lo >= n {
+			break
+		}
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(dev, lo, hi int) {
+			defer wg.Done()
+			part, err := a.saltedSHA1One(dev, passwords[lo:hi], salt)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			copy(res[lo:hi], part)
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return res, nil
+}
+
+// saltedSHA1One runs the salted-SHA-1 batch on a single device (its own queue +
+// kernel object). Passwords are packed into fixed-stride slots with a parallel
+// length array, so the kernel reads exactly each password's bytes.
+func (a *clAccel) saltedSHA1One(dev int, passwords [][]byte, salt []byte) ([][]byte, error) {
+	n := len(passwords)
+	if n == 0 {
+		return nil, nil
+	}
+	stride := 1
+	for _, pw := range passwords {
+		if len(pw) > stride {
+			stride = len(pw)
+		}
+	}
+	pwBuf := make([]byte, n*stride)
+	lens := make([]uint32, n)
+	for i, pw := range passwords {
+		copy(pwBuf[i*stride:], pw)
+		lens[i] = uint32(len(pw))
+	}
+	saltBuf := make([]byte, len(salt)+1) // +1 keeps the buffer non-empty for an empty salt
+	copy(saltBuf, salt)
+	out := make([]byte, n*20)
+
+	var errc C.cl_int
+	mkBuf := func(flags C.cl_mem_flags, size int, ptr unsafe.Pointer) (C.cl_mem, error) {
+		m := C.clCreateBuffer(a.ctx, flags, C.size_t(size), ptr, &errc)
+		if errc != C.CL_SUCCESS {
+			return nil, fmt.Errorf("accel: clCreateBuffer(vba): %d", int(errc))
+		}
+		return m, nil
+	}
+	ro := C.cl_mem_flags(C.CL_MEM_READ_ONLY | C.CL_MEM_COPY_HOST_PTR)
+	pwB, err := mkBuf(ro, len(pwBuf), unsafe.Pointer(&pwBuf[0]))
+	if err != nil {
+		return nil, err
+	}
+	defer C.clReleaseMemObject(pwB)
+	lensB, err := mkBuf(ro, len(lens)*4, unsafe.Pointer(&lens[0]))
+	if err != nil {
+		return nil, err
+	}
+	defer C.clReleaseMemObject(lensB)
+	saltB, err := mkBuf(ro, len(saltBuf), unsafe.Pointer(&saltBuf[0]))
+	if err != nil {
+		return nil, err
+	}
+	defer C.clReleaseMemObject(saltB)
+	outB := C.clCreateBuffer(a.ctx, C.CL_MEM_WRITE_ONLY, C.size_t(len(out)), nil, &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clCreateBuffer(vba out): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(outB)
+
+	kern := a.vbaSHA1[dev]
+	queue := a.queues[dev]
+	cStride := C.cl_uint(stride)
+	cSaltLen := C.cl_uint(len(salt))
+	cN := C.cl_uint(n)
+	C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(pwB)), unsafe.Pointer(&pwB))
+	C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cStride)), unsafe.Pointer(&cStride))
+	C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(lensB)), unsafe.Pointer(&lensB))
+	C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(saltB)), unsafe.Pointer(&saltB))
+	C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cSaltLen)), unsafe.Pointer(&cSaltLen))
+	C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
+	C.clSetKernelArg(kern, 6, C.size_t(unsafe.Sizeof(outB)), unsafe.Pointer(&outB))
+
+	global := C.size_t(n)
+	if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clEnqueueNDRangeKernel(vba): %d", int(r))
+	}
+	if r := C.clEnqueueReadBuffer(queue, outB, C.CL_TRUE, 0, C.size_t(len(out)), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clEnqueueReadBuffer(vba): %d", int(r))
+	}
+
+	res := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		res[i] = append([]byte(nil), out[i*20:(i+1)*20]...)
+	}
+	return res, nil
+}
+
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
 
 // autotuneBatch measures SHA-1 derivation throughput at a few batch sizes and
@@ -973,6 +1145,32 @@ func GPUSelfTest() error {
 		}
 	} else {
 		return fmt.Errorf("GPU self-test: accelerator does not implement PDFRC4KeySearcher")
+	}
+
+	// Salted SHA-1 batch (SaltedSHA1Hasher — hashcat-110 / VBA): a batch of
+	// SHA1(password||salt) must match crypto/sha1 for each candidate, across
+	// one- and two-block messages (including an empty password).
+	if sh, ok := a.(SaltedSHA1Hasher); ok {
+		vsalt := []byte{0xDE, 0xAD, 0xBE, 0xEF} // 4-byte VBA key
+		pws := [][]byte{
+			[]byte(""), []byte("a"), []byte("Password1"), []byte("hashcat"),
+			[]byte("a-password-that-spills-into-a-second-sha1-block-past-sixty-four"),
+		}
+		got, err := sh.SaltedSHA1(pws, vsalt)
+		if err != nil {
+			return fmt.Errorf("GPU self-test salted-sha1: %w", err)
+		}
+		if len(got) != len(pws) {
+			return fmt.Errorf("GPU self-test salted-sha1: got %d results, want %d", len(got), len(pws))
+		}
+		for i, pw := range pws {
+			want := sha1.Sum(append(append([]byte(nil), pw...), vsalt...)) //nolint:gosec // MS-OVBA mandates SHA-1
+			if !bytes.Equal(got[i], want[:]) {
+				return fmt.Errorf("GPU self-test salted-sha1 MISMATCH (pw %q):\n gpu %x\n cpu %x", pw, got[i], want[:])
+			}
+		}
+	} else {
+		return fmt.Errorf("GPU self-test: accelerator does not implement SaltedSHA1Hasher")
 	}
 	return nil
 }
