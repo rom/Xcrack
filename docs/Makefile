@@ -41,7 +41,8 @@ PANDOC_OPTS := --from=gfm \
                --metadata subtitle="version $(VERSION)" \
                --resource-path=.:..
 ifneq ($(PDF_ENGINE),)
-PANDOC_OPTS += --pdf-engine=$(PDF_ENGINE)
+#PANDOC_OPTS += --pdf-engine=$(PDF_ENGINE)
+PANDOC_OPTS += --defaults=pdf-fonts.yaml --pdf-engine=lualatex
 endif
 
 .PHONY: all manual usermanual all-pdfs check clean help

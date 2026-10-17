@@ -1,0 +1,12 @@
+pdf-engine: lualatex
+variables:
+  mainfont: STIX Two Text
+  sansfont: Helvetica
+  monofont: Menlo
+
+  mainfontfallback:
+    - "Apple Color Emoji:mode=harf"
+  sansfontfallback:
+    - "Apple Color Emoji:mode=harf"
+  monofontfallback:
+    - "Apple Color Emoji:mode=harf"
