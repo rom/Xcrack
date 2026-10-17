@@ -47,6 +47,8 @@ func run(args []string) int {
 			return runOfficeKeyAttack(args[1:])
 		case "pdf-keyattack":
 			return runPDFKeyAttack(args[1:])
+		case "thunder-gen":
+			return runThunderGen(args[1:])
 		case "access-recover":
 			return runAccessRecover(args[1:])
 		case "vba-recover":

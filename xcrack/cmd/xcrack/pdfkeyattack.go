@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/hex"
@@ -38,6 +39,7 @@ func runPDFKeyAttack(args []string) int {
 	quiet := fs_.Bool("quiet", false, "suppress progress output")
 	fs_.BoolVar(quiet, "q", false, "alias for --quiet")
 	gpu := fs_.Bool("gpu", false, "offload the 2^40 sweep to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
+	table := fs_.String("table", "", "precomputed thunder table (xcrack thunder-gen) for instant V1/R2 lookup; falls back to the sweep on a miss or for R3/R4")
 	if err := fs_.Parse(args); err != nil {
 		return 2
 	}
@@ -57,6 +59,23 @@ func runPDFKeyAttack(args []string) int {
 		fmt.Fprintln(os.Stderr, "  (128-bit RC4 and the AES PDF schemes are not 40-bit key-attackable;")
 		fmt.Fprintln(os.Stderr, "   run a password search on those instead.)")
 		return 1
+	}
+
+	// Precomputed thunder-table lookup: for a V1/R2 document /U = RC4(fileKey,
+	// pad) is a salt/ID-free function of the key, so one table inverts it in
+	// sub-second — no sweep. A hit is re-checked with VerifyFileKey; a miss (or an
+	// R3/R4 document, whose /U is file-specific) falls through to the live sweep.
+	if *table != "" {
+		key, ok, terr := tryThunderTable(*table, h)
+		if terr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack pdf-keyattack: --table: %v\n", terr)
+		} else if ok {
+			fmt.Printf("recovered 40-bit PDF file key (thunder table): %s\n", hex.EncodeToString(key))
+			fmt.Println("every string and stream decrypts with this key regardless of the original password")
+			return 0
+		} else {
+			fmt.Fprintln(os.Stderr, "thunder table: no match (R3/R4 or outside the table's coverage); running the live sweep")
+		}
 	}
 
 	lo, hi, serr := resolveRange(*shard, *start, *maxN, pdf.MaxRC4FileKey)
@@ -84,6 +103,32 @@ func runPDFKeyAttack(args []string) int {
 	fmt.Printf("recovered 40-bit PDF file key: %s\n", hex.EncodeToString(key))
 	fmt.Println("every string and stream decrypts with this key regardless of the original password")
 	return 0
+}
+
+// tryThunderTable loads a precomputed table and inverts the document's /U. It
+// applies only to V1/R2 (where /U = RC4(fileKey, pad), rounds==1, cmpLen==32);
+// R3/R4 /U additionally hashes the per-file /ID, so a cross-file table cannot
+// invert it and ok=false sends the caller to the sweep. A table hit is re-checked
+// with VerifyFileKey, so the table never decides correctness on its own.
+func tryThunderTable(path string, h *pdf.Handler) (key []byte, ok bool, err error) {
+	_, rounds, cmpLen, u, attackable := h.RC4KeyAttackParams()
+	if !attackable || rounds != 1 || cmpLen != 32 {
+		return nil, false, nil // not R2 — the table does not apply
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false, err
+	}
+	defer f.Close()
+	tbl, err := pdf.ReadTable(bufio.NewReaderSize(f, 1<<20))
+	if err != nil {
+		return nil, false, err
+	}
+	k, found := tbl.Lookup(u)
+	if !found || !h.VerifyFileKey(k) { // authoritative CPU re-check
+		return nil, false, nil
+	}
+	return k, true, nil
 }
 
 // findPDFRC4 probes data for a 40-bit RC4 PDF and returns the parsed handler if
