@@ -182,10 +182,20 @@ func sweepKeyspace(ctx context.Context, ch *xcrypto.Challenge, lo, hi uint64, wo
 		)
 		if ks != nil {
 			trunc, found, err = ks.OldOfficeKeySearch(salt, encVerifier, encVerifierHash, base, n)
-			// Authoritative CPU re-check: the device never decides correctness.
-			if found {
+			switch {
+			case err != nil:
+				// A GPU error mid-sweep must not abort the attack: fall back to the
+				// CPU for this chunk and every remaining one instead of leaving the
+				// rest of the keyspace unsearched.
+				fmt.Fprintf(os.Stderr, "xcrack office-keyattack: GPU error (%v); continuing on CPU\n", err)
+				ks = nil
+				trunc, found, err = officebinary.RC4KeyAttackParallel(ctx, salt, encVerifier, encVerifierHash, base, n, workers)
+			case found:
+				// Authoritative CPU re-check: on a device false alarm the real key
+				// may sit later in this same chunk, so re-sweep the whole chunk on
+				// the CPU (exhaustive) before advancing rather than skipping it.
 				if ok, _ := officebinary.VerifyRC4Trunc(trunc, salt, encVerifier, encVerifierHash); !ok {
-					trunc, found = nil, false
+					trunc, found, err = officebinary.RC4KeyAttackParallel(ctx, salt, encVerifier, encVerifierHash, base, n, workers)
 				}
 			}
 		} else {

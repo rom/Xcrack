@@ -35,14 +35,11 @@ func (zstdFormat) Detect(p []byte) (float64, bool) {
 }
 
 func (zstdFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, error) {
-	// Validate up front so a non-zstd match is rejected before an entry is built.
-	// Concurrency 1 keeps the streaming decoder synchronous (no background
+	// A malformed stream surfaces as ErrMalformed on the first Read of the entry:
+	// the streaming decoder validates frames lazily, so building a throwaway
+	// decoder here and closing it read nothing and validated nothing. Mirror lz4
+	// and skip it. Concurrency 1 keeps the decoder synchronous (no background
 	// goroutine), matching the unclosed-reader pattern of the other codecs.
-	zr, err := zstd.NewReader(section(r, size), zstd.WithDecoderConcurrency(1))
-	if err != nil {
-		return nil, xfileformats.ErrMalformed
-	}
-	zr.Close()
 	open := func() (io.Reader, error) {
 		d, err := zstd.NewReader(section(r, size), zstd.WithDecoderConcurrency(1))
 		if err != nil {

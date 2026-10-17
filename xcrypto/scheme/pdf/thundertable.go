@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rom/xcrypto/prim"
@@ -20,7 +21,7 @@ import (
 // PDF padding string — a universal constant. So /U is a pure function of the
 // 5-byte (40-bit) file key, with NO per-file salt or ID. That makes it the ideal
 // rainbow-table target: ONE precomputed table inverts /U → fileKey for EVERY
-// V1/R2 document, turning the 2^40 live sweep (RC4KeyAttack) into a sub-second
+// V1/R2 document, turning the 2^40 live sweep (RC4KeyAttack) into a seconds-long
 // lookup. The one-time cost is the table generation (≈ the full sweep, but paid
 // once) plus the storage for the chain endpoints.
 //
@@ -211,6 +212,14 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 		var wg sync.WaitGroup
 		var cancelled sync.Once
 		var cerr error
+		// Check ctx roughly every ~2^20 image ops so a Ctrl-C pauses within a
+		// fraction of a second regardless of chain length (each chain is chainLen
+		// ops, so a fixed per-chain stride would wait chainLen×stride ops — minutes
+		// at the large default chainLen).
+		checkEvery := (1 << 20) / chainLen
+		if checkEvery < 1 {
+			checkEvery = 1
+		}
 		chunk := (starts + workers - 1) / workers
 		for w := 0; w < workers; w++ {
 			lo := w * chunk
@@ -225,7 +234,7 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 			go func(lo, hi int) {
 				defer wg.Done()
 				for i := lo; i < hi; i++ {
-					if i%4096 == 0 && ctx.Err() != nil {
+					if i%checkEvery == 0 && ctx.Err() != nil {
 						cancelled.Do(func() { cerr = ctx.Err() })
 						return
 					}
@@ -267,30 +276,80 @@ func (t *Table) Lookup(u []byte) (key []byte, found bool) {
 	target := binary.LittleEndian.Uint64(u[:8])
 	var full [32]byte
 	copy(full[:], u[:32])
-	for s := range t.subs {
-		sub := &t.subs[s]
-		for col := t.chainLen - 1; col >= 0; col-- {
-			// Hypothesise the key sits at column col: walk the target image to the
-			// endpoint.
-			k := reduce(target, col, sub.seed, t.n)
-			for c := col + 1; c < t.chainLen; c++ {
-				k = reduce(r2Image(k), c, sub.seed, t.n)
+
+	// scanColumn tests the hypothesis "the key sits at column col of this
+	// sub-table": walk the target image to the endpoint, and for every chain with
+	// that endpoint regenerate from its start and verify against the real /U. It
+	// is read-only over immutable table data, so it is safe to call concurrently.
+	scanColumn := func(sub *subTable, col int) ([]byte, bool) {
+		k := reduce(target, col, sub.seed, t.n)
+		for c := col + 1; c < t.chainLen; c++ {
+			k = reduce(r2Image(k), c, sub.seed, t.n)
+		}
+		lo := sort.Search(len(sub.ends), func(i int) bool { return sub.ends[i] >= k })
+		for i := lo; i < len(sub.ends) && sub.ends[i] == k; i++ {
+			cand := sub.starts[i]
+			for c := 0; c < col; c++ {
+				cand = reduce(r2Image(cand), c, sub.seed, t.n)
 			}
-			// Match endpoint(s) and regenerate from each matching chain's start.
-			lo := sort.Search(len(sub.ends), func(i int) bool { return sub.ends[i] >= k })
-			for i := lo; i < len(sub.ends) && sub.ends[i] == k; i++ {
-				cand := sub.starts[i]
-				for c := 0; c < col; c++ {
-					cand = reduce(r2Image(cand), c, sub.seed, t.n)
-				}
-				if r2Image(cand) != target {
-					continue // false alarm (chains merged downstream of a different key)
-				}
-				if kb := keyBytes(cand); r2VerifyFull(kb, full[:]) {
+			if r2Image(cand) != target {
+				continue // false alarm (chains merged downstream of a different key)
+			}
+			if kb := keyBytes(cand); r2VerifyFull(kb, full[:]) {
+				return kb, true
+			}
+		}
+		return nil, false
+	}
+
+	// The dominant cost is Σ_col (chainLen-col) image walks per sub-table. Split
+	// the column space across workers so a big table inverts in seconds, not the
+	// single-threaded minutes the serial scan would take. R2 has a unique file
+	// key (every returned key is verified against /U), so which matching column a
+	// worker finds first is irrelevant — the first verified hit wins and cancels
+	// the rest.
+	workers := runtime.GOMAXPROCS(0)
+	if workers > t.chainLen {
+		workers = t.chainLen
+	}
+	if workers <= 1 {
+		for s := range t.subs {
+			for col := t.chainLen - 1; col >= 0; col-- {
+				if kb, ok := scanColumn(&t.subs[s], col); ok {
 					return kb, true
 				}
 			}
 		}
+		return nil, false
+	}
+
+	var (
+		wg     sync.WaitGroup
+		once   sync.Once
+		result []byte
+		stop   atomic.Bool
+	)
+	for w := 0; w < workers; w++ {
+		wg.Add(1)
+		go func(w int) {
+			defer wg.Done()
+			for col := t.chainLen - 1 - w; col >= 0; col -= workers {
+				if stop.Load() {
+					return
+				}
+				for s := range t.subs {
+					if kb, ok := scanColumn(&t.subs[s], col); ok {
+						once.Do(func() { result = kb })
+						stop.Store(true)
+						return
+					}
+				}
+			}
+		}(w)
+	}
+	wg.Wait()
+	if result != nil {
+		return result, true
 	}
 	return nil, false
 }
@@ -380,20 +439,28 @@ func ReadTable(r io.Reader) (*Table, error) {
 			return nil, ErrBadTable
 		}
 		m := int(binary.LittleEndian.Uint32(num[:]))
-		if m < 0 || m > 1<<32-1 {
-			return nil, ErrBadTable
+		// Grow the chain slices as bytes are actually read rather than
+		// pre-allocating m entries. A corrupt or hostile count (a uint32 is up to
+		// ~4.3e9) would otherwise make() tens of GB before the first short read
+		// could fail — an OOM/DoS from operator-supplied --table input. Capping the
+		// initial capacity keeps a lying count cheap; a truncated stream then fails
+		// at io.ReadFull having allocated only what it actually read.
+		capHint := m
+		if capHint > 1<<16 {
+			capHint = 1 << 16
 		}
-		sub := subTable{seed: binary.LittleEndian.Uint64(sb[:]), starts: make([]uint64, m), ends: make([]uint64, m)}
+		sub := subTable{seed: binary.LittleEndian.Uint64(sb[:]), starts: make([]uint64, 0, capHint), ends: make([]uint64, 0, capHint)}
 		var k5 [5]byte
 		for i := 0; i < m; i++ {
 			if _, err := io.ReadFull(r, k5[:]); err != nil {
 				return nil, ErrBadTable
 			}
-			sub.starts[i] = getKey5(k5[:])
+			start := getKey5(k5[:])
 			if _, err := io.ReadFull(r, k5[:]); err != nil {
 				return nil, ErrBadTable
 			}
-			sub.ends[i] = getKey5(k5[:])
+			sub.starts = append(sub.starts, start)
+			sub.ends = append(sub.ends, getKey5(k5[:]))
 		}
 		t.subs[s] = sub
 	}

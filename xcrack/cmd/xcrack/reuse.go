@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -39,7 +40,10 @@ func writeReuseStamp(out, file, suffix, hash, sig string, pws []string) {
 	b.WriteString("hash=" + hash + "\n")
 	b.WriteString("sig=" + sig + "\n")
 	for _, p := range pws {
-		b.WriteString("pw=" + p + "\n")
+		// Quote so a password containing a newline (or any control byte) stays on
+		// one line and round-trips exactly; a raw "pw=" + p would split across
+		// lines and corrupt/truncate the value on read.
+		b.WriteString("pw=" + strconv.Quote(p) + "\n")
 	}
 	_ = os.WriteFile(reuseStampPath(out, file, suffix), []byte(b.String()), 0o600)
 }
@@ -67,7 +71,12 @@ func readReuseStamp(out, file, suffix, sig string) ([]string, bool) {
 		case strings.HasPrefix(line, "sig="):
 			stampSig = line[len("sig="):]
 		case strings.HasPrefix(line, "pw="):
-			pws = append(pws, line[len("pw="):])
+			raw := line[len("pw="):]
+			if s, err := strconv.Unquote(raw); err == nil {
+				pws = append(pws, s)
+			} else {
+				pws = append(pws, raw) // tolerate a legacy unquoted stamp
+			}
 		}
 	}
 	if stampHash == wantHash && stampSig == sig {

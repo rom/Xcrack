@@ -14,6 +14,29 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
+### Fixed / performance
+- **Thunder Tables usable by default + parallel lookup.** The shipped
+  `thunder-gen` default chain length was `2^20`, which made a V1/R2 lookup cost
+  ~`tables×t²/2 ≈ 2^41` RC4 image ops — *slower* than the `2^40` brute-force
+  sweep it replaces. The default is rebalanced (`--length 4096`, `--chains 2^26`)
+  so lookup is seconds, not slower-than-brute-force, and `Table.Lookup` now
+  parallelises the column scan across cores. `ReadTable` no longer pre-allocates
+  from an attacker-controlled chain count (a crafted `--table` claiming ~4.3e9
+  chains forced a ~64 GB alloc / OOM); it grows as bytes are read and fails fast
+  on a truncated stream. Chain generation checks for Ctrl-C on an op budget
+  (~`2^20` ops) instead of every 4096 chains, so cancellation is prompt at large
+  chain lengths. The `--dry-run` time estimate no longer overflows int64 for very
+  large plans. The "sub-second" claim is corrected to "seconds".
+- **GPU key attacks fall back and stay complete.** `pdf-keyattack`/`office-keyattack`
+  now fall back to the CPU for the current and remaining keyspace on a mid-sweep
+  GPU error (instead of aborting the whole attack), and on a device false positive
+  they re-sweep that chunk on the CPU rather than skipping past a real key that
+  may sit later in it.
+- **`--reuse-output` stamp no longer corrupts passwords** containing a newline:
+  recovered passwords are quoted in the `.xcrack-stamp` so they round-trip exactly.
+- **zstd codec**: dropped a dead "validate up front" decoder that read nothing
+  (a malformed stream already surfaces on first Read), matching the lz4 codec.
+
 ### Added
 - **Library/REST parity, an API reference, a bigger manual, and embedding
   examples.** `xcrackd` now exposes the same engine knobs as the CLI as flags —
