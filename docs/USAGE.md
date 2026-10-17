@@ -819,6 +819,40 @@ the real speed-up.
 
 ---
 
+## Inspect, benchmark, estimate
+
+Four modes that don't crack — they tell you what a run *would* do, so you can
+plan an attack (or a recovery queue) before committing hours to it.
+
+```sh
+# Print the exact candidate stream a set of flags would try (hashcat --stdout):
+xcrack --stdout -w rockyou.txt --prince --limit 50     # first 50, no file needed
+
+# How big is the keyspace?  (masks/lists report instantly; wordlists are counted)
+xcrack --keyspace --pattern masks.txt
+xcrack --keyspace -w rockyou.txt
+
+# How fast can THIS file's format be verified? (candidates/sec, hashcat -b)
+xcrack --benchmark secret.docx
+xcrack -b secret.docx secret.pdf archive.zip
+
+# Put the two together: keyspace x rate -> time to crack this file.
+xcrack --estimate --pattern masks.txt secret.docx
+#   secret.docx  [office-agile]
+#       rate      1.09k candidates/sec
+#       keyspace  1000000
+#       time      ~15m19s to exhaust, ~7m40s expected to a hit
+```
+
+`--benchmark`/`--estimate` probe the file's real verifier (so the rate reflects
+the actual KDF cost — a RAR5 or Office-2013 file is far slower than WinZip-AES),
+which is exactly the per-format speed the recovery-queue workflow needs to order
+jobs. `--stdout`/`--keyspace` don't need a source file; `--limit N` bounds them.
+During a real crack, `--progress` shows a true percent + ETA when the target's
+keyspace is known (e.g. a mask).
+
+---
+
 ## ZipCrypto known-plaintext attack
 
 Traditional PKWARE ("ZipCrypto") encryption is cryptographically broken: given

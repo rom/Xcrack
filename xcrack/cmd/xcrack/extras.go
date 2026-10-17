@@ -273,6 +273,7 @@ func passwordFromEnv(name string) (string, bool) {
 // per file (the engine reports candidate counts as each node's search ends).
 type progress struct {
 	total      int
+	keyspace   int64 // total candidates when known (single-target, finite); <=0 => unknown
 	done       atomic.Int64
 	candidates atomic.Int64
 	start      time.Time
@@ -280,8 +281,12 @@ type progress struct {
 	wg         sync.WaitGroup
 }
 
-func newProgress(total int) *progress {
-	p := &progress{total: total, start: time.Now(), stop: make(chan struct{})}
+func newProgress(total int) *progress { return newProgressKeyspace(total, -1) }
+
+// newProgressKeyspace adds a known candidate keyspace so the reporter can show a
+// true percentage and a candidate-rate ETA for a single finite-keyspace target.
+func newProgressKeyspace(total int, keyspace int64) *progress {
+	p := &progress{total: total, keyspace: keyspace, start: time.Now(), stop: make(chan struct{})}
 	p.wg.Add(1)
 	go p.loop()
 	return p
@@ -310,6 +315,21 @@ func (p *progress) print() {
 	cand := p.candidates.Load()
 	rate := float64(cand) / (el.Seconds() + 1e-9)
 	eta := "?"
+	// When the candidate keyspace is known (a single finite-keyspace target),
+	// report true progress and a candidate-rate ETA; otherwise fall back to the
+	// per-file ETA.
+	if p.keyspace > 0 {
+		pct := float64(cand) / float64(p.keyspace) * 100
+		if pct > 100 {
+			pct = 100
+		}
+		if rate > 0 && cand < p.keyspace {
+			eta = (time.Duration(float64(p.keyspace-cand)/rate) * time.Second).Round(time.Second).String()
+		}
+		fmt.Fprintf(os.Stderr, "\rcandidates=%d/%d (%.1f%%) rate=%.0f/s elapsed=%s eta=%s   ",
+			cand, p.keyspace, pct, rate, el.Round(time.Second), eta)
+		return
+	}
 	if done > 0 && int(done) < p.total {
 		per := el / time.Duration(done)
 		eta = (per * time.Duration(p.total-int(done))).Round(time.Second).String()

@@ -133,6 +133,12 @@ func runCrack(args []string) int {
 	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
+	stdoutF := fs_.Bool("stdout", false, "don't crack: print the candidate stream (wordlists + rules + masks + generators) to stdout and exit")
+	keyspaceF := fs_.Bool("keyspace", false, "don't crack: print the candidate keyspace size and exit")
+	benchmarkF := fs_.Bool("benchmark", false, "don't crack: measure the per-second verify rate for each source file's format and exit")
+	fs_.BoolVar(benchmarkF, "b", false, "alias for --benchmark")
+	estimateF := fs_.Bool("estimate", false, "don't crack: report keyspace, measured rate and estimated time-to-exhaust for each source file and exit")
+	limitF := fs_.Int64("limit", 0, "with --stdout/--keyspace, stop after this many candidates (0 = no cap)")
 	var passwordFiles stringSlice
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
 	passwordEnv := fs_.String("password-env", "", "read a candidate password from this environment variable")
@@ -240,9 +246,12 @@ func runCrack(args []string) int {
 		return 2
 	}
 
-	// assemble sources
+	// assemble sources. --stdout and --keyspace only inspect the candidate stream,
+	// so they do not require a source file; the other modes (crack, --benchmark,
+	// --estimate) do.
+	previewMode := *stdoutF || *keyspaceF
 	srcArgs := append([]string(sources), fs_.Args()...)
-	if len(srcArgs) == 0 {
+	if len(srcArgs) == 0 && !previewMode {
 		fmt.Fprintln(os.Stderr, "xcrack: no sources given (use --source or positional paths)")
 		usage()
 		return 2
@@ -252,7 +261,7 @@ func runCrack(args []string) int {
 		fmt.Fprintf(os.Stderr, "xcrack: %v\n", err)
 		return 2
 	}
-	if len(files) == 0 {
+	if len(files) == 0 && !previewMode {
 		fmt.Fprintln(os.Stderr, "xcrack: no matching source files")
 		return 2
 	}
@@ -538,6 +547,27 @@ func runCrack(args []string) int {
 		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
 	}
 
+	// Inspection modes short-circuit cracking. --stdout/--keyspace inspect only
+	// the candidate stream (no file needed); --benchmark/--estimate probe each
+	// source file's format. They are mutually exclusive; first one set wins.
+	switch {
+	case *stdoutF:
+		return runStdout(buildCandidates, previewPath(files), *limitF)
+	case *keyspaceF:
+		return runKeyspace(buildCandidates, previewPath(files), *limitF)
+	case *benchmarkF, *estimateF:
+		// These short-circuit before NewPool runs opts.normalize(), so resolve the
+		// registry here (--as may have set one; otherwise the default set).
+		reg := opts.Registry
+		if reg == nil {
+			reg = xcrack.DefaultRegistry()
+		}
+		if *benchmarkF {
+			return runBenchmark(files, reg)
+		}
+		return runEstimate(files, reg, buildCandidates)
+	}
+
 	// Distributed mode: when one or more --server endpoints (or a config cluster
 	// block) are given, fan the search out to a fleet of xcrackd workers instead
 	// of cracking locally. The orchestrator pulls from the same buildCandidates
@@ -563,7 +593,17 @@ func runCrack(args []string) int {
 	}
 	var prog *progress
 	if *progressF {
-		prog = newProgress(len(files))
+		// For a single target with a finite, known keyspace (e.g. a mask or an
+		// explicit list), show true percent + a candidate-rate ETA; otherwise the
+		// per-file reporter. Len() is cheap (no iteration) and returns -1 for
+		// wordlists/generators, in which case we fall back.
+		ks := int64(-1)
+		if len(files) == 1 {
+			if s := buildCandidates(files[0]); s != nil {
+				ks = s.Len()
+			}
+		}
+		prog = newProgressKeyspace(len(files), ks)
 	}
 	sem := make(chan struct{}, jobs)
 	// Dispatch order: argument order by default. With --adaptive, dispatch the
@@ -879,6 +919,10 @@ COMMON FLAGS:
       --time-limit D             give up on a file after D with no success, move on (per-file)
       --order markov             try the statistically likeliest wordlist words first
       --resume-from FILE         import a recovered-password envelope and try it first
+      --stdout                   print the candidate stream (no cracking); --limit N caps it
+      --keyspace                 print the candidate keyspace size (no cracking)
+      --benchmark, -b            measure the per-file verify rate (candidates/sec)
+      --estimate                 keyspace x rate -> time-to-crack for each file
       --context                  derive guesses from names + plain siblings
       --hint                     derive guesses from an embedded password hint
       --hint-rules FILE          rule file applied to hint-derived words
