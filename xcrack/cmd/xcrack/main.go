@@ -125,6 +125,13 @@ func runCrack(args []string) int {
 	fs_.Var(&breachLists, "breach", "frequency-annotated breach corpus FILE (count-prefixed or password:count; gzip ok; repeatable)")
 	breachMinF := fs_.Int64("breach-min-count", 0, "drop breach entries seen fewer than N times (0=keep all)")
 
+	var clusterServers stringSlice
+	fs_.Var(&clusterServers, "server", "distribute cracking to this xcrackd server URL (repeatable; URL or URL@GROUP for partition mode)")
+	clusterMode := fs_.String("cluster-mode", "", "server allocation: 'collective' (all servers share one file's keyspace) or 'partition' (server groups take different files)")
+	clusterBatch := fs_.Int("cluster-batch", 0, "candidates shipped per server request in distributed mode (0=20000)")
+	clusterDefaults := fs_.Bool("cluster-allow-defaults", false, "in distributed mode, let each server also try its own default list")
+	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
+
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
@@ -531,6 +538,19 @@ func runCrack(args []string) int {
 		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
 	}
 
+	// Distributed mode: when one or more --server endpoints (or a config cluster
+	// block) are given, fan the search out to a fleet of xcrackd workers instead
+	// of cracking locally. The orchestrator pulls from the same buildCandidates
+	// source and ships batches, so every attack type works; promoted/context/hint
+	// reuse is per-server. --shard is for manual splitting and is not combined
+	// with this automatic distribution.
+	if servers, copts, distributed, derr := buildCluster(clusterServers, *clusterMode, *clusterBatch, *clusterDefaults, *clusterPerReq, cfg); derr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: %v\n", derr)
+		return 2
+	} else if distributed {
+		return runDistributed(files, servers, copts, buildCandidates, pot)
+	}
+
 	ctx := context.Background()
 	pool := xcrack.NewPool(opts)
 	defer pool.Close()
@@ -871,7 +891,10 @@ COMMON FLAGS:
       --increment MIN:MAX        expand each mask over a token-length range, shortest first
       --combinator-left FILE --combinator-right FILE [--combinator-sep S]   combinator attack
       --as SCHEME                force a scheme for a magic-less file (e.g. sqlcipher)
-      --shard I/N                distributed cracking: test only shard I of N of the keyspace
+      --shard I/N                manual split: test only shard I of N of the keyspace
+      --server URL[@GROUP]       distribute to an xcrackd server (repeatable; many servers crack in parallel)
+      --cluster-mode MODE        collective (share one file) | partition (groups take different files)
+      --cluster-batch N  --cluster-allow-defaults  --cluster-per-request D
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --spray                    curated spray set (common + season/year), tried early
       --spray-token STR          org/product/user token mangled into the spray set (repeatable)

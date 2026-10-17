@@ -68,6 +68,19 @@ type fileConfig struct {
 		PerFile string `yaml:"per_file"`
 		Total   string `yaml:"total"`
 	} `yaml:"budget"`
+	Cluster struct {
+		Servers       []clusterServer `yaml:"servers"`        // xcrackd endpoints to distribute across
+		Mode          string          `yaml:"mode"`           // "collective" | "partition"
+		Batch         int             `yaml:"batch"`          // candidates shipped per server request
+		AllowDefaults bool            `yaml:"allow_defaults"` // let each server also use its own default list
+		PerRequest    string          `yaml:"per_request"`    // per-request server deadline hint (e.g. 30s)
+	} `yaml:"cluster"`
+}
+
+// clusterServer is one xcrackd endpoint in the config's cluster block.
+type clusterServer struct {
+	URL   string `yaml:"url"`
+	Group string `yaml:"group"`
 }
 
 func loadConfig(path string) (*fileConfig, error) {
