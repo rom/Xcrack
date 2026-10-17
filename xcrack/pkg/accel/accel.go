@@ -6,12 +6,18 @@
 // unchanged CPU engine, and CI never builds or runs the GPU path.
 //
 // The acceleration is deliberately scoped to the heavy, embarrassingly-parallel
-// primitive the password schemes share — PBKDF2-HMAC-SHA1 key derivation (used
-// by WinZip-AES, encrypted DMG, ODF, SQLCipher) — exposed as a batch call.
-// Everything else (format parsing, verification, recursion) stays on the CPU in
-// pure Go. The GPU output is always byte-for-byte identical to the Go reference
-// (prim.PBKDF2), so a GPU result is never trusted blindly: it is validated at
-// startup (GPUSelfTest) against the reference before use.
+// primitive the password schemes share — PBKDF2 key derivation — exposed as a
+// batch call per HMAC variant: PBKDF2-HMAC-SHA1 (WinZip-AES, encrypted DMG, ODF,
+// SQLCipher v3), PBKDF2-HMAC-SHA256 (RAR5-class), and PBKDF2-HMAC-SHA512
+// (SQLCipher v4-class). Everything else (format parsing, verification,
+// recursion) stays on the CPU in pure Go. The GPU output is always
+// byte-for-byte identical to the Go reference (prim.PBKDF2), so a GPU result is
+// never trusted blindly: it is validated at startup (GPUSelfTest) against the
+// reference, for every variant, before use.
+//
+// Argon2 (KeePass KDBX4) and bcrypt (OpenSSH) are intentionally NOT here: they
+// are memory-hard / Blowfish-based and do not fit the PBKDF2 batch shape, so
+// they stay on the CPU pending dedicated kernels.
 package accel
 
 import "errors"
@@ -43,8 +49,24 @@ type Accelerator interface {
 	// backend has no kernel for these parameters, so the caller can fall back to
 	// the CPU. Results are in input order.
 	PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error)
+	// PBKDF2SHA256 is PBKDF2SHA1 with HMAC-SHA256 (RAR5-class and other standard
+	// PBKDF2-HMAC-SHA256 schemes). Same batch contract and fallback behaviour.
+	PBKDF2SHA256(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error)
+	// PBKDF2SHA512 is PBKDF2SHA1 with HMAC-SHA512 (SQLCipher v4 and other standard
+	// PBKDF2-HMAC-SHA512 schemes). Same batch contract and fallback behaviour.
+	PBKDF2SHA512(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error)
 	// Close releases the context.
 	Close() error
+}
+
+// BatchTuner is an optional capability of an Accelerator that can recommend a
+// per-dispatch batch size tuned to its device(s) (count, compute units,
+// throughput). The engine type-asserts for it and sizes its offload batches
+// accordingly, falling back to a fixed default when an Accelerator does not
+// implement it.
+type BatchTuner interface {
+	// OptimalBatch returns the recommended number of candidates per batch (> 0).
+	OptimalBatch() int
 }
 
 // Built reports whether an OpenCL backend was compiled into this binary. It is

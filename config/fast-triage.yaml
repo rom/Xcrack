@@ -10,6 +10,7 @@ candidates:
 search:
   promote_passwords: true
   hint_candidates: true      # cheap, high-signal, catches hinted files instantly
+  cost_queue: true           # attack the weakest/fastest schemes first across the pile
 
 concurrency:
   throttle: 50               # ~50% CPU duty cycle, leave the box responsive

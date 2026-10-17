@@ -1,0 +1,48 @@
+# Targeted smart-dictionary attack: the "break most real passwords fast"
+# workflow (Elcomsoft "break 30%/70%" + "a word about dictionaries"). Try the
+# highest-yield candidates first — leaked/common passwords, a language list, a
+# spray set — then light, human mutations, with the likeliest words ordered to
+# the front. Reuse any password found across the whole run.
+#
+#   xcrack --config config/targeted.yaml ./cases/*
+#
+# Tip: estimate before committing — `xcrack --benchmark FILE` for the per-format
+# speed, `xcrack --estimate --config config/targeted.yaml FILE` for a time.
+
+candidates:
+  # Frequency-ordered leak corpus first (highest yield). Point this at a real
+  # list you have (SecLists "<count> <pw>" or HIBP "<pw>:<count>"; .gz ok).
+  breach:
+    - /usr/share/wordlists/seclists/Passwords/Leaked-Databases/rockyou-withcount.txt.gz
+  breach_min_count: 5          # skip one-off entries; spray only the prevalent ones
+  swedish: true                # language-specific list (swap/add your target language)
+  use_default_list: true
+
+search:
+  promote_passwords: true
+  adaptive: true               # a hit on any file is tried first on the rest (password reuse)
+  context_candidates: true     # names + plaintext siblings that may name the password
+  hint_candidates: true        # embedded hints (iWork .iwph, ZIP comment)
+  spray: true                  # curated common + season/year set, tried early
+  spray_tokens:                # add org/person tokens you know about
+    - acme
+  order: markov                # reorder wordlist words likeliest-first before mangling
+
+# Light, human mutations applied to the breach/wordlist words (the "Password1" /
+# "Summer2024!" shapes). Kept small: a big dictionary with heavy rules "chokes
+# the attack" (the dictionaries post). These mangle the dictionary candidates;
+# the Swedish/default lists are fed as-is (their mutations are already baked in).
+patterns:
+  rules:
+    - ":"                      # the word unchanged
+    - "c"                      # Capitalize
+    - "$1"                     # append '1'
+    - "$!"                     # append '!'
+    - "c $2 $0 $2 $4"          # Capitalize + append the year (2024)
+
+budget:
+  per_file: 30m                # move on if a file resists (see also --time-limit)
+
+output:
+  format: jsonl
+  log_level: info

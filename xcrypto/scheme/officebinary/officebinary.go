@@ -103,22 +103,10 @@ func DecryptCryptoAPI(password, salt []byte, keyBits int, data []byte, blockSize
 // --- RC4 (Office 97/2000) ----------------------------------------------------
 
 // RC4Key derives the Office 97/2000 RC4 128-bit intermediate key for a block.
-// [MS-OFFCRYPTO] 2.3.6.1.
+// The password enters only through the 40-bit trunc = MD5(UTF16LE(pw))[:5]; see
+// keyattack.go, whose shared helpers this delegates to. [MS-OFFCRYPTO] 2.3.6.1.
 func RC4Key(password, salt []byte, block uint32) []byte {
-	pw := prim.UTF16LE(password)
-	h0 := md5.Sum(pw) //nolint:gosec
-	trunc := h0[:5]
-	inter := make([]byte, 0, 21*16)
-	for i := 0; i < 16; i++ {
-		inter = append(inter, trunc...)
-		inter = append(inter, salt...)
-	}
-	h1 := md5.Sum(inter) //nolint:gosec
-	trunc2 := h1[:5]
-	var blk [4]byte
-	binary.LittleEndian.PutUint32(blk[:], block)
-	hfinal := md5.Sum(append(append([]byte{}, trunc2...), blk[:]...)) //nolint:gosec
-	return append([]byte{}, hfinal[:16]...)
+	return rc4KeyFromTrunc(rc4Trunc(password), salt, block)
 }
 
 // VerifyRC4 reports whether password is correct for the Office 97/2000 scheme.

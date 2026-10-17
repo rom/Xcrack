@@ -9,11 +9,18 @@ candidates:
     - /usr/share/wordlists/rockyou.txt
     - /usr/share/wordlists/seclists/Passwords/xato-net-10-million-passwords.txt
   use_default_list: true
+  swedish: true                # also try the built-in Swedish-targeted list
+  # breach: [ /path/to/leak.txt ]   # frequency-annotated leak corpus (tried ahead of plain wordlists)
+  # breach_min_count: 10
 
 search:
   promote_passwords: true
+  adaptive: true               # corpus-wide: reuse a password found on any file across the rest
   context_candidates: true
   hint_candidates: true
+  spray: true                  # a compact curated spray set, tried early
+  markov: true                 # also generate best-first Markov guesses
+  order: markov                # reorder the wordlists likeliest-first before mangling
   hint_rules:
     - ":"
     - "c"

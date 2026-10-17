@@ -21,6 +21,7 @@ import (
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
 	fdmg "github.com/rom/xfileformats/formats/dmg"
+	"github.com/rom/xfileformats/formats/ethwallet"
 	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/keepass"
@@ -158,6 +159,12 @@ type Options struct {
 	// verifier, so it can never cause a false positive. nil (the default) keeps
 	// every search on the CPU.
 	Accelerator Accelerator
+
+	// AccelBatch overrides how many candidates are derived per accelerator
+	// dispatch. 0 (the default) uses the accelerator's autotuned size when it
+	// implements accel.BatchTuner, otherwise a built-in default. Ignored without
+	// an Accelerator.
+	AccelBatch int
 }
 
 // KnownPlaintext configures an opt-in known-plaintext key-recovery attack for
@@ -216,6 +223,10 @@ func DefaultRegistry() *xfileformats.Registry {
 	puttykey.Register(r)
 	fdmg.Register(r)
 	access.Register(r)
+	// Ethereum keystore (Web3 Secret Storage v3) wallet JSON; detects on its
+	// unique "crypto"/"ciphertext"/"kdf" markers, so it never claims a non-wallet
+	// file.
+	ethwallet.Register(r)
 	return r
 }
 

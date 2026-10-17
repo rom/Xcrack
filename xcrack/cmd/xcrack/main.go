@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
@@ -40,6 +41,8 @@ func run(args []string) int {
 			return runHashline(args[1:])
 		case "export-challenge":
 			return runExportChallenge(args[1:])
+		case "office-keyattack":
+			return runOfficeKeyAttack(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -116,6 +119,7 @@ func runCrack(args []string) int {
 	keywalkF := fs_.Bool("keyboard-walk", false, "also try keyboard-adjacency walks (QWERTY)")
 	shardF := fs_.String("shard", "", "distributed cracking: test only shard I of N of the keyspace, e.g. --shard 0/4 (run 0/4..3/4 on separate machines; promoted/context/hint guesses are tried by every shard)")
 	adaptiveF := fs_.Bool("adaptive", false, "corpus-wide adaptive promotion: try passwords recovered from any file first on the rest (most-successful first), smallest files first")
+	costQueueF := fs_.Bool("cost-queue", false, "triage many files weakest-first: benchmark each file's verify rate and attack the fastest/weakest schemes before the slow, strong KDFs")
 	sprayF := fs_.Bool("spray", false, "also try a curated password-spraying set (common + season/year patterns), tried early")
 	var sprayTokens stringSlice
 	fs_.Var(&sprayTokens, "spray-token", "org/product/user token mangled into the spray set (repeatable; implies --spray)")
@@ -606,15 +610,28 @@ func runCrack(args []string) int {
 		prog = newProgressKeyspace(len(files), ks)
 	}
 	sem := make(chan struct{}, jobs)
-	// Dispatch order: argument order by default. With --adaptive, dispatch the
-	// smallest files first so the cheap, likely wins surface early and seed the
-	// corpus-wide promotion set before the big files run. Results stay indexed by
-	// the original position, so output order is unchanged.
+	// Dispatch order: argument order by default. Results stay indexed by the
+	// original position, so output order is unchanged regardless of dispatch order.
 	dispatch := make([]int, len(files))
 	for i := range files {
 		dispatch[i] = i
 	}
-	if opts.CorpusPromotion {
+	costQueue := *costQueueF || (cfg != nil && cfg.Search.CostQueue)
+	switch {
+	case costQueue && len(files) > 1:
+		// Cost-aware queue (the Elcomsoft recovery queue): benchmark each file's
+		// per-format verify rate and attack the fastest/weakest schemes first, so
+		// quick wins (ZipCrypto, legacy Office, low-iteration KDFs) surface before
+		// slow, strong KDFs. Short per-file window — this only ranks.
+		queueReg := opts.Registry
+		if queueReg == nil {
+			queueReg = xcrack.DefaultRegistry()
+		}
+		dispatch = costOrder(files, queueReg, 300*time.Millisecond)
+	case opts.CorpusPromotion:
+		// With --adaptive, dispatch the smallest files first so the cheap, likely
+		// wins surface early and seed the corpus-wide promotion set before the big
+		// files run.
 		sizes := make([]int64, len(files))
 		for i, path := range files {
 			if fi, err := os.Stat(path); err == nil {
@@ -905,6 +922,8 @@ USAGE:
   xcrack hashline [sources...]     emit $office$/$pdf$/... lines for hashcat/John
   xcrack export-challenge [srcs]   emit the portable JSON challenge envelope(s)
                                    for an external cracker (import with --resume-from)
+  xcrack office-keyattack FILE     direct 40-bit key attack on Office 97/2000 RC4
+                                   (recovers the key, not the password; --shard i/N)
   xcrack version
 
 COMMON FLAGS:
@@ -940,6 +959,7 @@ COMMON FLAGS:
       --cluster-mode MODE        collective (share one file) | partition (groups take different files)
       --cluster-batch N  --cluster-allow-defaults  --cluster-per-request D
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
+      --cost-queue               triage many files weakest/fastest-attack-first (benchmark, then attack cheap schemes first)
       --spray                    curated spray set (common + season/year), tried early
       --spray-token STR          org/product/user token mangled into the spray set (repeatable)
       --spray-year N             year used in spray patterns (repeatable; default current/previous)

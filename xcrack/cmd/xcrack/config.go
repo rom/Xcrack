@@ -45,6 +45,7 @@ type fileConfig struct {
 		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
 		Markov        bool     `yaml:"markov"`         // Markov best-first generated guesses
 		Order         string   `yaml:"order"`          // reorder wordlist candidates: "markov" | "none"
+		CostQueue     bool     `yaml:"cost_queue"`     // triage many files weakest/fastest-attack-first
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`

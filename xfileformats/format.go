@@ -79,9 +79,14 @@ type Encrypted interface {
 // accelerator is never trusted to decide correctness on its own and a faulty
 // backend can only slow a search, never cause a false positive.
 type AccelKDF struct {
-	// Salt, Iter, DKLen are the exact PBKDF2-HMAC-SHA1 parameters the accelerator
-	// must derive with -- byte-identical to what the CPU verifier uses (e.g. the
-	// DMG verifier's fixed 20-byte salt, not the raw stored salt).
+	// PRF selects the HMAC hash the accelerator must use: "" or "sha1" (the
+	// default, PBKDF2-HMAC-SHA1), "sha256" (RAR5-class), or "sha512"
+	// (SQLCipher-v4-class). The engine dispatches to the matching batch kernel and
+	// falls back to the CPU for any value its backend cannot serve.
+	PRF string
+	// Salt, Iter, DKLen are the exact PBKDF2 parameters the accelerator must
+	// derive with -- byte-identical to what the CPU verifier uses (e.g. the DMG
+	// verifier's fixed 20-byte salt, not the raw stored salt).
 	Salt  []byte
 	Iter  int
 	DKLen int

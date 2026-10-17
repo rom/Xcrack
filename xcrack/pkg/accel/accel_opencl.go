@@ -19,7 +19,12 @@ import "C"
 import (
 	"bytes"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"fmt"
+	"hash"
+	"sync"
+	"time"
 	"unsafe"
 
 	_ "embed"
@@ -30,21 +35,45 @@ import (
 const built = true
 
 //go:embed kernel_pbkdf2_sha1.cl
-var kernelSrc string
+var kernelSrcSHA1 string
 
-// Host-side limits that keep the kernel single-block per PRF message. A request
-// outside these falls back to the CPU via ErrUnsupported.
+//go:embed kernel_pbkdf2_sha256.cl
+var kernelSrcSHA256 string
+
+//go:embed kernel_pbkdf2_sha512.cl
+var kernelSrcSHA512 string
+
+// Host-side limits that keep each kernel single-block per PRF message. SHA-1 and
+// SHA-256 use a 64-byte block (salt||INT fits when saltlen+4 <= 55); SHA-512
+// uses a 128-byte block (saltlen+4 <= 111). A request outside these falls back
+// to the CPU via ErrUnsupported.
 const (
-	maxSaltLen = 51
-	maxDKLen   = 80
+	maxSaltLen512 = 107
+	maxSaltLen    = 51 // SHA-1 / SHA-256
+	maxDKLen      = 128
 )
 
-type clAccel struct {
-	devices []Device
-	ctx     C.cl_context
-	queue   C.cl_command_queue
+// prf describes one PBKDF2 variant: the shared program, one kernel object per
+// device (distinct objects so concurrent clSetKernelArg across devices is safe),
+// and the host-side parameters that mirror it (HMAC block size, digest length,
+// salt bound, and the hash used for HMAC key normalization).
+type prf struct {
 	program C.cl_program
-	kernel  C.cl_kernel
+	kernels []C.cl_kernel // one per device, parallel to clAccel.queues
+	block   int
+	digest  int
+	saltMax int
+	newHash func() hash.Hash
+}
+
+type clAccel struct {
+	devices      []Device
+	ctx          C.cl_context
+	queues       []C.cl_command_queue // one per backing device
+	sha1         prf
+	sha256       prf
+	sha512       prf
+	optimalBatch int // autotuned per-dispatch batch size (BatchTuner)
 }
 
 // Detect enumerates OpenCL devices, builds the PBKDF2 kernel, and returns a
@@ -85,20 +114,53 @@ func Detect() (Accelerator, error) {
 	if errc != C.CL_SUCCESS {
 		return nil, fmt.Errorf("accel: clCreateContext: %d", int(errc))
 	}
-	queue := C.clCreateCommandQueue(ctx, devs[0], 0, &errc)
-	if errc != C.CL_SUCCESS {
-		C.clReleaseContext(ctx)
-		return nil, fmt.Errorf("accel: clCreateCommandQueue: %d", int(errc))
+
+	a := &clAccel{ctx: ctx}
+	for _, d := range devs {
+		q := C.clCreateCommandQueue(ctx, d, 0, &errc)
+		if errc != C.CL_SUCCESS {
+			a.Close()
+			return nil, fmt.Errorf("accel: clCreateCommandQueue: %d", int(errc))
+		}
+		a.queues = append(a.queues, q)
 	}
 
-	csrc := C.CString(kernelSrc)
+	specs := []struct {
+		src, name              string
+		p                      *prf
+		block, digest, saltMax int
+		nh                     func() hash.Hash
+	}{
+		{kernelSrcSHA1, "pbkdf2_sha1", &a.sha1, 64, 20, maxSaltLen, sha1.New},
+		{kernelSrcSHA256, "pbkdf2_sha256", &a.sha256, 64, 32, maxSaltLen, sha256.New},
+		{kernelSrcSHA512, "pbkdf2_sha512", &a.sha512, 128, 64, maxSaltLen512, sha512.New},
+	}
+	for _, s := range specs {
+		prog, kerns, berr := buildKernels(ctx, devs, s.src, s.name)
+		if berr != nil {
+			a.Close()
+			return nil, berr
+		}
+		*s.p = prf{program: prog, kernels: kerns, block: s.block, digest: s.digest, saltMax: s.saltMax, newHash: s.nh}
+	}
+	for _, d := range devs {
+		a.devices = append(a.devices, describeDevice(d))
+	}
+	a.optimalBatch = a.autotuneBatch()
+	return a, nil
+}
+
+// buildKernels compiles one embedded .cl source and returns its program plus one
+// kernel object per device (distinct objects so each device's queue can set
+// args and enqueue concurrently without clobbering another's).
+func buildKernels(ctx C.cl_context, devs []C.cl_device_id, src, name string) (C.cl_program, []C.cl_kernel, error) {
+	var errc C.cl_int
+	csrc := C.CString(src)
 	defer C.free(unsafe.Pointer(csrc))
-	srcLen := C.size_t(len(kernelSrc))
+	srcLen := C.size_t(len(src))
 	program := C.clCreateProgramWithSource(ctx, 1, &csrc, &srcLen, &errc)
 	if errc != C.CL_SUCCESS {
-		C.clReleaseCommandQueue(queue)
-		C.clReleaseContext(ctx)
-		return nil, fmt.Errorf("accel: clCreateProgramWithSource: %d", int(errc))
+		return nil, nil, fmt.Errorf("accel: clCreateProgramWithSource(%s): %d", name, int(errc))
 	}
 	if bl := C.clBuildProgram(program, C.cl_uint(len(devs)), &devs[0], nil, nil, nil); bl != C.CL_SUCCESS {
 		var logSize C.size_t
@@ -108,25 +170,23 @@ func Detect() (Accelerator, error) {
 			C.clGetProgramBuildInfo(program, devs[0], C.CL_PROGRAM_BUILD_LOG, logSize, unsafe.Pointer(&buf[0]), nil)
 		}
 		C.clReleaseProgram(program)
-		C.clReleaseCommandQueue(queue)
-		C.clReleaseContext(ctx)
-		return nil, fmt.Errorf("accel: kernel build failed: %d\n%s", int(bl), string(buf))
+		return nil, nil, fmt.Errorf("accel: kernel build failed (%s): %d\n%s", name, int(bl), string(buf))
 	}
-	kname := C.CString("pbkdf2_sha1")
-	defer C.free(unsafe.Pointer(kname))
-	kernel := C.clCreateKernel(program, kname, &errc)
-	if errc != C.CL_SUCCESS {
-		C.clReleaseProgram(program)
-		C.clReleaseCommandQueue(queue)
-		C.clReleaseContext(ctx)
-		return nil, fmt.Errorf("accel: clCreateKernel: %d", int(errc))
+	cname := C.CString(name)
+	defer C.free(unsafe.Pointer(cname))
+	kerns := make([]C.cl_kernel, len(devs))
+	for i := range devs {
+		k := C.clCreateKernel(program, cname, &errc)
+		if errc != C.CL_SUCCESS {
+			for j := 0; j < i; j++ {
+				C.clReleaseKernel(kerns[j])
+			}
+			C.clReleaseProgram(program)
+			return nil, nil, fmt.Errorf("accel: clCreateKernel(%s): %d", name, int(errc))
+		}
+		kerns[i] = k
 	}
-
-	a := &clAccel{ctx: ctx, queue: queue, program: program, kernel: kernel}
-	for _, d := range devs {
-		a.devices = append(a.devices, describeDevice(d))
-	}
-	return a, nil
+	return program, kerns, nil
 }
 
 func describeDevice(d C.cl_device_id) Device {
@@ -165,38 +225,118 @@ func devStr(d C.cl_device_id, param C.cl_device_info) string {
 func (a *clAccel) Devices() []Device { return a.devices }
 
 func (a *clAccel) Close() error {
-	C.clReleaseKernel(a.kernel)
-	C.clReleaseProgram(a.program)
-	C.clReleaseCommandQueue(a.queue)
-	C.clReleaseContext(a.ctx)
+	for _, p := range []prf{a.sha1, a.sha256, a.sha512} {
+		for _, k := range p.kernels {
+			if k != nil {
+				C.clReleaseKernel(k)
+			}
+		}
+		if p.program != nil {
+			C.clReleaseProgram(p.program)
+		}
+	}
+	for _, q := range a.queues {
+		if q != nil {
+			C.clReleaseCommandQueue(q)
+		}
+	}
+	if a.ctx != nil {
+		C.clReleaseContext(a.ctx)
+	}
 	return nil
 }
 
-// PBKDF2SHA1 derives keys for a batch of passwords on the device. Parameters
-// outside the kernel's single-block assumptions return ErrUnsupported so the
-// caller uses the CPU.
+// PBKDF2SHA1 derives keys for a batch of passwords with HMAC-SHA1.
 func (a *clAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return a.run(a.sha1, passwords, salt, iter, dkLen)
+}
+
+// PBKDF2SHA256 derives keys for a batch of passwords with HMAC-SHA256.
+func (a *clAccel) PBKDF2SHA256(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return a.run(a.sha256, passwords, salt, iter, dkLen)
+}
+
+// PBKDF2SHA512 derives keys for a batch of passwords with HMAC-SHA512.
+func (a *clAccel) PBKDF2SHA512(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return a.run(a.sha512, passwords, salt, iter, dkLen)
+}
+
+// run derives keys for a batch of passwords using the given PRF. With more than
+// one backing device it splits the batch into contiguous chunks, one per device,
+// and runs them concurrently (each device has its own queue and kernel object);
+// results are reassembled in input order. Parameters outside the kernel's
+// single-block assumptions return ErrUnsupported so the caller uses the CPU.
+func (a *clAccel) run(p prf, passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
 	if len(passwords) == 0 {
 		return nil, nil
 	}
-	if len(salt) > maxSaltLen || dkLen <= 0 || dkLen > maxDKLen || iter <= 0 {
+	if len(salt) > p.saltMax || dkLen <= 0 || dkLen > maxDKLen || iter <= 0 {
 		return nil, ErrUnsupported
 	}
 	n := len(passwords)
+	nd := len(a.queues)
+	if nd <= 1 {
+		return a.runOne(p, 0, passwords, salt, iter, dkLen)
+	}
 
-	// Host-side HMAC key normalization: a key longer than the SHA-1 block is
+	res := make([][]byte, n)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (n + nd - 1) / nd
+	for d := 0; d < nd; d++ {
+		lo := d * chunk
+		if lo >= n {
+			break
+		}
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(dev, lo, hi int) {
+			defer wg.Done()
+			part, err := a.runOne(p, dev, passwords[lo:hi], salt, iter, dkLen)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			copy(res[lo:hi], part)
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return res, nil
+}
+
+// runOne derives a sub-batch on a single device (its own queue + kernel object).
+func (a *clAccel) runOne(p prf, dev int, passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	n := len(passwords)
+	if n == 0 {
+		return nil, nil
+	}
+	// Host-side HMAC key normalization: a key longer than the PRF's block is
 	// replaced by its digest, exactly as HMAC specifies, so the kernel only ever
-	// sees a <=64-byte, zero-padded key.
-	keys := make([]byte, n*64)
+	// sees a <=block-byte, zero-padded key.
+	keys := make([]byte, n*p.block)
 	for i, pw := range passwords {
 		k := pw
-		if len(k) > 64 {
-			s := sha1.Sum(k)
-			k = s[:]
+		if len(k) > p.block {
+			h := p.newHash()
+			h.Write(k)
+			k = h.Sum(nil)
 		}
-		copy(keys[i*64:(i+1)*64], k)
+		copy(keys[i*p.block:i*p.block+len(k)], k)
 	}
-	saltBuf := make([]byte, maxSaltLen)
+	saltBuf := make([]byte, p.saltMax)
 	copy(saltBuf, salt)
 	out := make([]byte, n*dkLen)
 
@@ -237,8 +377,10 @@ func (a *clAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) (
 	}
 	defer C.clReleaseMemObject(klBuf)
 
-	set := func(i C.cl_uint, size C.size_t, p unsafe.Pointer) {
-		C.clSetKernelArg(a.kernel, i, size, p)
+	kern := p.kernels[dev]
+	queue := a.queues[dev]
+	set := func(i C.cl_uint, size C.size_t, ptr unsafe.Pointer) {
+		C.clSetKernelArg(kern, i, size, ptr)
 	}
 	set(0, C.size_t(unsafe.Sizeof(keysBuf)), unsafe.Pointer(&keysBuf))
 	set(1, C.size_t(unsafe.Sizeof(klBuf)), unsafe.Pointer(&klBuf))
@@ -252,10 +394,10 @@ func (a *clAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) (
 	set(6, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
 
 	global := C.size_t(n)
-	if r := C.clEnqueueNDRangeKernel(a.queue, a.kernel, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+	if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
 		return nil, fmt.Errorf("accel: clEnqueueNDRangeKernel: %d", int(r))
 	}
-	if r := C.clEnqueueReadBuffer(a.queue, outBuf, C.CL_TRUE, 0, C.size_t(len(out)), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
+	if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(len(out)), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
 		return nil, fmt.Errorf("accel: clEnqueueReadBuffer: %d", int(r))
 	}
 
@@ -266,9 +408,64 @@ func (a *clAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) (
 	return res, nil
 }
 
-// GPUSelfTest derives a few known PBKDF2-HMAC-SHA1 vectors on the device and
-// confirms they are byte-for-byte identical to the Go reference, so a GPU
-// result is never trusted before the kernel is proven correct on this host.
+// OptimalBatch reports the autotuned per-dispatch batch size (BatchTuner). It is
+// measured once at Detect; see autotuneBatch.
+func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
+
+// autotuneBatch measures SHA-1 derivation throughput at a few batch sizes and
+// picks the smallest size whose throughput is within ~10% of the best observed,
+// so the engine amortizes device round-trips without oversized batches. It is a
+// quick micro-benchmark (low iteration count) run once at startup; on failure it
+// falls back to a safe default. The chosen size scales with device count so a
+// multi-GPU context gets enough work to split.
+func (a *clAccel) autotuneBatch() int {
+	const defaultBatch = 2048
+	sizes := []int{256, 512, 1024, 2048, 4096, 8192}
+	salt := []byte("autotune-salt-16")
+	const iter, dk = 256, 32
+	bestRate := 0.0
+	bestIdx := -1
+	rates := make([]float64, len(sizes))
+	for i, sz := range sizes {
+		pws := make([][]byte, sz)
+		for j := range pws {
+			pws[j] = []byte{byte(j), byte(j >> 8), 'x'}
+		}
+		start := time.Now()
+		if _, err := a.runOne(a.sha1, 0, pws, salt, iter, dk); err != nil {
+			if bestIdx < 0 {
+				return defaultBatch
+			}
+			break
+		}
+		el := time.Since(start).Seconds()
+		if el <= 0 {
+			el = 1e-9
+		}
+		rates[i] = float64(sz) / el
+		if rates[i] > bestRate {
+			bestRate, bestIdx = rates[i], i
+		}
+	}
+	if bestIdx < 0 {
+		return defaultBatch
+	}
+	chosen := sizes[bestIdx]
+	for i := 0; i <= bestIdx; i++ {
+		if rates[i] >= 0.9*bestRate {
+			chosen = sizes[i]
+			break
+		}
+	}
+	if nd := len(a.queues); nd > 1 {
+		chosen *= nd // give every device a full chunk after the split
+	}
+	return chosen
+}
+
+// GPUSelfTest derives a few known PBKDF2 vectors for each HMAC variant on the
+// device and confirms they are byte-for-byte identical to the Go reference, so a
+// GPU result is never trusted before the kernel is proven correct on this host.
 func GPUSelfTest() error {
 	a, err := Detect()
 	if err != nil {
@@ -283,19 +480,31 @@ func GPUSelfTest() error {
 		{"", "abc", 1, 20},
 		{"password", "NaCl1234salt", 2048, 40},
 		{"a-longer-passphrase-here", "0123456789abcdef0123", 500, 66},
+		{"this-key-is-deliberately-longer-than-one-hmac-block-of-sixty-four-bytes!!", "saltysalt", 100, 32},
 	}
-	for _, c := range cases {
-		got, err := a.PBKDF2SHA1([][]byte{[]byte(c.pw)}, []byte(c.salt), c.iter, c.dk)
-		if err != nil {
-			return fmt.Errorf("GPU self-test (%q): %w", c.pw, err)
-		}
-		want, err := prim.PBKDF2(sha1.New, c.pw, []byte(c.salt), c.iter, c.dk)
-		if err != nil {
-			return err
-		}
-		if len(got) != 1 || !bytes.Equal(got[0], want) {
-			return fmt.Errorf("GPU self-test MISMATCH for pw=%q iter=%d dk=%d:\n gpu %x\n cpu %x",
-				c.pw, c.iter, c.dk, got[0], want)
+	variants := []struct {
+		name string
+		h    func() hash.Hash
+		fn   func([][]byte, []byte, int, int) ([][]byte, error)
+	}{
+		{"sha1", sha1.New, a.PBKDF2SHA1},
+		{"sha256", sha256.New, a.PBKDF2SHA256},
+		{"sha512", sha512.New, a.PBKDF2SHA512},
+	}
+	for _, v := range variants {
+		for _, c := range cases {
+			got, err := v.fn([][]byte{[]byte(c.pw)}, []byte(c.salt), c.iter, c.dk)
+			if err != nil {
+				return fmt.Errorf("GPU self-test %s (%q): %w", v.name, c.pw, err)
+			}
+			want, err := prim.PBKDF2(v.h, c.pw, []byte(c.salt), c.iter, c.dk)
+			if err != nil {
+				return err
+			}
+			if len(got) != 1 || !bytes.Equal(got[0], want) {
+				return fmt.Errorf("GPU self-test %s MISMATCH for pw=%q iter=%d dk=%d:\n gpu %x\n cpu %x",
+					v.name, c.pw, c.iter, c.dk, got[0], want)
+			}
 		}
 	}
 	return nil
