@@ -104,6 +104,7 @@ func runCrack(args []string) int {
 	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
 	markovF := fs_.Bool("markov", false, "train a Markov model on the candidate words and generate guesses best-first")
 	markovMax := fs_.Int("markov-max", 1_000_000, "max Markov guesses to generate (with --markov)")
+	markovThreshold := fs_.Int("markov-threshold", 0, "cap the per-position branching of --markov to the N likeliest next characters (hashcat --markov-threshold; 0=default 15)")
 	orderF := fs_.String("order", "", "reorder the wordlist candidates before mangling: 'markov' tries the statistically likeliest words first (none=keep file order)")
 	orderMax := fs_.Int("order-max", 1_000_000, "max wordlist entries to buffer and reorder (with --order markov)")
 	incrementF := fs_.String("increment", "", "expand each mask over a token-length range MIN:MAX, shortest first (hashcat --increment)")
@@ -147,6 +148,14 @@ func runCrack(args []string) int {
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
 	passwordEnv := fs_.String("password-env", "", "read a candidate password from this environment variable")
 	potfilePath := fs_.String("potfile", "", "load recovered passwords from, and append new ones to, this file")
+	foundCacheF := fs_.String("found-cache", "", "path to a persistent found-password cache: its passwords are tried FIRST on every run and new finds are appended, so a reused password is recovered instantly next time")
+	rememberF := fs_.Bool("remember", false, "enable the found-password cache at the default location ($XDG_DATA_HOME/xcrack/found.txt) without naming a path")
+	loopbackF := fs_.Bool("loopback", false, "also feed the cached/pot recovered passwords back through the mangling rules (hashcat --loopback), tried early")
+	minLenF := fs_.Int("min-length", 0, "skip candidates shorter than N characters (0=no minimum)")
+	maxLenF := fs_.Int("max-length", 0, "skip candidates longer than N characters (0=no maximum)")
+	encodingF := fs_.String("encoding", "", "transcode each candidate to this encoding before testing: utf-8 (default), latin1, utf-16le, utf-16be")
+	var hcmaskFiles stringSlice
+	fs_.Var(&hcmaskFiles, "hcmask", "load masks from a hashcat .hcmask file (per-line masks with optional inline ?1..?4 charsets; repeatable)")
 	var resumeFrom stringSlice
 	fs_.Var(&resumeFrom, "resume-from", "import a RecoveredPassword JSON envelope (from an external cracker that solved an exported challenge) and try its password first (repeatable)")
 	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
@@ -249,6 +258,22 @@ func runCrack(args []string) int {
 		fmt.Fprintf(os.Stderr, "xcrack: hybrid-prepend: %v\n", err)
 		return 2
 	}
+	// .hcmask files: each line is a mask with optional inline ?1..?4 charsets.
+	// Compiled once here (sharing the --pattern custom charsets) and appended to
+	// the mask keyspaces in buildCandidates.
+	allHCMask := append([]string{}, hcmaskFiles...)
+	if cfg != nil {
+		allHCMask = append(allHCMask, cfg.Patterns.HCMask...)
+	}
+	var hcMasks []*pattern.Mask
+	for _, hm := range allHCMask {
+		ms, herr := pattern.LoadHCMask(hm, customCharsets)
+		if herr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: --hcmask: %v\n", herr)
+			return 2
+		}
+		hcMasks = append(hcMasks, ms...)
+	}
 
 	// assemble sources. --stdout and --keyspace only inspect the candidate stream,
 	// so they do not require a source file; the other modes (crack, --benchmark,
@@ -290,9 +315,29 @@ func runCrack(args []string) int {
 	// and an environment-provided password keep secrets off the command line.
 	var priorityPW []string
 	var pot *potfile
-	if *potfilePath != "" {
-		pot = loadPotfile(*potfilePath)
+	// The found-password cache is a potfile: --potfile names it explicitly;
+	// --found-cache names a dedicated cache; --remember uses the default location.
+	// Its passwords are prepended to the priority set, so a reused password is the
+	// very first thing tried on a new run.
+	potPath := *potfilePath
+	if potPath == "" {
+		if *foundCacheF != "" {
+			potPath = *foundCacheF
+		} else if *rememberF {
+			potPath = defaultFoundCache()
+		}
+	}
+	if potPath != "" {
+		pot = loadPotfile(potPath)
 		priorityPW = append(priorityPW, pot.passwords()...)
+	}
+	// Candidate encoding: transcode each candidate to this byte encoding before
+	// testing (for passwords typed in a legacy single-byte code page, or needed
+	// as raw UTF-16). Validated up front.
+	candEnc, eerr := candidates.ParseEncoding(*encodingF)
+	if eerr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: --encoding: %v\n", eerr)
+		return 2
 	}
 	if len(passwordFiles) > 0 {
 		pf, err := passwordsFromFiles(passwordFiles)
@@ -446,21 +491,36 @@ func runCrack(args []string) int {
 
 	buildCandidates := func(path string) xcrack.CandidateSource {
 		var srcs []candidates.Source
+		// Priority passwords FIRST (ahead of even the generators): the found-password
+		// cache / potfile, --password(-file/-env), and imported recovered passwords,
+		// so a reused password is recovered instantly.
+		if len(allPasswords) > 0 {
+			srcs = append(srcs, candidates.Explicit(allPasswords...))
+		}
+		// Loopback (hashcat --loopback): feed the cached/pot recovered passwords back
+		// through the mangling rules, so a reused password with a new suffix/case
+		// ("Summer2023" -> "Summer2024!") is caught early.
+		if *loopbackF && pot != nil {
+			if cached := pot.passwords(); len(cached) > 0 {
+				srcs = append(srcs, patternSet.ApplyRules(candidates.Explicit(cached...)))
+			}
+		}
 		if pcfgModel != nil {
 			srcs = append(srcs, pcfgModel.Source(*pcfgMax))
 		}
 		if markovModel != nil {
-			srcs = append(srcs, candidates.MarkovGen(markovModel, markovMinLen, markovMaxLen, *markovMax))
+			topK := *markovThreshold
+			if topK <= 0 {
+				topK = 15 // MarkovGen's default per-position branching
+			}
+			srcs = append(srcs, candidates.MarkovGenTopK(markovModel, markovMinLen, markovMaxLen, *markovMax, topK))
 		}
 		// Root-name context: the engine derives name candidates for every nested
-		// node, but the top-level file's name is only known here, so seed it first.
+		// node, but the top-level file's name is only known here, so seed it next.
 		if opts.ContextCandidates {
 			if names := candidates.FromName(filepath.Base(path)); len(names) > 0 {
 				srcs = append(srcs, candidates.Explicit(names...))
 			}
-		}
-		if len(allPasswords) > 0 {
-			srcs = append(srcs, candidates.Explicit(allPasswords...))
 		}
 		if useDefault {
 			srcs = append(srcs, candidates.DefaultList())
@@ -508,6 +568,10 @@ func runCrack(args []string) int {
 		} else {
 			srcs = append(srcs, patternSet.MaskSources()...)
 		}
+		// .hcmask file masks (each its own keyspace), appended after the inline masks.
+		for _, m := range hcMasks {
+			srcs = append(srcs, m.Source())
+		}
 		// Combinator (hashcat -a 1): every left word followed by every right word
 		// (optional separator). Built over fresh file readers so each file run is
 		// independent.
@@ -545,10 +609,16 @@ func runCrack(args []string) int {
 		if genKeyWalk {
 			srcs = append(srcs, candidates.KeyboardWalk(keyWalkMin, keyWalkMax, keyWalkCount))
 		}
+		// Length filter (character bounds, on the UTF-8 candidate) then encoding
+		// transcode, applied to the whole assembled stream before sharding so the
+		// bounds and the tested bytes are exactly what the user asked for.
+		chain := candidates.Chain(srcs...)
+		chain = candidates.LengthFilter(chain, *minLenF, *maxLenF)
+		chain = candidates.Encode(chain, candEnc)
 		// Distributed cracking: restrict this worker to its stride of the keyspace.
 		// A no-op when shardCount <= 1. Promoted/context/hint guesses live outside
 		// this base source, so every worker still tries them.
-		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
+		return candidates.Shard(chain, shardIndex, shardCount)
 	}
 
 	// Inspection modes short-circuit cracking. --stdout/--keyspace inspect only

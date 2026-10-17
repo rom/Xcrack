@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -106,6 +107,25 @@ type potfile struct {
 	mu    sync.Mutex
 	known map[string]bool
 	order []string
+}
+
+// defaultFoundCache returns the default persistent found-password cache path
+// ($XDG_DATA_HOME/xcrack/found.txt, falling back to ~/.local/share and finally
+// the current directory), used by --remember. The directory is created on first
+// write by potfile.add via O_CREATE on the file; the parent dir is ensured here.
+func defaultFoundCache() string {
+	base := os.Getenv("XDG_DATA_HOME")
+	if base == "" {
+		if home, err := os.UserHomeDir(); err == nil {
+			base = filepath.Join(home, ".local", "share")
+		}
+	}
+	if base == "" {
+		return "xcrack-found.txt"
+	}
+	dir := filepath.Join(base, "xcrack")
+	_ = os.MkdirAll(dir, 0o700)
+	return filepath.Join(dir, "found.txt")
 }
 
 func loadPotfile(path string) *potfile {
