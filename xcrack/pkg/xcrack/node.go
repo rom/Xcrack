@@ -60,6 +60,11 @@ type Node struct {
 	// KeyRecovered reports that this node was unlocked by a known-plaintext key
 	// recovery (ZipCrypto) rather than by a password; Password is then "".
 	KeyRecovered bool
+	// CrackDuration is the wall-clock time spent searching for this node's
+	// password (or recovering its key). It is the per-node "time to crack" for a
+	// decrypted node, and the time spent before giving up for a locked one. It is
+	// zero for plaintext nodes and nodes that were never searched.
+	CrackDuration time.Duration
 	// Status is the processing outcome.
 	Status NodeStatus
 	// Err is non-nil for StatusError (never a panic).
@@ -80,6 +85,28 @@ func (n *Node) Walk(fn func(*Node)) {
 	for _, c := range n.Children {
 		c.Walk(fn)
 	}
+}
+
+// AuditEvent builds a secrets-free AuditEvent describing this node for an audit
+// log or trace. The recovered password is included only when includeSecrets is
+// true (opt-in); otherwise AuditEvent.Password stays empty regardless of whether
+// a password was recovered.
+func (n *Node) AuditEvent(includeSecrets bool) AuditEvent {
+	ev := AuditEvent{
+		Path:         n.Path,
+		Format:       n.Format,
+		Status:       n.Status.String(),
+		Encrypted:    n.WasEncrypted,
+		KeyRecovered: n.KeyRecovered,
+		TimeToCrack:  n.CrackDuration,
+	}
+	if n.Content != nil {
+		ev.Size = n.Content.Size()
+	}
+	if includeSecrets {
+		ev.Password = n.Password
+	}
+	return ev
 }
 
 // Result is the outcome of a Process call.

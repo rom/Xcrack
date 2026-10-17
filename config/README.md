@@ -53,6 +53,7 @@ environment variables override the config.
 | `max_procs` | int | ceiling on OS threads for the search |
 | `batch_size` | int | candidates per internal batch (channel amortization) |
 | `throttle` | int | CPU duty-cycle percent (1–100; lower = gentler) |
+| `dual_pipeline` | bool | race the CPU search and the `--gpu` sweep over one shared keyspace per file (first to find wins; needs `--gpu`) |
 
 ### `limits:`
 | Key | Type | Meaning |
@@ -111,6 +112,13 @@ environment variables override the config.
 | `format` | string | `text` \| `json` \| `jsonl` |
 | `results_file` | string | append a JSON result manifest here |
 | `log_level` | string | `debug` \| `info` \| `warn` \| `error` |
+| `log_format` | string | log + audit trail format: `text` (default) \| `json` |
+| `log_file` | string | append the structured log + audit trail to this file (default: stderr) |
+| `syslog` | bool | send the log + audit trail to the system logger instead of stderr/file |
+| `syslog_address` | string | remote syslog `host:port` (with `syslog`; empty = local socket) |
+| `syslog_network` | string | remote syslog transport `udp` \| `tcp` (with `syslog_address`) |
+| `syslog_tag` | string | syslog tag/ident (with `syslog`; default: program name) |
+| `audit_log_password` | bool | include the recovered password in the "file cracked" audit entry (default off: the trail stays secrets-free) |
 | `extract_suffix` | string | per-source extracted-tree directory suffix under `--out` (default `.extracted`; single path segment, no `/` or `..`) |
 
 ### `budget:`
@@ -127,3 +135,14 @@ environment variables override the config.
 | `batch` | int | candidates shipped per server request |
 | `allow_defaults` | bool | let each server also try its own default list |
 | `per_request` | duration | per-request server deadline hint (e.g. `30s`) |
+| `tls.ca` | string | PEM CA bundle to verify `https://` server certs (private CA / self-signed) |
+| `tls.cert` | string | client certificate (PEM) for mutual TLS to the servers |
+| `tls.key` | string | private key (PEM) for `tls.cert` |
+| `tls.server_name` | string | expected server cert name (SNI / verification override) |
+| `tls.insecure` | bool | skip server certificate verification (**insecure** — testing only) |
+
+> Server-side TLS is an `xcrackd` runtime flag, not a config key: run
+> `xcrackd --tls-cert server.crt --tls-key server.key` (add `--tls-client-ca
+> ca.crt` for mutual TLS). Generate certs with
+> [`scripts/gen-selfsigned-cert.sh`](../scripts/gen-selfsigned-cert.sh) or
+> [`scripts/gen-letsencrypt-cert.sh`](../scripts/gen-letsencrypt-cert.sh).

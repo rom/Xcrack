@@ -200,20 +200,23 @@ A sweep of the current feature set turned up these as the notable remaining gaps
   cross-file-invertible, so a table there would be per-document — not worth it;
   they keep the sweep. ⬜ Multi-GPU split of generation (today the kernel runs on
   device 0) and shipping/hosting a prebuilt full 2^40 table.
-- ⬜ **Dual CPU+GPU parallel pipeline** (per-file race). On a host with both a CPU
-  and a GPU, run **two cracking pipelines for the same file at once** — the GPU
-  batch/key-search on one side and a CPU dictionary+rules pass on the other — and
-  have the **first side to find the password cancel the other for that file**,
-  then both advance to the next file. This beats today's sequence (promoted/hint/
+- ✅ **Dual CPU+GPU parallel pipeline** (per-file race). On a host with both a CPU
+  and a GPU, `--dual-pipeline` runs **two cracking lanes for the same file at
+  once** — the GPU batch sweep on one side and the CPU search on the other — and
+  the **first lane to find the password cancels the other for that file**, then
+  both advance to the next file. This beats the default sequence (promoted/hint/
   context on CPU, *then* the GPU sweep) when the two streams are
   non-overlapping: a short high-yield wordlist clears on the CPU in the time the
-  GPU spins up a 2^40 sweep, and neither side idles. Needs a per-file
-  cancellation token shared by both pipelines, de-dup so the CPU list and the GPU
-  candidate set don't retry the same guesses, and cost-aware assignment (send the
-  expensive-KDF keyspace to the GPU, the cheap high-yield lists to the CPU). The
-  authoritative CPU re-check already gates every GPU hit, so a race cannot cause
-  a false positive. **Open design question folded in from user feedback
-  (2026-10).**
+  GPU spins up a large sweep, and neither side idles. Implemented with a per-file
+  `context` cancellation token shared by both lanes, a mutex-guarded `sharedFeeder`
+  so the lanes de-dup the one keyspace (each candidate tested on exactly one
+  lane), and cost-aware batching (the GPU pulls large device batches, the CPU
+  small ones for fast feedback). The authoritative CPU re-check gates every GPU
+  hit, so a race cannot cause a false positive, and a mid-run device failure
+  re-verifies the pending batch on the CPU before handing the rest to the CPU
+  lane. `Options.DualPipeline` / `xcrack --gpu --dual-pipeline` /
+  `xcrackd --gpu -dual-pipeline`; `pkg/xcrack/dualpipe.go`, stub-accelerator tests
+  under `-race`. **Landed from user feedback (2026-10).**
 - ⬜ **Broaden the GPU tier toward hashcat-level in-process throughput**: on-device
   rule mangling (rules evaluated on the GPU, not just host-generated candidates),
   more algorithms wired to the existing kernels (Office 2007 "standard" `Finish`,

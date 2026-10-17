@@ -15,6 +15,73 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Library/REST parity, an API reference, a bigger manual, and embedding
+  examples.** `xcrackd` now exposes the same engine knobs as the CLI as flags —
+  `--batch-size`, `--throttle`, `--no-recurse`, `--explode-documents`,
+  `--context`, `--hint`, and the `--max-depth`/`--max-nodes`/`--max-total-bytes`/
+  `--max-entry-size`/`--max-candidates` limits — so an operator configures the
+  server engine exactly as the local engine (the library already mirrored the CLI
+  via `Options`). New [`docs/API.md`](API.md) documents the embeddable library
+  (`Pool`/`Process`, every `Options` field, candidate sources, results and
+  callbacks) and the REST API (`xcrackd` flags, endpoints, request shapes and the
+  JSON report), and explains the parity model (the controller generates
+  candidates; the server is a stateless verify/KDF worker). The user manual gained
+  a **CLI reference** chapter (every subcommand and flag family), an **Embedding
+  the library** chapter, and much richer distributed/GPU and advanced-usage
+  sections with many more worked examples. Five new runnable embedding examples
+  join `impex-embed`: `batch-triage`, `candidate-pipeline`, `pin-fastreject`,
+  `inspect-tree` and `http-service` (indexed in
+  [`xcrack/examples/README.md`](../xcrack/examples/README.md)).
+- **TLS for the REST API and the distributed client.** `xcrackd` can now
+  terminate HTTPS itself: `--tls-cert`/`--tls-key` serve TLS (1.2 floor, or
+  `--tls-min-version 1.3`), and `--tls-client-ca` turns on **mutual TLS**
+  (client certificates required and verified against a CA bundle). The `xcrack`
+  distributed client gained matching flags for `https://` servers: `--tls-ca`
+  (trust a private/self-signed server cert), `--tls-cert`/`--tls-key` (present a
+  client cert for mTLS), `--tls-server-name` (SNI/verification override) and
+  `--tls-insecure` (skip verification — testing only, with a loud warning); the
+  same settings live under `cluster.tls.*` in a config file. Two helper scripts
+  create the certificates: `scripts/gen-selfsigned-cert.sh` (a self-signed server
+  cert with SANs, or a full CA + server + client mTLS kit) and
+  `scripts/gen-letsencrypt-cert.sh` (a certbot/ACME wrapper for a public
+  endpoint). Verified end to end — `xcrackd` over HTTPS cracking for the `xcrack`
+  client that trusts its cert — plus unit tests for the server/client TLS config
+  builders and an HTTPS round-trip test.
+- **Dual CPU+GPU parallel pipeline (`--dual-pipeline`).** For an
+  acceleration-capable target, the CPU search and the GPU sweep now run
+  **concurrently over one shared, de-duplicated candidate stream** instead of the
+  CPU sitting idle while the device works: a new `sharedFeeder` serializes the
+  keyspace so each candidate is tested on exactly one lane, and the **first lane
+  to find the password cancels the other** (both then advance to the next file).
+  A password near the front of the stream is found by the CPU without waiting for
+  a device batch, while the device chews through the bulk — so the pipeline is a
+  speed change, never a result change (cross-validated against the sequential
+  path). The device's hits are still re-checked on the CPU, and if the device
+  cannot serve the parameters mid-race it re-verifies its pending batch on the CPU
+  (no candidate is lost) and hands the rest of the sweep to the CPU lane. Exposed
+  as `Options.DualPipeline`, `xcrack --dual-pipeline` (with a new `xcrack --gpu`
+  that attaches the OpenCL tier to the live crack loop, mirroring `xcrackd`), and
+  `xcrackd --dual-pipeline`. Opt-in; inert without an active GPU tier; default
+  build stays pure-Go (ADR 0001). Tested end to end with the pure-Go stub
+  accelerator (de-dup, hit parity, no-false-positive, and device-failure
+  fallback) under `-race`.
+- **Syslog + structured audit logging (CLI and `xcrackd`).** A new
+  `pkg/auditlog` package builds one `log/slog`-backed logger for both tools with
+  `--log-level`, `--log-format text|json`, an optional `--log-file`, and a
+  `--syslog` backend (`--syslog-address`/`--syslog-network` for a remote sink,
+  `--syslog-tag`), so the whole run — the engine's diagnostics and the audit
+  trail — can be followed in one place. Every processed source emits an audit
+  record; a successful recovery is logged at info as **"file cracked"** with the
+  **filename, file type, time-to-crack** and cracked entries, and a per-node
+  debug trace lets the full execution be followed at `--log-level debug`. The
+  **recovered password is logged only with `--audit-log-password`** (off by
+  default, so the trail stays secrets-free). The engine gained a per-node
+  `Node.CrackDuration` (per-node time-to-crack), an opt-in
+  `Options.AuditIncludeSecrets`, and `Node.AuditEvent`; `xcrackd` serves the
+  same trail per request (client, endpoint, bytes, elapsed) via the new
+  `api.Config.Audit` hook. The syslog backend is Unix-only (guarded by build
+  tags; `--syslog` is a clean error elsewhere) and the default build stays
+  pure-Go (ADR 0001).
 - **GPU-accelerated Thunder-Table generation.** `xcrack thunder-gen --gpu`
   offloads the rainbow-chain walk — the heavy one-time cost of building the PDF
   V1/R2 TMTO — to an OpenCL device via the new `pdf_thunderchain` kernel (one

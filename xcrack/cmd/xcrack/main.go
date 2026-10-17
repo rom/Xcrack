@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rom/xcrack/pkg/auditlog"
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xcrypto/pattern"
@@ -93,6 +96,13 @@ func runCrack(args []string) int {
 
 	format := fs_.String("format", "text", "output format: text|json|jsonl")
 	logLevel := fs_.String("log-level", "info", "log level: debug|info|warn|error")
+	logFormat := fs_.String("log-format", "text", "log/audit output format: text|json")
+	logFile := fs_.String("log-file", "", "append structured log + audit lines to this file (default: stderr)")
+	syslogF := fs_.Bool("syslog", false, "send the log + audit trail to the system logger (syslog) instead of stderr")
+	syslogAddr := fs_.String("syslog-address", "", "remote syslog host:port (with --syslog; empty uses the local syslog socket)")
+	syslogNet := fs_.String("syslog-network", "", "remote syslog transport udp|tcp (with --syslog-address)")
+	syslogTag := fs_.String("syslog-tag", "", "syslog tag/ident (with --syslog; default: program name)")
+	auditPasswordF := fs_.Bool("audit-log-password", false, "include the recovered password in the audit log entry for a cracked file (off by default so the trail stays secrets-free)")
 	resultsFile := fs_.String("results-file", "", "write JSON manifest/results here")
 
 	workers := fs_.Int("workers", 0, "candidate-test goroutines per file (0=NumCPU)")
@@ -103,6 +113,8 @@ func runCrack(args []string) int {
 	maxDuration := fs_.Duration("max-duration", 0, "whole-run deadline")
 	batchSize := fs_.Int("batch-size", 0, "candidates per worker hand-off (0=auto)")
 	throttle := fs_.Int("throttle", 0, "approximate CPU duty cycle percent 1..99 (0=off)")
+	gpuF := fs_.Bool("gpu", false, "offload the shared PBKDF2 sweep of acceleration-capable targets (WinZip-AES, DMG, agile Office, ODF, ...) to an OpenCL device; requires a -tags opencl build on OpenCL hardware (the default build is pure-Go and falls back to the CPU)")
+	dualF := fs_.Bool("dual-pipeline", false, "dual CPU+GPU pipeline: race the CPU search and the --gpu sweep over one shared keyspace per file, first to find wins (needs --gpu)")
 
 	recurse := fs_.Bool("recurse", true, "decompose containers")
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
@@ -151,6 +163,11 @@ func runCrack(args []string) int {
 	clusterDefaults := fs_.Bool("cluster-allow-defaults", false, "in distributed mode, let each server also try its own default list")
 	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
 	clusterSession := fs_.String("cluster-session", "", "persist/resume distributed progress to FILE: an interrupted run skips the candidates already confirmed tried per file (cross-worker dedup across runs)")
+	tlsCAF := fs_.String("tls-ca", "", "distributed mode (https:// servers): verify the server certificate against this PEM CA bundle (for a private CA or self-signed cert)")
+	tlsCertF := fs_.String("tls-cert", "", "distributed mode: client certificate (PEM) for mutual TLS to the xcrackd servers (requires --tls-key)")
+	tlsKeyF := fs_.String("tls-key", "", "distributed mode: private key (PEM) for --tls-cert")
+	tlsServerNameF := fs_.String("tls-server-name", "", "distributed mode: expected server certificate name (SNI/verification override, e.g. when connecting by IP)")
+	tlsInsecureF := fs_.Bool("tls-insecure", false, "distributed mode: skip server certificate verification (INSECURE — testing only)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	stdoutF := fs_.Bool("stdout", false, "don't crack: print the candidate stream (wordlists + rules + masks + generators) to stdout and exit")
@@ -257,6 +274,7 @@ func runCrack(args []string) int {
 
 	opts.BatchSize = resolveInt(set["batch-size"], *batchSize, "", cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.BatchSize }), 0)
 	opts.ThrottlePercent = resolveInt(set["throttle"], *throttle, env("XCRACK_THROTTLE"), cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.Throttle }), 0)
+	opts.DualPipeline = *dualF || (cfg != nil && cfg.Concurrency.DualPipeline)
 	opts.Budget.PerFile = *timeout
 	opts.Budget.Total = *maxDuration
 	if cfg != nil {
@@ -271,7 +289,43 @@ func runCrack(args []string) int {
 	outFormat := firstNonEmpty(flagIf(set["format"], *format), env("XCRACK_FORMAT_STR"), cfgStr(cfg, func(c *fileConfig) string { return c.Output.Format }), "text")
 	resFile := firstNonEmpty(flagIf(set["results-file"], *resultsFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.ResultsFile }), "")
 	logLvl := firstNonEmpty(flagIf(set["log-level"], *logLevel), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogLevel }), "info")
-	opts.Logger = newLogger(logLvl)
+	auditPassword := *auditPasswordF || (cfg != nil && cfg.Output.AuditPassword)
+	logCfg := auditlog.Config{
+		Level:          logLvl,
+		Format:         firstNonEmpty(flagIf(set["log-format"], *logFormat), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogFormat }), "text"),
+		File:           firstNonEmpty(flagIf(set["log-file"], *logFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogFile }), ""),
+		Syslog:         *syslogF || (cfg != nil && cfg.Output.Syslog),
+		SyslogNetwork:  firstNonEmpty(flagIf(set["syslog-network"], *syslogNet), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogNetwork }), ""),
+		SyslogAddress:  firstNonEmpty(flagIf(set["syslog-address"], *syslogAddr), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogAddress }), ""),
+		SyslogTag:      firstNonEmpty(flagIf(set["syslog-tag"], *syslogTag), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogTag }), ""),
+		IncludeSecrets: auditPassword,
+	}
+	// The live logger (which may dial syslog or open a log file) is built lazily:
+	// the non-cracking modes below (--show-config, --keyspace, --stdout, ...) read
+	// only the logCfg fields and must not require a reachable syslog. ensureLogger
+	// builds it at most once, right before a run that needs it.
+	var (
+		logger    *slog.Logger
+		logCloser io.Closer
+	)
+	defer func() {
+		if logCloser != nil {
+			logCloser.Close()
+		}
+	}()
+	ensureLogger := func() bool {
+		if logger != nil {
+			return true
+		}
+		l, closer, err := auditlog.New(logCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: logging: %v\n", err)
+			return false
+		}
+		logger, logCloser = l, closer
+		opts.Logger = auditlog.Printf(l)
+		return true
+	}
 
 	// Extracted-tree directory suffix: an explicit flag wins (even "" for none),
 	// else the config, else ".extracted". It must stay a single path segment so it
@@ -735,6 +789,8 @@ func runCrack(args []string) int {
 			MaxProcs:       opts.MaxProcs,
 			BatchSize:      opts.BatchSize,
 			Throttle:       opts.ThrottlePercent,
+			GPU:            *gpuF,
+			DualPipeline:   opts.DualPipeline,
 			MaxDepth:       opts.Limits.MaxDepth,
 			MaxNodes:       opts.Limits.MaxNodes,
 			MaxTotalBytes:  opts.Limits.MaxTotalBytes,
@@ -768,6 +824,11 @@ func runCrack(args []string) int {
 			Format:         outFormat,
 			ResultsFile:    resFile,
 			LogLevel:       logLvl,
+			LogFormat:      logCfg.Format,
+			LogFile:        logCfg.File,
+			Syslog:         logCfg.Syslog,
+			SyslogAddress:  logCfg.SyslogAddress,
+			AuditPassword:  auditPassword,
 			OutDir:         *out,
 			ExtractSuffix:  extractSuffixVal,
 			PerFile:        opts.Budget.PerFile,
@@ -787,6 +848,18 @@ func runCrack(args []string) int {
 		fmt.Fprintf(os.Stderr, "xcrack: %v\n", derr)
 		return 2
 	} else if distributed {
+		client, cerr := buildClusterHTTPClient(tlsClientOpts{
+			CAFile: *tlsCAF, CertFile: *tlsCertF, KeyFile: *tlsKeyF,
+			ServerName: *tlsServerNameF, Insecure: *tlsInsecureF,
+		}, cfg)
+		if cerr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: tls: %v\n", cerr)
+			return 2
+		}
+		copts.Client = client
+		if *tlsInsecureF {
+			fmt.Fprintln(os.Stderr, "xcrack: WARNING: --tls-insecure disables server certificate verification")
+		}
 		return runDistributed(files, servers, copts, buildCandidates, pot, *clusterSession)
 	}
 
@@ -843,6 +916,18 @@ func runCrack(args []string) int {
 		fmt.Fprintln(os.Stderr, "xcrack: --reuse-output needs -o/--out; ignoring")
 	}
 
+	if !ensureLogger() {
+		return 2
+	}
+	// Optional OpenCL GPU tier for the live crack loop (opt-in, hardware-gated;
+	// the default pure-Go build has no backend and falls back to the CPU).
+	if *gpuF {
+		closeAcc := enableGPU(&opts, logger)
+		defer closeAcc()
+	}
+	if opts.DualPipeline && opts.Accelerator == nil {
+		logger.Warn("--dual-pipeline has no effect without an active --gpu tier; running the CPU search alone")
+	}
 	ctx := context.Background()
 	pool := xcrack.NewPool(opts)
 	defer pool.Close()
@@ -972,6 +1057,11 @@ func runCrack(args []string) int {
 			}
 			res.Root.Path = filepath.Base(path)
 			results[i] = res
+			// Audit trail: one "file cracked" entry (filename, file type,
+			// time-to-crack, optionally the password) per recovered source, plus a
+			// per-node debug trace so the execution can be followed at --log-level
+			// debug.
+			auditlog.LogFile(logger, res.Root.Path, res, auditPassword)
 			// Batch-level session: this file's search ran to completion, so record it
 			// (with any recovered passwords) and never re-search it on resume.
 			if sess != nil {

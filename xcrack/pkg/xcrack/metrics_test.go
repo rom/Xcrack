@@ -103,9 +103,64 @@ func TestOnAuditNoSecrets(t *testing.T) {
 		if e.Encrypted {
 			sawEncrypted = true
 		}
+		// Default (AuditIncludeSecrets unset): the trail never carries a password,
+		// even for a decrypted node.
+		if e.Password != "" {
+			t.Fatalf("audit event leaked a password with AuditIncludeSecrets unset: %+v", e)
+		}
 	}
 	if !sawEncrypted {
 		t.Fatal("expected at least one encrypted node in the audit trail")
 	}
-	// AuditEvent has no password/content fields by construction (compile-time).
+}
+
+// TestOnAuditSecretsOptInAndTiming checks the opt-in password path and the
+// per-node time-to-crack: with AuditIncludeSecrets the decrypted node carries
+// the recovered password, and every cracked node reports a positive
+// CrackDuration/TimeToCrack.
+func TestOnAuditSecretsOptInAndTiming(t *testing.T) {
+	data, err := os.ReadFile(fixturePath("rc4cryptoapi_password.doc"))
+	if err != nil {
+		t.Skipf("fixture unavailable: %v", err)
+	}
+	var events []AuditEvent
+	pool := NewPool(Options{
+		AuditIncludeSecrets: true,
+		OnAudit:             func(e AuditEvent) { events = append(events, e) },
+	})
+	defer pool.Close()
+	res, err := pool.Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("Password1234_"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Close()
+
+	sawCrack := false
+	for _, e := range events {
+		if e.Encrypted && e.Status == "decrypted" {
+			sawCrack = true
+			if e.Password != "Password1234_" {
+				t.Fatalf("expected the recovered password in the audit event, got %q", e.Password)
+			}
+			if e.TimeToCrack <= 0 {
+				t.Fatalf("expected a positive time-to-crack, got %v", e.TimeToCrack)
+			}
+		}
+	}
+	if !sawCrack {
+		t.Fatal("expected a decrypted node in the audit trail")
+	}
+
+	// The result tree records the same per-node timing: whichever node was
+	// decrypted (root or a container entry) carries a positive CrackDuration.
+	var timed bool
+	res.Root.Walk(func(n *Node) {
+		if n.WasEncrypted && n.Status == StatusDecrypted && n.CrackDuration > 0 {
+			timed = true
+		}
+	})
+	if !timed {
+		t.Fatal("expected a decrypted node to record a positive crack duration")
+	}
 }

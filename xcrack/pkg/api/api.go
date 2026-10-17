@@ -11,8 +11,10 @@
 //
 // Security posture: the body is untrusted input handed to hostile-input-safe
 // parsers. Recovered passwords and decrypted content appear in responses, so an
-// operator MUST place authentication/authorization and TLS in front of this
-// service; it ships neither. Passwords are never logged.
+// operator MUST place authentication/authorization (and, unless xcrackd's own
+// TLS is enabled, transport security) in front of this service; the API package
+// itself ships neither. The audit hook (Config.Audit) records recovered
+// passwords only when the operator opts in.
 package api
 
 import (
@@ -46,6 +48,20 @@ type Config struct {
 	// MaxPasswords caps how many ?password= candidates one request may supply.
 	// Default 10000.
 	MaxPasswords int
+	// Audit, if set, is called after each successful Process with the result tree
+	// and per-request metadata, so an operator can emit an audit-log entry per
+	// request (xcrackd wires this to its structured/syslog audit trail). It runs
+	// on the request goroutine before the response is written; keep it fast and
+	// non-blocking. nil disables per-request audit logging.
+	Audit func(res *xcrack.Result, meta AuditMeta)
+}
+
+// AuditMeta carries per-request context for the Config.Audit hook.
+type AuditMeta struct {
+	RemoteAddr string        // client address (host:port)
+	Endpoint   string        // request path, e.g. "/v1/decrypt"
+	Bytes      int           // request body size in bytes
+	Elapsed    time.Duration // processing wall-clock time
 }
 
 func (c *Config) applyDefaults() {
@@ -153,6 +169,7 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request, data []byte, src xc
 	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
+	start := time.Now()
 	res, err := s.pool.Process(ctx, bytes.NewReader(data), int64(len(data)), src)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -163,6 +180,15 @@ func (s *Server) run(w http.ResponseWriter, r *http.Request, data []byte, src xc
 		return
 	}
 	defer res.Close()
+
+	if s.cfg.Audit != nil {
+		s.cfg.Audit(res, AuditMeta{
+			RemoteAddr: r.RemoteAddr,
+			Endpoint:   r.URL.Path,
+			Bytes:      len(data),
+			Elapsed:    time.Since(start),
+		})
+	}
 
 	writeJSON(w, http.StatusOK, xcrack.BuildReport(res))
 }

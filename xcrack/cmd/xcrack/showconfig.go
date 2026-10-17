@@ -17,6 +17,7 @@ type confView struct {
 	Sources []string
 
 	Workers, FileJobs, MaxProcs, BatchSize, Throttle int
+	GPU, DualPipeline                                bool
 
 	MaxDepth, MaxNodes                         int
 	MaxTotalBytes, MaxEntrySize, MaxCandidates int64
@@ -39,6 +40,8 @@ type confView struct {
 	HCMask    []string
 
 	Format, ResultsFile, LogLevel, OutDir, ExtractSuffix string
+	LogFormat, SyslogAddress, LogFile                    string
+	Syslog, AuditPassword                                bool
 
 	PerFile, Total time.Duration
 
@@ -64,6 +67,13 @@ func (v confView) print(w io.Writer) {
 	kv("extract-suffix", strOr(v.ExtractSuffix, "(none)"))
 	kv("results-file", strOr(v.ResultsFile, "(none)"))
 	kv("log-level", v.LogLevel)
+	kv("log-format", v.LogFormat)
+	if v.Syslog {
+		kv("log-destination", "syslog "+strOr(v.SyslogAddress, "(local socket)"))
+	} else {
+		kv("log-destination", strOr(v.LogFile, "stderr"))
+	}
+	kv("audit-log-password", onOff(v.AuditPassword))
 
 	fmt.Fprintln(w, "concurrency:")
 	kv("workers", autoNum(v.Workers))
@@ -75,6 +85,8 @@ func (v confView) print(w io.Writer) {
 		kv("batch-size", fmt.Sprintf("%d", v.BatchSize))
 	}
 	kv("throttle", pctOr(v.Throttle))
+	kv("gpu", onOff(v.GPU))
+	kv("dual-pipeline", onOff(v.DualPipeline))
 
 	fmt.Fprintln(w, "limits:")
 	kv("max-depth", fmt.Sprintf("%d", v.MaxDepth))

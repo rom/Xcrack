@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -15,7 +14,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
 )
 
@@ -68,33 +66,6 @@ func collectTrainingWords(explicit []string, useDefault bool, wordlists []string
 		f.Close()
 	}
 	return out
-}
-
-// --- structured logging -----------------------------------------------------
-
-type slogLogger struct{ l *slog.Logger }
-
-func (s slogLogger) Debugf(f string, a ...any) { s.l.Debug(fmt.Sprintf(f, a...)) }
-func (s slogLogger) Infof(f string, a ...any)  { s.l.Info(fmt.Sprintf(f, a...)) }
-func (s slogLogger) Warnf(f string, a ...any)  { s.l.Warn(fmt.Sprintf(f, a...)) }
-func (s slogLogger) Errorf(f string, a ...any) { s.l.Error(fmt.Sprintf(f, a...)) }
-
-// newLogger builds a slog-backed Logger at the given level, writing to stderr.
-// It never logs recovered passwords (the engine does not pass them to Logger).
-func newLogger(level string) xcrack.Logger {
-	var lv slog.Level
-	switch strings.ToLower(level) {
-	case "debug":
-		lv = slog.LevelDebug
-	case "warn", "warning":
-		lv = slog.LevelWarn
-	case "error":
-		lv = slog.LevelError
-	default:
-		lv = slog.LevelInfo
-	}
-	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lv})
-	return slogLogger{l: slog.New(h)}
 }
 
 // --- password-pot (potfile) -------------------------------------------------

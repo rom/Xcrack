@@ -13,10 +13,13 @@ for the vocabulary see [`TERMINOLOGY.md`](TERMINOLOGY.md); for quick answers see
 
 1. [Introduction](#1-introduction)
 2. [How to use the tool](#2-how-to-use-the-tool)
-3. [GPU acceleration](#3-gpu-acceleration)
-4. [Distributed environments](#4-distributed-environments)
-5. [Advanced usage](#5-advanced-usage)
-6. [Debugging and troubleshooting](#6-debugging-and-troubleshooting)
+3. [CLI reference — commands, options and flags](#3-cli-reference--commands-options-and-flags)
+4. [GPU acceleration](#4-gpu-acceleration)
+5. [Distributed environments](#5-distributed-environments)
+6. [Advanced usage](#6-advanced-usage)
+7. [Embedding the library](#7-embedding-the-library)
+8. [Logging and the audit trail](#8-logging-and-the-audit-trail)
+9. [Debugging and troubleshooting](#9-debugging-and-troubleshooting)
 
 ---
 
@@ -135,10 +138,149 @@ full reference and many worked examples.
 
 ---
 
-## 3. GPU acceleration
+## 3. CLI reference — commands, options and flags
 
-The GPU tier is an **opt-in, server-only** exception to the pure-Go default: the
-`xcrack` CLI is always CPU-only. There are two ways to use a GPU.
+`xcrack` is one binary with **subcommands**. With no subcommand it runs the
+default **crack** pipeline (`xcrack [flags] FILE…`); the other subcommands are
+focused tools. For the exhaustive, always-current flag list run `xcrack --help`
+(and `xcrack <subcommand> --help`); this chapter is the organized tour.
+
+```
+xcrack [flags] FILE…        default: identify → decrypt → recurse
+xcrack <subcommand> …       a focused tool (below)
+```
+
+### Subcommands
+
+| Subcommand | What it does |
+|------------|--------------|
+| *(none)* | the crack pipeline: detect, decrypt, recursively decompose, report |
+| `identify` | detect format + encryption shape only; no cracking |
+| `kp` | ZipCrypto **known-plaintext** key recovery (no password) |
+| `hashline` | emit a `hashcat`/John hash line for a file (offload elsewhere) |
+| `export-challenge` | export an encrypted target as a portable challenge envelope |
+| `office-keyattack` | sweep the 40-bit RC4 key of a legacy `.doc/.xls/.ppt` (`--gpu`, `--shard`) |
+| `pdf-keyattack` | sweep the 40-bit RC4 key of a PDF V1/R2 (`--gpu`, `--table`, `--shard`) |
+| `thunder-gen` | build a precomputed "Thunder Table" (rainbow TMTO) for PDF R2 (`--gpu`) |
+| `access-recover` | recover/strip an MS Access database password |
+| `vba-recover` | recover an Office VBA project password |
+| `wordlist` | wordlist utilities (dedupe, sort, length filter, …) |
+| `version`, `help` | print the version / usage |
+
+Run `xcrack <subcommand> --help` for each tool's own flags.
+
+### Inputs
+
+| Flag | Meaning |
+|------|---------|
+| `-s, --source FILE` | a target file/dir/glob (repeatable); also accepted as positional args |
+| `-w, --wordlist FILE` | a wordlist; `-` = stdin; gzip auto-detected (repeatable) |
+| `-p, --password PW` | an explicit candidate password (repeatable) |
+| `--password-file FILE` | read candidates (one per line) from a file (repeatable) |
+| `--password-env VAR` | read one candidate from an environment variable (keeps it out of `argv`) |
+| `--pattern FILE` | a mask/rule pattern file (repeatable) |
+| `--as SCHEME` | force a magic-less format (`sqlcipher`, `vbaproject`), bypassing detection |
+| `-c, --config FILE` | a YAML config file (see [`config/README.md`](../config/README.md)) |
+
+### Output and reporting
+
+| Flag | Meaning |
+|------|---------|
+| `--format text\|json\|jsonl` | result output format |
+| `-o, --out DIR` | write the decrypted tree to a directory |
+| `--extract-suffix S` | per-source extracted-tree directory suffix under `--out` |
+| `--results-file FILE` | write a JSON result manifest |
+| `--outfile-format SPEC` | hashcat-style found-password lines (`1`=target,`2`=plain,`3`=hex) |
+| `--progress` / `--status-timer N` | live rate/ETA to stderr / a heartbeat every N s |
+| logging | `--log-level`, `--log-format`, `--log-file`, `--syslog…`, `--audit-log-password` — see [§8](#8-logging-and-the-audit-trail) |
+
+### Candidate generation (how guesses are built)
+
+| Flag | Meaning |
+|------|---------|
+| `--no-default-list` | disable the built-in common-password list |
+| `--swedish` | also try the built-in Swedish-targeted list |
+| `--breach FILE` / `--breach-min-count N` | frequency-annotated leak corpus; drop rare entries |
+| `--spray` / `--spray-token T` / `--spray-year Y` | curated password-spraying set |
+| `--context` | guesses from the file/entry name and plaintext sibling entries |
+| `--hint` / `--hint-rules FILE` | guesses from an embedded password hint, optionally rule-mangled |
+| `--pcfg` / `--pcfg-max N` | train a PCFG on the words, emit in probability order |
+| `--markov` / `--markov-max N` / `--markov-threshold K` / `--markov-pos` | Markov best-first generation |
+| `--order markov` / `--order-max N` | reorder the wordlist likeliest-first before mangling |
+| `--combinator-left/-right/-sep` | combinator attack (each left word + each right word) |
+| `--prince` / `--toggle-case` / `--keyboard-walk` | PRINCE chains / case toggles / keyboard walks |
+| `--loopback` | feed cached recovered passwords back through the rules |
+| `--min-length` / `--max-length` / `--encoding` | length filter / transcode candidates |
+
+### Masks and rules
+
+| Flag | Meaning |
+|------|---------|
+| `--pattern FILE` | mask/rule pattern file (repeatable) |
+| `--hcmask FILE` | hashcat `.hcmask` file (per-line masks) |
+| `-1`/`--custom-charset1` … `-4`/`--custom-charset4` | define custom mask charsets `?1`..`?4` |
+| `--increment MIN:MAX` | expand each mask over a token-length range, shortest first |
+| `--hybrid-append MASK` / `--hybrid-prepend MASK` | dict+mask / mask+dict attacks |
+| `--generate-rules N` / `--generate-rules-seed S` | fold N reproducible random rules into the pool |
+| `--debug-rules` | don't crack: report per-rule hit/reject stats |
+
+### Performance, limits and recursion
+
+| Flag | Meaning |
+|------|---------|
+| `--workers` / `--file-jobs` / `--max-procs` | per-file testers / files in parallel / global tester ceiling |
+| `--batch-size` / `--throttle` | worker hand-off size / approximate CPU duty cycle |
+| `--gpu` / `--dual-pipeline` | offload the sweep to OpenCL / race CPU+GPU (see [§4](#4-gpu-acceleration)) |
+| `--timeout`/`--time-limit` / `--max-duration` | per-file budget / whole-run deadline |
+| `--recurse` / `--no-recurse` / `--explode-documents` | container decomposition controls |
+| `--max-depth` / `--max-nodes` / `--max-total-bytes` / `--max-entry-size` / `--max-candidates` | safety ceilings |
+| `--find-all` / `--adaptive` / `--cost-queue` | search every node / corpus-wide promotion / weakest-first triage |
+
+### Persistence and resume
+
+| Flag | Meaning |
+|------|---------|
+| `--potfile FILE` | load/append recovered passwords (tried first next time) |
+| `--found-cache FILE` / `--remember` | a persistent found-password cache (default location with `--remember`) |
+| `--checkpoint FILE` | resume a single long run near where it stopped |
+| `--session FILE` | resume a multi-file run (skip files already fully searched) |
+| `--reuse-output` | with `-o`, skip a source whose extracted output is already current |
+| `--resume-from FILE` | import a solved challenge envelope and try its password first |
+
+### Distributed (see [§5](#5-distributed-environments))
+
+| Flag | Meaning |
+|------|---------|
+| `--shard I/N` | test only stride *I* of *N* (manual split, no servers) |
+| `--server URL[@GROUP]` | distribute to an `xcrackd` server (repeatable) |
+| `--cluster-mode collective\|partition` / `--cluster-batch N` / `--cluster-allow-defaults` / `--cluster-per-request DUR` | fleet allocation and tuning |
+| `--cluster-session FILE` | resume an interrupted fleet run |
+| `--tls-ca` / `--tls-cert` / `--tls-key` / `--tls-server-name` / `--tls-insecure` | client TLS for `https://` servers |
+
+### Dry-run / inspection (don't crack)
+
+| Flag | Meaning |
+|------|---------|
+| `--stdout` | print the candidate stream (wordlists + rules + masks + generators) and exit |
+| `--keyspace` | print the candidate keyspace size and exit |
+| `--benchmark`, `-b` | measure the per-second verify rate per format and exit |
+| `--estimate` | report keyspace × rate ⇒ estimated time-to-exhaust and exit |
+| `--show` / `--left` | which source files the cache already solves / does not |
+| `--show-config` | print the effective merged configuration (no secrets) and exit |
+| `--show-cache` | list the passwords held in the found-password cache |
+| `--limit N` | cap `--stdout` / `--keyspace` output |
+
+> Precedence for every setting is **flags > environment > config file >
+> defaults**; `--show-config` prints the merged result so you can see exactly
+> what a run will do before committing to it.
+
+---
+
+## 4. GPU acceleration
+
+The GPU tier is an **opt-in** exception to the pure-Go default (ADR 0001): it
+exists only in a `-tags opencl` build, and a default build is CPU-only. There are
+two ways to use a GPU, and a way to run the CPU and GPU **at the same time**.
 
 ### A. The standalone 40-bit key-search sweeps (`xcrack …-keyattack --gpu`)
 
@@ -154,10 +296,10 @@ bin/xcrack pdf-keyattack   --gpu scanned.pdf
 Without a device (or in a default build) `--gpu` logs why and falls back to the
 CPU sweep. A hit is always re-checked on the CPU.
 
-### B. The server tier (`xcrackd --gpu`) for the live crack loop
+### B. The live crack loop on a GPU (`xcrackd --gpu`, or `xcrack --gpu`)
 
-`xcrackd` can offload the heavy per-candidate KDF of a normal password search to
-the GPU. Build and self-test it first:
+Both the server and the CLI can offload the heavy per-candidate KDF of a normal
+password search to the GPU. Build and self-test the server first:
 
 ```sh
 go build -tags opencl -o bin/xcrackd-gpu ./xcrack/cmd/xcrackd
@@ -165,8 +307,37 @@ bin/xcrackd-gpu -gpu-selftest           # prove the kernels match the CPU refere
 bin/xcrackd-gpu -gpu -addr :8080        # hardware-gated; falls back to CPU if no device
 ```
 
-Then point the CLI at it (see [Distributed environments](#4-distributed-environments)),
-or POST files to the HTTP endpoint.
+Then point the CLI at it (see [Distributed environments](#5-distributed-environments)),
+or POST files to the HTTP endpoint. The CLI can also drive a local device itself:
+
+```sh
+go build -tags opencl -o bin/xcrack ./xcrack/cmd/xcrack
+bin/xcrack --gpu -s vault.dmg -w rockyou.txt    # offload the live sweep to the GPU
+```
+
+`--gpu` is hardware-gated on both: with no device (or in a default build) it logs
+why and runs the unchanged CPU search.
+
+### C. Dual CPU+GPU pipeline (`--dual-pipeline`)
+
+By default the GPU sweeps the keyspace while the CPU waits. `--dual-pipeline`
+(on `xcrack` or `xcrackd`, with `--gpu`) instead runs **both at once over one
+shared candidate stream**: each candidate is handed to exactly one lane (no
+double work), and the **first lane to find the password cancels the other**, so
+both move on to the next file. The CPU clears the cheap, likely guesses at the
+front of the stream without waiting for a device batch, while the GPU grinds
+through the bulk — the two lanes cover the keyspace together.
+
+```sh
+bin/xcrack  --gpu --dual-pipeline -s vault.dmg -w rockyou.txt
+bin/xcrackd-gpu -gpu -dual-pipeline -addr :8080
+```
+
+It is a **speed** change, never a result change: the device's hits are always
+re-checked on the CPU, so it can't cause a false positive, and if the device
+can't serve a target mid-run the pipeline re-verifies the pending batch on the
+CPU and finishes on the CPU lane — no candidate is skipped. It is inert without
+an active `--gpu` tier.
 
 **What the GPU accelerates:** PBKDF2-HMAC-SHA1/256/512 (WinZip-AES, DMG, ODF,
 RAR5, SQLCipher-v4-class), the Office 2010+ agile/standard iterated-hash spin,
@@ -183,13 +354,31 @@ with `hashline` / `export-challenge` (section 2).
 
 ---
 
-## 4. Distributed environments
+## 5. Distributed environments
 
-Two models, which compose.
+A single file's keyspace, or a batch of files, can be spread across many
+machines. Xcrack offers **two models that compose**, plus the GPU tier on each
+worker:
+
+- **Manual sharding** — no coordinator. Every machine runs the same command over
+  a disjoint *stride* of the keyspace (`--shard I/N`). Simplest to reason about;
+  you collect the winner yourself. Best for a one-off split across a handful of
+  boxes you already have shells on.
+- **An `xcrackd` fleet** — a controller `xcrack` process fans candidate batches
+  out to worker servers and gathers the result. The controller owns candidate
+  generation (so every attack type works) and the workers are stateless
+  verify/KDF engines. Best for a standing cracking service, a GPU rig, or many
+  files at once.
+
+The two compose: a fleet worker can itself be GPU-accelerated, and a fleet run
+can be resumed after an interruption.
 
 ### Manual sharding (no servers)
 
-Each machine runs the same inputs over a disjoint stride of the keyspace:
+Each machine runs the same inputs over a disjoint stride of the keyspace. The
+stride is deterministic, so the N shards together cover the whole keyspace
+exactly once, and promoted/context/hint guesses are tried by *every* shard (they
+are cheap and high-yield):
 
 ```sh
 xcrack --shard 0/4 -w huge.txt big.zip      # machine 0
@@ -222,21 +411,110 @@ xcrack --server http://a:8080@g1 --server http://b:8080@g1 \
        --cluster-mode partition -w rockyou.txt *.docx
 ```
 
-Key flags: `--server URL[@GROUP]` (repeatable), `--cluster-mode
-collective|partition`, `--cluster-batch N` (candidates per request), and
-`--cluster-session FILE` to **resume** an interrupted fleet run (already-tried
-candidates are skipped).
+**Which mode?** Use **collective** for one hard file (or a few): every worker
+attacks the *same* keyspace on a disjoint stride, so N workers are roughly N×
+faster on that file. Use **partition** for a *batch* of files: worker groups
+(`URL@GROUP`) each take different files, so a 100-file batch finishes in the time
+of its slowest file rather than the sum. Groups let you aim capability at need —
+put the GPU boxes in one group and the big documents on them:
 
-> **Security:** `xcrackd` ships **no authentication or TLS** by design. Run it
-> only on a trusted network, or put your own authn/TLS proxy in front. Never
-> expose it to the internet.
+```sh
+# GPU group g1 takes the slow, strong-KDF documents; CPU group g2 takes the rest:
+xcrack --server https://gpu1:8443@g1 --server https://gpu2:8443@g1 \
+       --server https://cpu1:8443@g2 --server https://cpu2:8443@g2 \
+       --cluster-mode partition --tls-ca tls/ca.crt \
+       -w rockyou.txt --pattern rules.txt *.docx *.pdf
+```
+
+**The controller owns candidate generation.** Any attack from this manual works
+distributed — the controller builds the full stream (wordlist + rules + masks +
+Markov/PCFG + spray + …) and ships it to the workers as batches, so you do *not*
+need a server-side flag for each attack type. The workers are stateless
+verify/KDF engines. Point an attack at the fleet exactly as you would locally,
+just adding `--server`:
+
+```sh
+# a rule + mask hybrid, run on the fleet:
+xcrack --server https://w1:8443 --server https://w2:8443 --tls-ca tls/ca.crt \
+       -w rockyou.txt --pattern best64.rule --hybrid-append '?d?d?d' vault.7z
+```
+
+**GPU in the fleet.** Start each GPU worker with `-gpu` (a `-tags opencl` build);
+add `-dual-pipeline` so each worker also runs its CPU alongside the device
+([§4](#4-gpu-acceleration)). The controller is unchanged — it just ships
+candidates; each worker decides CPU/GPU locally:
+
+```sh
+# worker on a GPU box:
+xcrackd-gpu -addr :8443 -gpu -dual-pipeline --tls-cert s.crt --tls-key s.key -max-procs 16
+```
+
+**Resuming.** `--cluster-session FILE` records the contiguous tried-prefix per
+file, so an interrupted fleet run restarts without re-trying confirmed work
+(cross-worker, cross-run). Pair it with `-o DIR` to collect decrypted output.
+
+Key flags: `--server URL[@GROUP]` (repeatable), `--cluster-mode
+collective|partition`, `--cluster-batch N` (candidates per request),
+`--cluster-per-request DUR` (per-request server deadline), `--cluster-allow-defaults`
+(let each worker also try its own default list), and `--cluster-session FILE`.
+
+### Securing the link with TLS
+
+Uploaded files, recovered passwords and decrypted content cross the wire to the
+workers, so the link must be encrypted. `xcrackd` can terminate TLS itself, and
+the client verifies it. Generate a certificate first (self-signed for an
+internal fleet, Let's Encrypt for a public endpoint):
+
+```sh
+scripts/gen-selfsigned-cert.sh -o tls -h "w1.internal,10.0.0.5"   # server.crt + server.key
+# or, for a public name:  scripts/gen-letsencrypt-cert.sh -d crack.example.net -m you@example.net -o tls
+```
+
+Serve HTTPS on the worker, and point the client at `https://` with the cert it
+should trust:
+
+```sh
+# worker:
+xcrackd -addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key -gpu
+
+# controller (trust the self-signed cert; omit --tls-ca for a public CA):
+xcrack --server https://w1.internal:8443 --tls-ca tls/server.crt -w rockyou.txt big.7z
+```
+
+For **mutual TLS** (the server also authenticates each client), generate a CA +
+server + client kit and require client certs:
+
+```sh
+scripts/gen-selfsigned-cert.sh -o tls -h "w1.internal" -m        # ca/server/client .crt/.key
+xcrackd -addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key --tls-client-ca tls/ca.crt
+xcrack --server https://w1.internal:8443 --tls-ca tls/ca.crt \
+       --tls-cert tls/client.crt --tls-key tls/client.key -w rockyou.txt big.7z
+```
+
+Client TLS flags: `--tls-ca` (trust a private/self-signed server cert),
+`--tls-cert`/`--tls-key` (client cert for mTLS), `--tls-server-name` (verify a
+name other than the URL host, e.g. when connecting by IP), and `--tls-insecure`
+(skip verification — **testing only**). The same settings live under
+`cluster.tls.*` in a config file. Server TLS flags: `--tls-cert`, `--tls-key`,
+`--tls-client-ca` (mTLS), `--tls-min-version 1.2|1.3`.
+
+> **Security:** TLS encrypts and authenticates the transport, but `xcrackd`
+> still ships **no user authentication** — anyone who can reach the port (and
+> pass mTLS, if required) can submit work. Keep it on a trusted network or
+> behind an authenticating proxy, and never expose it to the internet unguarded.
 
 See [`USAGE.md`](USAGE.md#http-service-xcrackd) for the HTTP API and the
 challenge-export bridge.
 
 ---
 
-## 5. Advanced usage
+## 6. Advanced usage
+
+The default run already does a lot — identify, decrypt, recurse, promote
+recovered passwords inward. This chapter is the toolbox for the hard cases:
+shaping exactly which guesses are tried, spending effort where it pays, and
+surviving long runs. Every technique here also works distributed ([§5](#5-distributed-environments))
+and composes with the others.
 
 ### Shape the candidate stream
 
@@ -275,6 +553,40 @@ tried automatically.
 
 `--password-env VAR` or `--password-file FILE` (argv is visible to `ps`).
 
+### Spend effort where it pays (many files)
+
+Triaging a pile of files? Don't attack them in argument order:
+
+- `--cost-queue` benchmarks each file's verify rate and attacks the
+  **fastest/weakest** schemes first, so the quick wins (ZipCrypto, legacy Office,
+  low-iteration KDFs) surface before the slow, strong KDFs tie up the CPU.
+- `--adaptive` promotes a password recovered from *any* file to the front of the
+  queue for the rest (people reuse passwords), smallest files first so the cheap
+  wins seed the corpus early.
+- `--time-limit DUR` caps per-file effort so one Argon2 vault can't starve the
+  batch; a timed-out file is reported *locked*, not failed, and the batch moves on.
+
+### Reuse what you have already found
+
+- `--potfile FILE` / `--found-cache FILE` / `--remember` persist recovered
+  passwords and try them **first** on every later run — a reused password is then
+  recovered instantly. `--loopback` additionally feeds those recovered passwords
+  back through the mangling rules.
+- `--show` / `--left` report which files the cache already solves / doesn't,
+  without cracking; `--show-cache` lists the cached passwords.
+
+### Offload to another cracker
+
+When a scheme is better attacked by hashcat/John (or a GPU rig you don't control
+from here), bridge instead of cracking in-engine:
+
+```sh
+xcrack hashline secret.7z                 # emit a $7z$… / *2john hash line
+xcrack export-challenge vault.kdbx -o chal.json   # a portable challenge envelope
+# …solve chal.json elsewhere, then:
+xcrack --resume-from solved.json vault.kdbx       # import the password and finish
+```
+
 ### Preview without cracking
 
 ```sh
@@ -282,20 +594,248 @@ xcrack --stdout -w words.txt --pattern r.rule FILE     # the candidate stream
 xcrack --keyspace --hcmask '?a?a?a?a' FILE             # how many candidates
 xcrack --benchmark FILE                                # verify rate for this file
 xcrack --estimate -w words.txt FILE                    # time-to-exhaust / to-hit
+xcrack --debug-rules --pattern r.rule -w words.txt FILE # per-rule hit/reject stats
 ```
 
-### Embed the library
+### Worked advanced examples
 
-```go
-import "github.com/rom/xcrack/pkg/xcrack"
-res, err := xcrack.Process(ctx, r, size, candidates.Explicit("p1","p2"), xcrack.Options{Out: "./out"})
+```sh
+# 1. Wordlist + hashcat rules, newest finds cached for next time:
+xcrack -w rockyou.txt --pattern best64.rule --remember vault.zip
+
+# 2. Targeted mask with custom charsets and length incrementing:
+xcrack -1 '?l?u' -2 '?d?s' --increment 6:10 --hcmask '?1?1?1?1?2?2' doc.pdf
+
+# 3. Hybrid: each dictionary word followed by a 2-to-4 digit suffix:
+xcrack -w names.txt --hybrid-append '?d?d' --hybrid-append '?d?d?d?d' wallet.json
+
+# 4. Markov best-first, position-aware, capped — great when the wordlist is thin:
+xcrack -w leaked.txt --markov-pos --markov-max 5000000 --markov-threshold 12 big.7z
+
+# 5. Spray a target org's vocabulary with season/year patterns:
+xcrack --spray --spray-token acme --spray-token finance --spray-year 2024 portal.docx
+
+# 6. Context: let the filename and any cleartext siblings seed the guesses:
+xcrack --context --hint -w small.txt "Invoice for ACME (password in email).zip"
+
+# 7. Combinator: every first-name + every street, joined by '.':
+xcrack --combinator-left first.txt --combinator-right streets.txt --combinator-sep . kdbx
+
+# 8. Resume a huge single-file run safely across restarts:
+xcrack --checkpoint run.ckpt -w huge.txt --pattern rules.txt stubborn.7z
+
+# 9. Force a magic-less format, throttle to be gentle on a shared host:
+xcrack --as sqlcipher --throttle 40 -w words.txt app.db
+
+# 10. Batch triage: weakest-first, per-file cap, cache finds, JSON manifest:
+xcrack --cost-queue --time-limit 5m --remember --format json --results-file out.json *.zip *.pdf *.docx
 ```
-
-See [`USAGE.md`](USAGE.md#embedding-the-library) and [`design.md`](design.md).
 
 ---
 
-## 6. Debugging and troubleshooting
+## 7. Embedding the library
+
+Xcrack is also an embeddable Go library (`github.com/rom/xcrack/pkg/xcrack`) with
+the **same capability as the CLI** — a malware scanner, a DLP appliance or a
+recovery service runs the engine in-process instead of shelling out. This is a
+tour; the full reference is [`API.md`](API.md), and runnable programs live in
+[`xcrack/examples/`](../xcrack/examples).
+
+### The shape of an embedding
+
+Build one **`Pool`** at startup and reuse it; its global semaphore bounds total
+CPU across every concurrent `Process` call, so it is safe to call from many
+request goroutines:
+
+```go
+pool := xcrack.NewPool(xcrack.Options{
+    MaxProcs: 8,
+    Budget:   xcrack.Budget{PerFile: 30 * time.Second},
+    OnFound:  func(f xcrack.Found) { log.Printf("unlocked %s", f.Path) },
+})
+defer pool.Close()
+
+res, err := pool.Process(ctx, bytes.NewReader(data), int64(len(data)),
+    candidates.Explicit("letmein", "hunter2"))
+if err != nil { /* ... */ }
+defer res.Close()
+for _, pw := range res.Passwords() { /* ... */ }
+```
+
+`xcrack.Process(ctx, r, size, src, opts)` is the one-shot form (a single-use
+Pool). Pass `nil` candidates for identify-only.
+
+### Options and candidate sources
+
+Every CLI flag maps to a field on `xcrack.Options` (concurrency, `Limits`,
+`Budget`, recursion toggles, `ContextCandidates`/`HintCandidates`,
+`KnownPlaintext`, `FastReject`, `Accelerator`/`DualPipeline`, the `OnFound` /
+`OnProgress` / `OnAudit` callbacks, `Logger`). Candidate streams are composed from
+`github.com/rom/xcrypto/candidates` — `Explicit`, `File`, `Chain`, `Dedup`,
+`Shard`, `ToggleCase`, `Prince`, `MarkovGen`, `Context`, `Spray`, … — exactly the
+generators the CLI flags drive. [`API.md`](API.md) documents every field and
+constructor.
+
+### What you get back
+
+`Process` returns a `*Result` with a `Root *Node` tree (lineage, format, status,
+`Password`, per-node `CrackDuration`, lazy `Content` via `ContentRef`) and
+`Stats`. `res.Passwords()` lists the distinct recoveries; `Node.Walk` traverses
+the tree; `BuildReport(res)` renders the same JSON the REST API returns.
+
+### Advanced hooks
+
+- **`CandidateProvider`** — plug a live/org-wide candidate source once instead of
+  threading it through every call.
+- **`FastReject`** — prune a hopeless keyspace before the KDF (e.g. "the secret
+  is a 6-digit PIN").
+- **`KnownPlaintext`** — recover a ZipCrypto entry from known plaintext, no password.
+- **`Accelerator` + `DualPipeline`** — offload the PBKDF2 sweep to the OpenCL tier
+  and race it against the CPU.
+- **`auditlog`** — build the structured/syslog logger the tools use.
+
+### Example programs
+
+| Example | Shows |
+|---------|-------|
+| [`impex-embed`](../xcrack/examples/impex-embed) | the minimal embedding: one Pool, in-memory candidates, `OnFound` |
+| [`batch-triage`](../xcrack/examples/batch-triage) | concurrent triage of many files, JSON per file, aggregate `Metrics` |
+| [`candidate-pipeline`](../xcrack/examples/candidate-pipeline) | composing an advanced candidate stream + `CandidateProvider` |
+| [`pin-fastreject`](../xcrack/examples/pin-fastreject) | `FastReject` keyspace pruning + a custom `Source` |
+| [`inspect-tree`](../xcrack/examples/inspect-tree) | identify-only traversal of the `Result`/`Node` tree |
+| [`http-service`](../xcrack/examples/http-service) | embedding the REST API (`pkg/api`) in your own server |
+
+See [`API.md`](API.md) for the complete API and [`design.md`](design.md) for the
+architecture.
+
+---
+
+## 8. Logging and the audit trail
+
+Both `xcrack` and `xcrackd` write a single, structured log. It is an **audit
+trail**: it records what was processed and, for every successful recovery, an
+entry naming the file, its type and how long the crack took — so a run can be
+followed step by step and kept as evidence of what was opened. The same stream
+also carries the ordinary diagnostics (startup, GPU-tier status, warnings), so
+one set of options governs everything a run emits.
+
+### Where logs go, and in what shape
+
+By default the log goes to **stderr in text** (`key=value`) form, which keeps it
+separate from the machine-readable results on stdout. Three independent choices
+change that:
+
+- **Destination** — stderr (default), a **file** (`--log-file PATH`, appended,
+  created `0600`), or the **system logger** (`--syslog`). Pick exactly one of
+  `--log-file` / `--syslog`; `--syslog` wins if both are set.
+- **Format** — `--log-format text` (default) or `--log-format json` (one JSON
+  object per line, for a log pipeline / SIEM).
+- **Verbosity** — `--log-level debug|info|warn|error` (default `info`).
+
+### Command-line options
+
+These flags are identical on `xcrack` and `xcrackd` (the server spells them with
+a single dash, e.g. `-syslog`, as Go's flag package allows either form):
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--log-level debug\|info\|warn\|error` | `info` | Verbosity. Crack successes and request summaries are **info**; the per-node / per-file trace is **debug**; transient fallbacks are **warn**. |
+| `--log-format text\|json` | `text` | `key=value` lines, or one JSON object per line. |
+| `--log-file PATH` | *(stderr)* | Append the log + audit trail to a file instead of stderr. |
+| `--syslog` | off | Send the log + audit trail to the system logger (Unix only; a clean error elsewhere). |
+| `--syslog-address host:port` | *(local socket)* | Ship to a remote syslog server. Empty uses the local `/dev/log` socket. |
+| `--syslog-network udp\|tcp` | *(local socket)* | Transport for a remote `--syslog-address`. |
+| `--syslog-tag NAME` | program name | The syslog tag / ident. |
+| `--audit-log-password` | off | **Also record the recovered password** in the crack entry. Off by default, so the trail never persists a cleartext secret unless you ask. |
+
+### Config-file settings
+
+Every flag has a config-file equivalent under the `output:` block (flags still
+win over the file; see [`config/README.md`](../config/README.md)):
+
+```yaml
+output:
+  log_level: info            # debug | info | warn | error
+  log_format: json           # text | json
+  log_file: /var/log/xcrack/audit.log   # omit for stderr
+  syslog: false              # true => system logger (ignores log_file)
+  syslog_address: ""         # host:port for a remote sink; "" = local socket
+  syslog_network: ""         # udp | tcp (with syslog_address)
+  syslog_tag: xcrack         # syslog ident
+  audit_log_password: false  # include the recovered password in the crack entry
+```
+
+### The log messages
+
+Each run emits two kinds of line: **audit records** (what was processed) and
+**diagnostics** (what the tool is doing). The audit records are:
+
+| Message | Level | When | Key fields |
+|---------|-------|------|------------|
+| `file cracked` | info | a source file had at least one layer recovered | `file`, `type` (top-level format), `encrypted`, `cracked=true`, `size`, `time_to_crack`, `time_to_crack_ms`, `cracked_entries` (inner paths), `key_recovered` (if unlocked without a password), `passwords` (only with `--audit-log-password`) |
+| `file processed` | debug | a source file finished without a recovery (plain, or still locked) | `file`, `type`, `encrypted`, `cracked=false`, `size` |
+| `node scanned` | debug | one node in the decomposition tree (every file/entry) — the fine-grained execution trace | `node` (lineage), `type`, `status` (`plain`/`decrypted`/`locked`/…), `encrypted`, `size`, plus `time_to_crack`/`password` for a decrypted node |
+| `request served` | info | **`xcrackd` only** — one HTTP request completed | `client`, `endpoint`, `bytes`, `elapsed` |
+
+On `xcrackd` every audit record additionally carries `client` and `endpoint`, so
+the server keeps a complete trail of who asked for what. The "file type" on the
+headline is the **top-level** format (e.g. `zip`, `msoffice`, `pdf`), even when
+the encryption lives in an inner stream or entry.
+
+A cracked entry in text form (the `passwords=` field appears only with
+`--audit-log-password`):
+
+```
+level=INFO msg="file cracked" file=invoice.zip type=zip encrypted=true \
+  cracked=true size=0 time_to_crack=4.2s time_to_crack_ms=4200 \
+  cracked_entries="[invoice.zip!/secret.xlsx]"
+```
+
+The same record as JSON (`--log-format json`), ready for a log pipeline:
+
+```json
+{"time":"2026-10-17T12:00:00Z","level":"INFO","msg":"file cracked",
+ "file":"invoice.zip","type":"zip","encrypted":true,"cracked":true,"size":0,
+ "time_to_crack":"4.2s","time_to_crack_ms":4200,
+ "cracked_entries":["invoice.zip!/secret.xlsx"]}
+```
+
+Diagnostics use the standard levels: **info** for lifecycle lines
+(`xcrackd listening`, `GPU tier active across 1 device(s)`, `shutting down`),
+**warn** for transparent fallbacks (`--gpu requested but this binary is
+pure-Go … Continuing on CPU`), and **error** for a failed startup or a per-file
+error. Raising `--log-level debug` adds the `node scanned` trace and the engine's
+own debug chatter; lowering it to `warn` keeps only warnings and errors (crack
+successes are then not logged — use `info` to keep the audit trail).
+
+### Worked examples
+
+```sh
+# Human-readable audit trail to the terminal (the default):
+xcrack -s invoice.zip -w rockyou.txt
+
+# JSON audit trail to a file, including the recovered password, for an archive:
+xcrack --log-format json --log-file /var/log/xcrack/audit.log \
+       --audit-log-password -s invoice.zip -w rockyou.txt
+
+# Ship the trail to a central syslog server over TCP:
+xcrack --syslog --syslog-network tcp --syslog-address logs.example.net:514 \
+       --syslog-tag xcrack -s *.pdf -w words.txt
+
+# Follow every step of a tricky run (adds the per-node trace):
+xcrack --log-level debug -s nested.7z -w words.txt
+
+# Server: JSON audit trail to local syslog, tagged, no secrets:
+xcrackd -syslog -log-format json -gpu -addr :8080
+```
+
+A secrets-free trail (the default) is safe to forward to a shared log host; turn
+on `--audit-log-password` only where storing the cleartext password is itself
+authorized.
+
+---
+
+## 9. Debugging and troubleshooting
 
 ### Inspect the effective configuration
 
@@ -340,10 +880,13 @@ the CPU — results are identical, only slower. Confirm you built with
 `-tags opencl` and have an OpenCL runtime; use `XCRACK_GPU_DEVICE` to pick a
 device.
 
-### Logging
+### Logging and the audit trail
 
-`--log-level debug|info|warn|error` controls the structured log (never emits a
-password or plaintext). `--log-format text|json`.
+Logging has its own chapter: see [8. Logging and the audit
+trail](#8-logging-and-the-audit-trail) for the flags, config settings and the
+meaning of each log message. For a stuck run, `--log-level debug` adds the
+per-node `node scanned` trace so you can see exactly where the engine spends its
+time.
 
 ### Exit codes
 

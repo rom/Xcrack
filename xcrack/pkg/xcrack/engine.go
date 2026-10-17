@@ -122,11 +122,15 @@ type Options struct {
 
 	OnProgress func(Progress)
 	OnFound    func(Found)
-	// OnAudit, if set, is called once per result node after a Process call with a
-	// secrets-free AuditEvent (for an audit log or trace). It never receives a
-	// password or content.
+	// OnAudit, if set, is called once per result node after a Process call with an
+	// AuditEvent (for an audit log or trace). It carries no content and — unless
+	// AuditIncludeSecrets is set — no password, so the default is safe to persist.
 	OnAudit func(AuditEvent)
-	Logger  Logger
+	// AuditIncludeSecrets, when true, lets the AuditEvent handed to OnAudit carry
+	// the recovered password (AuditEvent.Password). It is opt-in: the zero value
+	// keeps audit events secrets-free. It has no effect when OnAudit is nil.
+	AuditIncludeSecrets bool
+	Logger              Logger
 
 	// CandidateProvider, when set, supplies candidates tried ahead of the
 	// per-call source on every Process call (a pluggable live provider). nil
@@ -166,6 +170,20 @@ type Options struct {
 	// implements accel.BatchTuner, otherwise a built-in default. Ignored without
 	// an Accelerator.
 	AccelBatch int
+
+	// DualPipeline enables the dual CPU+GPU parallel pipeline: for an
+	// acceleration-capable target, the CPU search and the accelerator sweep run
+	// concurrently over ONE shared, de-duplicated candidate stream, and the first
+	// to find a password cancels the other (both then advance to the next file).
+	// Without it (the default) the accelerator sweeps the keyspace and the CPU
+	// path runs only as a fallback — the CPU sits idle while the device works.
+	// With it, the CPU's cheap guesses and the device's bulk sweep progress at the
+	// same time, so a password near the front of the stream is found by the CPU
+	// without waiting for a device batch. It is ignored when no Accelerator is set
+	// or the target is not acceleration-capable. The device's hits are still
+	// re-checked on the CPU (via the format's verifier), so it can never cause a
+	// false positive.
+	DualPipeline bool
 }
 
 // KnownPlaintext configures an opt-in known-plaintext key-recovery attack for
@@ -360,11 +378,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	p.metrics.record(res, stats.Elapsed)
 	if p.opts.OnAudit != nil && root != nil {
 		root.Walk(func(n *Node) {
-			ev := AuditEvent{Path: n.Path, Format: n.Format, Status: n.Status.String(), Encrypted: n.WasEncrypted}
-			if n.Content != nil {
-				ev.Size = n.Content.Size()
-			}
-			p.opts.OnAudit(ev)
+			p.opts.OnAudit(n.AuditEvent(p.opts.AuditIncludeSecrets))
 		})
 	}
 	return res, nil

@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto"
@@ -135,7 +136,9 @@ func (e *engine) decompose(ctx context.Context, path string, src *source, depth 
 				}
 			}
 		}
+		crackStart := time.Now()
 		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText, ch.Hint, ak)
+		n.CrackDuration = time.Since(crackStart)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
@@ -241,9 +244,11 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
+		crackStart := time.Now()
 		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText, hintOf(entry.Challenge), entry.Accel)
+		entryDur := time.Since(crackStart)
 		if !found {
-			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
+			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked, CrackDuration: entryDur}
 			if !acc.addNode() {
 				n.Status = StatusLimitExceeded
 				acc.limitHit()
@@ -262,6 +267,9 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 		child.WasEncrypted = true
 		child.Password = pw
+		// The time to open this entry includes any inner whole-file crack already
+		// recorded by decompose on the decrypted payload.
+		child.CrackDuration += entryDur
 		if child.Status == StatusPlain {
 			child.Status = StatusDecrypted
 		}
@@ -285,7 +293,9 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 // falls back to the password search. The key-recovery closure re-validates its
 // result, so a wrong `known` cannot yield a false positive.
 func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, entry *xfileformats.Entry, known []byte, offload any, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (*Node, bool) {
+	crackStart := time.Now()
 	r, ok, err := entry.KeyRecover(ctx, known, offload)
+	recoverDur := time.Since(crackStart)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -299,6 +309,7 @@ func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, ent
 	child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 	child.WasEncrypted = true
 	child.KeyRecovered = true
+	child.CrackDuration += recoverDur
 	if child.Status == StatusPlain {
 		child.Status = StatusDecrypted
 	}
@@ -378,6 +389,16 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 	// these parameters or errors; a hit is always re-checked by ak.Finish, so the
 	// device never decides correctness on its own.
 	if e.opts.Accelerator != nil && ak != nil {
+		// Dual pipeline: race the CPU search and the accelerator sweep over one
+		// shared, de-duplicated keyspace; first to find wins.
+		if e.opts.DualPipeline {
+			pw, found := e.crackDual(ctx, path, verify, ak, depth, acc, base)
+			if found {
+				e.found(path, pw)
+				return pw, true
+			}
+			return "", false // both lanes exhausted the keyspace
+		}
 		pw, found, fellBack := e.crackAccel(ctx, path, ak, depth, acc, base)
 		if found {
 			e.found(path, pw)
@@ -387,22 +408,12 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 			return "", false // accelerator swept the whole space, no match
 		}
 	}
-	probe := func(pw []byte) (bool, error) {
-		if reject != nil && reject(path, pw) {
-			return false, nil // cheaply rejected: definitely not the password
-		}
-		return safeVerify(verify, pw)
-	}
-	pw, found, tried, err := e.cracker.Crack(ctx, probe, base)
-	acc.addCandidates(tried)
-	if e.opts.OnProgress != nil {
-		e.opts.OnProgress(Progress{Path: path, CandidatesTried: acc.candidatesTried(), Depth: depth})
-	}
-	if err != nil || !found {
+	pw, found := e.crackCPU(ctx, path, verify, depth, acc, base)
+	if !found {
 		return "", false
 	}
-	e.found(path, string(pw))
-	return string(pw), true
+	e.found(path, pw)
+	return pw, true
 }
 
 // accelBatch is how many candidate passwords are derived per accelerator
