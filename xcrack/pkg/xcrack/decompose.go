@@ -2,6 +2,8 @@ package xcrack
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // ODF's PBKDF2 start-key hash is SHA-1 by spec
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -765,13 +767,34 @@ func (e *engine) accelBatchSize() int {
 // HMAC variant the AccelKDF asks for. An unknown PRF returns ErrUnsupported so
 // the caller falls back to the CPU.
 func accelDerive(a Accelerator, ak *xfileformats.AccelKDF, batch [][]byte) ([][]byte, error) {
+	// Schemes whose PBKDF2 input is a pre-hashed "start key" (ODF) ask for a
+	// per-candidate CPU hash before the kernel runs. The transform is cheap (one
+	// hash over the short password) and keeps the kernel a plain PBKDF2.
+	in := batch
+	switch ak.PreHash {
+	case "":
+	case "sha256":
+		in = make([][]byte, len(batch))
+		for i, pw := range batch {
+			s := sha256.Sum256(pw)
+			in[i] = s[:]
+		}
+	case "sha1":
+		in = make([][]byte, len(batch))
+		for i, pw := range batch {
+			s := sha1.Sum(pw) //nolint:gosec // ODF start-key hash is SHA-1 by spec
+			in[i] = s[:]
+		}
+	default:
+		return nil, accel.ErrUnsupported
+	}
 	switch ak.PRF {
 	case "", "sha1":
-		return a.PBKDF2SHA1(batch, ak.Salt, ak.Iter, ak.DKLen)
+		return a.PBKDF2SHA1(in, ak.Salt, ak.Iter, ak.DKLen)
 	case "sha256":
-		return a.PBKDF2SHA256(batch, ak.Salt, ak.Iter, ak.DKLen)
+		return a.PBKDF2SHA256(in, ak.Salt, ak.Iter, ak.DKLen)
 	case "sha512":
-		return a.PBKDF2SHA512(batch, ak.Salt, ak.Iter, ak.DKLen)
+		return a.PBKDF2SHA512(in, ak.Salt, ak.Iter, ak.DKLen)
 	default:
 		return nil, accel.ErrUnsupported
 	}

@@ -84,6 +84,13 @@ type AccelKDF struct {
 	// (SQLCipher-v4-class). The engine dispatches to the matching batch kernel and
 	// falls back to the CPU for any value its backend cannot serve.
 	PRF string
+	// PreHash, when non-empty ("sha256" or "sha1"), tells the engine to replace
+	// each candidate with its hash digest before handing it to the PBKDF2 kernel,
+	// for schemes whose PBKDF2 input is a pre-hashed "start key" rather than the
+	// raw password (ODF). "" passes the password through unchanged. The cheap
+	// per-candidate hash is done on the CPU; Finish still receives the original
+	// password. It never affects correctness — Finish re-checks every hit.
+	PreHash string
 	// Salt, Iter, DKLen are the exact PBKDF2 parameters the accelerator must
 	// derive with -- byte-identical to what the CPU verifier uses (e.g. the DMG
 	// verifier's fixed 20-byte salt, not the raw stored salt).

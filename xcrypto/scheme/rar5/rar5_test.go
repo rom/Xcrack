@@ -1,12 +1,41 @@
 package rar5
 
 import (
+	"crypto/sha256"
 	"encoding/hex"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+
+	"github.com/rom/xcrypto/prim"
 )
+
+// TestAccelDerivation proves the GPU-offload path is byte-identical to the CPU
+// fast verifier: the +32 check-value snapshot equals a standard
+// PBKDF2-HMAC-SHA256(password, salt, 2^Lg2Count+32, 32) run, so a batch kernel
+// can derive it and PswCheckFromDK/VerifyDK reproduce the stored 8-byte value.
+// Pinned to the same real-archive vector as TestKnownAnswer.
+func TestAccelDerivation(t *testing.T) {
+	salt, _ := hex.DecodeString("4d09db306505c5cd1b29f0cb4c2bc5aa")
+	want, _ := hex.DecodeString("b17fbe6cc603d208")
+	p := Params{Salt: salt, Lg2Count: 15, PswCheck: want}
+
+	dk, err := prim.PBKDF2(sha256.New, "opensesame", salt, p.AccelIterations(), 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := PswCheckFromDK(dk); hex.EncodeToString(got) != hex.EncodeToString(want) {
+		t.Fatalf("PswCheckFromDK = %x, want %x (accel derivation disagrees with CPU)", got, want)
+	}
+	if !VerifyDK(dk, p) {
+		t.Fatal("VerifyDK(correct) = false")
+	}
+	wrong, _ := prim.PBKDF2(sha256.New, "wrongpassword", salt, p.AccelIterations(), 32)
+	if VerifyDK(wrong, p) {
+		t.Fatal("VerifyDK(wrong) = true, want false")
+	}
+}
 
 // TestKnownAnswer pins the derivation to a vector taken from a real WinRAR/`rar`
 // -hp archive (password "opensesame"): the computed check value must equal the

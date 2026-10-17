@@ -45,6 +45,7 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 		e := gatedEntry("rar-aes-header", verify, rarHdrTar(r, size))
 		if hasFast {
 			e.Challenge = rar5Challenge(cryptParams)
+			e.Accel = rar5Accel(cryptParams)
 		}
 		return []*xfileformats.Entry{e}, nil
 	}
@@ -68,6 +69,7 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 			if hasFast {
 				e.Challenge = rar5Challenge(cryptParams)
 				e.Verify = fastVerify
+				e.Accel = rar5Accel(cryptParams)
 			} else {
 				e.Challenge = &xcrypto.Challenge{Scheme: "rar-aes", Cipher: xcrypto.CipherSpec{Algo: "aes-cbc"}}
 				e.Verify = func(pw []byte) (bool, error) { return rarVerify(r, size, fn, string(pw)) }

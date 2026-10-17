@@ -15,6 +15,18 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU acceleration for ODF and RAR5.** The opt-in OpenCL tier already shipped
+  PBKDF2-HMAC-SHA1/256/512 kernels but only WinZip-AES and encrypted DMG were
+  wired to them. Now **ODF** offloads its PBKDF2-HMAC-SHA1 content-key spin (via
+  a new `AccelKDF.PreHash` field that applies ODF's SHA-256/SHA-1 start-key hash
+  to each candidate on the CPU before the kernel), and **RAR5** offloads its
+  PBKDF2-HMAC-SHA256 password-check derivation (the 8-byte check value is a fold
+  of `PBKDF2-HMAC-SHA256(pw, salt, 2^Lg2Count+32, 32)`). Both validated against
+  pocl end-to-end through the engine, with the CPU verifier re-checking every
+  hit. SQLCipher is deliberately left on the CPU (its v3/v4 profile is unknown
+  before a password verifies, and the seam derives one profile per candidate).
+  New scheme helpers: `odf.VerifyWithKey`/`DecryptCompressedWithKey`/
+  `AccelStartHash`, `rar5.PswCheckFromDK`/`VerifyDK`/`AccelIterations`.
 - **`--show-config`** — print the effective configuration (flags + env + config
   file + defaults, merged, with precedence noted) and exit without cracking. It
   shows counts for explicit passwords and the cache path, never secret values,

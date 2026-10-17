@@ -5,6 +5,7 @@ import (
 
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/scheme/rar5"
+	"github.com/rom/xfileformats"
 )
 
 // rar5Prefix bounds how much of a RAR5 archive head we read to locate the crypt
@@ -42,6 +43,25 @@ func rar5Challenge(p rar5.Params) *xcrypto.Challenge {
 		KDF:    xcrypto.KDFSpec{Algo: "pbkdf2-hmac-sha256", Iterations: p.Iterations(), Salt: append([]byte(nil), p.Salt...)},
 		Cipher: xcrypto.CipherSpec{Algo: "aes-cbc", KeyBits: 256},
 		Extra:  map[string][]byte{"pswcheck": append([]byte(nil), p.PswCheck...)},
+	}
+}
+
+// rar5Accel builds the GPU-offload AccelKDF for a parsed RAR5 crypt record. The
+// stored 8-byte check value is a fold of PBKDF2-HMAC-SHA256(password, salt,
+// 2^Lg2Count+32, 32), so the batch kernel derives that key and Finish folds and
+// compares it (rar5.VerifyDK) — the same authoritative check as the CPU fast
+// verifier, so the device can never cause a false positive. nil when the record
+// carries no check value (then there is nothing to accelerate against).
+func rar5Accel(p rar5.Params) *xfileformats.AccelKDF {
+	if len(p.PswCheck) != rar5.PswCheckLen || len(p.Salt) == 0 {
+		return nil
+	}
+	return &xfileformats.AccelKDF{
+		PRF:    "sha256",
+		Salt:   append([]byte(nil), p.Salt...),
+		Iter:   p.AccelIterations(),
+		DKLen:  32,
+		Finish: func(dk, _ []byte) bool { return rar5.VerifyDK(dk, p) },
 	}
 }
 

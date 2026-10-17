@@ -71,6 +71,29 @@ func DeriveKey(password []byte, p EntryParams) ([]byte, error) {
 	return prim.PBKDF2(sha1.New, string(start), p.Salt, iter, keyLen)
 }
 
+// AccelStartHash returns the PBKDF2 start-key pre-hash name ("sha256" or
+// "sha1") for p and whether p can be accelerated (a known start hash and a sane
+// iteration count). It mirrors DeriveKey's choices so the format layer can build
+// an AccelKDF — PBKDF2-HMAC-SHA1 over sha(password) — without duplicating them.
+func AccelStartHash(p EntryParams) (preHash string, keyLen int, ok bool) {
+	switch h := strings.ToLower(p.StartKeyHash); {
+	case h == "" || strings.Contains(h, "sha256"):
+		preHash = "sha256"
+	case strings.Contains(h, "sha1"):
+		preHash = "sha1"
+	default:
+		return "", 0, false
+	}
+	if p.Iterations <= 0 || p.Iterations > 10_000_000 {
+		return "", 0, false
+	}
+	keyLen = p.KeySize
+	if keyLen <= 0 || keyLen > 32 {
+		keyLen = 32
+	}
+	return preHash, keyLen, true
+}
+
 // DecryptCompressed decrypts a raw entry to its DEFLATE-compressed bytes (the
 // caller inflates). AES-256-CBC and AES-256-GCM are supported. For GCM a tag
 // mismatch (wrong password) is reported as xcrypto.ErrWrongPassword.
@@ -79,6 +102,13 @@ func DecryptCompressed(password []byte, p EntryParams, raw []byte) ([]byte, erro
 	if err != nil {
 		return nil, err
 	}
+	return DecryptCompressedWithKey(key, p, raw)
+}
+
+// DecryptCompressedWithKey is DecryptCompressed given an already-derived content
+// key (the PBKDF2 output DeriveKey would produce). It lets the heavy KDF be run
+// once on an accelerator and the result reused for decryption/verification.
+func DecryptCompressedWithKey(key []byte, p EntryParams, raw []byte) ([]byte, error) {
 	switch {
 	case isAES256GCM(p.Algorithm):
 		return decryptGCM(key, p.IV, raw)
@@ -125,8 +155,21 @@ func decryptGCM(key, iv, raw []byte) ([]byte, error) {
 // Verify checks a password. For GCM the authentication tag is authoritative; for
 // CBC it compares the 1K checksum over the compressed data.
 func Verify(password []byte, p EntryParams, raw []byte) (bool, error) {
+	key, err := DeriveKey(password, p)
+	if err != nil {
+		return false, err
+	}
+	return VerifyWithKey(key, p, raw)
+}
+
+// VerifyWithKey checks a candidate using an already-derived content key (the
+// DeriveKey output), so the dominant PBKDF2-HMAC-SHA1 step can be offloaded once
+// to an accelerator. It performs the same authoritative check as Verify (GCM
+// tag for GCM, the 1K checksum for CBC), so a derived key never yields a
+// false positive.
+func VerifyWithKey(key []byte, p EntryParams, raw []byte) (bool, error) {
 	if isAES256GCM(p.Algorithm) {
-		if _, err := DecryptCompressed(password, p, raw); err != nil {
+		if _, err := DecryptCompressedWithKey(key, p, raw); err != nil {
 			if errors.Is(err, xcrypto.ErrWrongPassword) {
 				return false, nil
 			}
@@ -134,7 +177,7 @@ func Verify(password []byte, p EntryParams, raw []byte) (bool, error) {
 		}
 		return true, nil
 	}
-	comp, err := DecryptCompressed(password, p, raw)
+	comp, err := DecryptCompressedWithKey(key, p, raw)
 	if err != nil {
 		return false, err
 	}

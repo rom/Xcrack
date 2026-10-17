@@ -189,6 +189,16 @@ embarrassingly-parallel step — the KDF — and leaves verification on the CPU.
 ships **PBKDF2-HMAC-SHA1 / -SHA256 / -SHA512** kernels today, each byte-for-byte
 self-tested against the Go reference before use.
 
+**Accelerated formats:** WinZip-AES and encrypted DMG (SHA-1), **ODF** (SHA-1,
+with the start-key hash applied per-candidate via `AccelKDF.PreHash`), and
+**RAR5** (SHA-256 — its 8-byte password-check value is a fold of
+PBKDF2-HMAC-SHA256(pw, salt, 2^Lg2Count+32, 32), so the batch kernel serves it
+directly). **SQLCipher is intentionally not accelerated:** its v3/v4 profile
+cannot be told apart before a password verifies, and the seam derives one
+profile per candidate, so offloading could sweep the keyspace against the wrong
+profile and miss the real one — it stays on the CPU where both profiles are
+tried.
+
 **Good candidates for additional kernels** (catalogued from a survey of the
 schemes):
 
@@ -196,10 +206,9 @@ schemes):
 |-----------|----------|------------|
 | **Office agile iterated hash** (SHA-1/256/384/512 spin, ~100k) | every Office 2010+ doc | easy–moderate; reuses the SHA cores, single-block per iteration |
 | **Office standard iterated hash** (SHA-1 ×50000) | Office 2007 | easy; SHA-1 case of the above |
-| **Office 97/2000 2^40 trunc sweep** (MD5 + RC4) | every 97/2000 doc; collapses the dominant attack cost | moderate; needs MD5 + RC4 cores |
-| **RAR5 check-value chain** | every RAR5 archive | trivial — it **is** PBKDF2-HMAC-SHA256(iter+32) folded to 8 bytes; only a format-layer `AccelKDF` is needed |
+| **Office 97/2000 2^40 trunc sweep** (MD5 + RC4) | every 97/2000 doc; collapses the dominant attack cost | moderate; a different *key-search* kernel shape (not the per-password PBKDF2 batch), so it needs its own interface |
 | **KeePass AES-KDF** (KDBX3 / KDBX4 AES) | KeePass AES-KDF files | moderate; needs an AES-256 core; the seed is shared across candidates |
-| **PDF R2–R4 MD5+RC4** | PDF dictionaries | low once MD5+RC4 cores exist |
+| **PDF R2–R4 MD5+RC4** | PDF dictionaries | low once MD5+RC4 cores exist; same key-search shape as the Office 97/2000 sweep |
 
 **Deliberately CPU-only / out of scope for a kernel:** Argon2 (KeePass/PuTTY) and
 scrypt (Ethereum/age/PBES2) are **memory-hard** — each work-item needs its whole

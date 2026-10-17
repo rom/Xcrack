@@ -7,13 +7,20 @@
 //
 // The acceleration is deliberately scoped to the heavy, embarrassingly-parallel
 // primitive the password schemes share — PBKDF2 key derivation — exposed as a
-// batch call per HMAC variant: PBKDF2-HMAC-SHA1 (WinZip-AES, encrypted DMG, ODF,
-// SQLCipher v3), PBKDF2-HMAC-SHA256 (RAR5-class), and PBKDF2-HMAC-SHA512
-// (SQLCipher v4-class). Everything else (format parsing, verification,
-// recursion) stays on the CPU in pure Go. The GPU output is always
-// byte-for-byte identical to the Go reference (prim.PBKDF2), so a GPU result is
-// never trusted blindly: it is validated at startup (GPUSelfTest) against the
-// reference, for every variant, before use.
+// batch call per HMAC variant: PBKDF2-HMAC-SHA1 (WinZip-AES, encrypted DMG, and
+// ODF — whose start-key hash is applied per-candidate on the CPU before the
+// kernel, via AccelKDF.PreHash), PBKDF2-HMAC-SHA256 (RAR5's password-check
+// derivation), and PBKDF2-HMAC-SHA512 (SQLCipher-v4-class). Everything else
+// (format parsing, verification, recursion) stays on the CPU in pure Go. The GPU
+// output is always byte-for-byte identical to the Go reference (prim.PBKDF2), so
+// a GPU result is never trusted blindly: it is validated at startup
+// (GPUSelfTest) against the reference, for every variant, before use.
+//
+// SQLCipher is deliberately NOT accelerated: its v3 (SHA-1) and v4 (SHA-512)
+// profiles are indistinguishable from the file before a password verifies, and
+// the AccelKDF seam derives exactly one (PRF, Iter) per candidate — accelerating
+// the wrong profile would sweep the keyspace and silently miss the real one, so
+// it stays on the CPU where VerifyAny tries both.
 //
 // Argon2 (KeePass KDBX4) and bcrypt (OpenSSH) are intentionally NOT here: they
 // are memory-hard / Blowfish-based and do not fit the PBKDF2 batch shape, so
