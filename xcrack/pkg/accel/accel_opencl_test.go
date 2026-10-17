@@ -5,6 +5,9 @@ package accel
 import (
 	"bytes"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"hash"
 	"testing"
 
 	"github.com/rom/xcrypto/prim"
@@ -68,6 +71,44 @@ func TestGPUBatchMatchesReference(t *testing.T) {
 	// silently return a wrong answer).
 	if _, err := a.PBKDF2SHA1(pws, make([]byte, 64), iter, dk); err != ErrUnsupported {
 		t.Errorf("oversize salt: err = %v, want ErrUnsupported", err)
+	}
+}
+
+// TestGPUBatchSHA256And512 checks the SHA-256 (RAR5-class) and SHA-512
+// (SQLCipher-v4-class) batch kernels against the Go reference across a batch.
+func TestGPUBatchSHA256And512(t *testing.T) {
+	a, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	defer a.Close()
+
+	pws := [][]byte{}
+	for _, s := range []string{"", "a", "hashcat", "Welcome1", "correct horse battery", "Σecretü"} {
+		pws = append(pws, []byte(s))
+	}
+	variants := []struct {
+		name string
+		h    func() hash.Hash
+		fn   func([][]byte, []byte, int, int) ([][]byte, error)
+		salt []byte
+		iter int
+		dk   int
+	}{
+		{"sha256", sha256.New, a.PBKDF2SHA256, []byte("rar5saltrar5salt"), 2000, 32},
+		{"sha512", sha512.New, a.PBKDF2SHA512, []byte("sqlcipher-v4-salt"), 1500, 64},
+	}
+	for _, v := range variants {
+		got, err := v.fn(pws, v.salt, v.iter, v.dk)
+		if err != nil {
+			t.Fatalf("%s batch: %v", v.name, err)
+		}
+		for i, pw := range pws {
+			want, _ := prim.PBKDF2(v.h, string(pw), v.salt, v.iter, v.dk)
+			if !bytes.Equal(got[i], want) {
+				t.Errorf("%s pw %q:\n gpu %x\n cpu %x", v.name, pw, got[i], want)
+			}
+		}
 	}
 }
 

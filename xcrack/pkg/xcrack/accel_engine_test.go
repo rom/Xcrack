@@ -7,7 +7,10 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/binary"
+	"hash"
 	"os"
 	"sync/atomic"
 	"testing"
@@ -16,6 +19,7 @@ import (
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xcrypto/prim"
 	"github.com/rom/xcrypto/scheme/winzipaes"
+	"github.com/rom/xfileformats"
 )
 
 // stubAccel is a pure-Go stand-in for the OpenCL accelerator: it derives
@@ -34,6 +38,18 @@ func (s *stubAccel) Devices() []accel.Device { return []accel.Device{{Name: "stu
 func (s *stubAccel) Close() error            { return nil }
 
 func (s *stubAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return s.derive(sha1.New, passwords, salt, iter, dkLen)
+}
+
+func (s *stubAccel) PBKDF2SHA256(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return s.derive(sha256.New, passwords, salt, iter, dkLen)
+}
+
+func (s *stubAccel) PBKDF2SHA512(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
+	return s.derive(sha512.New, passwords, salt, iter, dkLen)
+}
+
+func (s *stubAccel) derive(h func() hash.Hash, passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
 	if s.unsupported {
 		return nil, accel.ErrUnsupported
 	}
@@ -41,13 +57,47 @@ func (s *stubAccel) PBKDF2SHA1(passwords [][]byte, salt []byte, iter, dkLen int)
 	s.derived.Add(int64(len(passwords)))
 	out := make([][]byte, len(passwords))
 	for i, pw := range passwords {
-		dk, err := prim.PBKDF2(sha1.New, string(pw), salt, iter, dkLen)
+		dk, err := prim.PBKDF2(h, string(pw), salt, iter, dkLen)
 		if err != nil {
 			return nil, err
 		}
 		out[i] = dk
 	}
 	return out, nil
+}
+
+// TestAccelDeriveDispatch checks accelDerive routes each PRF to the matching
+// accelerator method (so the kernel output matches the reference for that hash),
+// and that an unknown PRF reports ErrUnsupported (CPU fallback).
+func TestAccelDeriveDispatch(t *testing.T) {
+	stub := &stubAccel{}
+	salt := []byte("0123456789abcdef")
+	batch := [][]byte{[]byte("alpha"), []byte("beta")}
+	const iter, dk = 64, 32
+	cases := []struct {
+		prf string
+		h   func() hash.Hash
+	}{
+		{"", sha1.New},
+		{"sha1", sha1.New},
+		{"sha256", sha256.New},
+		{"sha512", sha512.New},
+	}
+	for _, c := range cases {
+		got, err := accelDerive(stub, &xfileformats.AccelKDF{PRF: c.prf, Salt: salt, Iter: iter, DKLen: dk}, batch)
+		if err != nil {
+			t.Fatalf("prf %q: %v", c.prf, err)
+		}
+		for i, pw := range batch {
+			want, _ := prim.PBKDF2(c.h, string(pw), salt, iter, dk)
+			if !bytes.Equal(got[i], want) {
+				t.Errorf("prf %q pw %q: dispatched to the wrong HMAC variant", c.prf, pw)
+			}
+		}
+	}
+	if _, err := accelDerive(stub, &xfileformats.AccelKDF{PRF: "md5", Salt: salt, Iter: iter, DKLen: dk}, batch); err == nil {
+		t.Error("unknown PRF: want error (CPU fallback), got nil")
+	}
 }
 
 // --- WinZip-AES fixture (mirrors xfileformats/formats/zip test builder) ---

@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync"
 
+	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
@@ -433,7 +434,7 @@ func (e *engine) crackAccel(ctx context.Context, path string, ak *xfileformats.A
 		if len(batch) == 0 {
 			return "", false, false
 		}
-		dks, err := e.opts.Accelerator.PBKDF2SHA1(batch, ak.Salt, ak.Iter, ak.DKLen)
+		dks, err := accelDerive(e.opts.Accelerator, ak, batch)
 		if err != nil || len(dks) != len(batch) {
 			return "", false, true // unsupported/errored/malformed => CPU fallback
 		}
@@ -742,6 +743,22 @@ func safeOpen(entry *xfileformats.Entry, pw []byte) (r io.Reader, err error) {
 func safeVerify(verify func([]byte) (bool, error), pw []byte) (ok bool, err error) {
 	defer guard(&err)
 	return verify(pw)
+}
+
+// accelDerive runs the batch derivation on the accelerator, dispatching to the
+// HMAC variant the AccelKDF asks for. An unknown PRF returns ErrUnsupported so
+// the caller falls back to the CPU.
+func accelDerive(a Accelerator, ak *xfileformats.AccelKDF, batch [][]byte) ([][]byte, error) {
+	switch ak.PRF {
+	case "", "sha1":
+		return a.PBKDF2SHA1(batch, ak.Salt, ak.Iter, ak.DKLen)
+	case "sha256":
+		return a.PBKDF2SHA256(batch, ak.Salt, ak.Iter, ak.DKLen)
+	case "sha512":
+		return a.PBKDF2SHA512(batch, ak.Salt, ak.Iter, ak.DKLen)
+	default:
+		return nil, accel.ErrUnsupported
+	}
 }
 
 // safeAccelKDF fetches a format's batchable derivation under a recover() guard:
