@@ -152,6 +152,11 @@ bypass or shrink the search:
   workbook with the fixed key `VelvetSweatshop`; owner/permission-only PDFs and
   read-only Office documents open with the **empty** password. Both are the first
   two built-in default candidates, so these files unlock with zero real search.
+  For PDF this is the full key derivation from the empty **user** password, so it
+  covers *every* revision — including 128-bit RC4 (R3/R4) and AES (AESV2/AESV3),
+  where the file key cannot be brute-forced: an owner-restricted PDF with no open
+  password is decrypted (and its restrictions stripped) instantly, which is the
+  only feasible route for those strong-crypto revisions.
 - **Embedded hints.** The iWork `.iwph` hint and ZIP entry comments are parsed
   and tried first (`--hint`), and plaintext siblings that name the password are
   harvested (`--context`).
@@ -161,15 +166,39 @@ bypass or shrink the search:
 
 ### Known, real, and staged (documented, not yet implemented)
 
-Nothing is currently staged here — the three weaknesses that were staged in the
-previous cycle (ZipCrypto cross-entry reuse, PDF 40-bit RC4, and MS Access Jet
-header XOR) are all implemented and listed above, each cross-validated against
-an external oracle. ACE (.accdb, Access 2007+) is the one Access variant without
-a shortcut: its Office-style RC4/AES KDF leaves only a password search, so it is
-identified but not key-attacked.
+- **ZipCrypto password recovery from the recovered keys, in pure Go.** Once the
+  Biham–Kocher attack has the three internal keys (which Xcrack already does),
+  the original password can be recovered in ~n^(L−6) instead of n^L — the last
+  ~6 bytes are pinned by the key-update recurrence, so only the first L−6 are
+  searched (bkcrack `recoverpassword`). Xcrack already offers this through the
+  bkcrack offload (`kp --recover-password`), and decryption itself needs only the
+  keys (not the password), so a pure-Go reimplementation is a convenience, not a
+  capability gain. It stays staged rather than shipped from incomplete knowledge:
+  a subtly-wrong key-schedule inversion would violate the verify-first rule, so
+  it would land only with full byte-for-byte cross-validation against bkcrack.
 
 ### Judged not worth it / not applicable (and why)
 
+- **Office XP/2003 RC4 "CryptoAPI" 40-bit key attack.** A common misconception
+  (hashcat even exposes "office key" modes for it) is that XP/2003's 40-bit RC4
+  is key-attackable like Office 97/2000. It is **not**, for whole-document
+  recovery. In the CryptoAPI scheme each block's RC4 key is
+  `SHA1(SHA1(salt‖pw) ‖ LE32(block))[:5]`: the per-block keys all derive from the
+  **160-bit** intermediate `H0 = SHA1(salt‖pw)`, which SHA-1 does not expose. A
+  2^40 sweep can recover block 0's key (enough to clear the verifier and decrypt
+  the first ≤512-byte block), but that key reveals nothing about `H0`, so blocks
+  1..N — the rest of the document — cannot be derived. Office 97/2000 is
+  different: there the real secret *is* the 40-bit `trunc`, and every block key
+  is a function of `trunc`+salt, so the sweep recovers the whole document. The
+  128-bit CryptoAPI variant ($4) is likewise out of reach. (Verified against this
+  repo's own cross-validated CryptoAPI key derivation.)
+- **Office 97–2003 RC4 keystream reuse (Wu, 2005; ePrint 2005/007).** Editing and
+  re-saving an old-Office RC4 document under the same password reuses the salt,
+  hence the keystream, so two versions form a two-time pad whose XOR cancels the
+  keystream and leaks plaintext. Real, and the same spirit as the ZipCrypto
+  cross-entry reuse — but it recovers *plaintext, not the password*, and needs
+  two versions of the same file with the same password, a precondition rare
+  enough that it is documented, not built.
 - **JKS per-key keystream known-plaintext (Ettlinger).** Real, but it recovers
   the per-key *key-protection* password / the key itself, not the store integrity
   password Xcrack delivers (and the store and key passwords are usually identical
@@ -177,6 +206,12 @@ identified but not key-attacked.
 - **Weak-MAC / public-material cross-checks** (PKCS#12, PEM-with-certificate):
   no speedup — the existing verifiers already have a ~2^-32…2^-160 false-positive
   rate.
+- **7-Zip, RAR4, WinZip-AES, OOXML agile/standard, SQLCipher, DMG, OpenSSH,
+  PuTTY v3, Ethereum, age, OpenPGP:** surveyed, no structural shortcut — each is
+  a deliberately slow KDF guarded by a strong verifier (the cheap fast-rejects
+  that do exist are already used). The WinZip AE-1 plaintext-CRC32 leak
+  (CVE-2026-44722) recovers only small/low-entropy *plaintext*, never the
+  password, so it adds nothing over the existing HMAC/2-byte verifier.
 - **Public-key age / PGP, full RAR4/7z verifiers:** no shortcut exists (need a
   private key, or the format stores no verifier by design).
 

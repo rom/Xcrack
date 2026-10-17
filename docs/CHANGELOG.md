@@ -49,6 +49,16 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   `--extract-suffix`, `--show-config`, `--show-cache`.
 - FAQ: new **Output & extracted files** and **Inspecting & troubleshooting**
   categories, plus entries for the new flags, formats, logging and exit codes.
+- CRACKING.md §3: record a fresh cryptanalysis survey of every supported format.
+  Net outcome — the formats are already well covered; the notable additions are
+  (a) a precise refutation of the common claim that Office **XP/2003 CryptoAPI**
+  40-bit RC4 is key-attackable (each block key derives from the 160-bit
+  `SHA1(salt‖pw)`, so recovering the 40-bit verifier key decrypts only block 0,
+  not the document), (b) making explicit that the empty-**user**-password key
+  derivation already decrypts owner-only PDFs of *every* revision (128-bit RC4
+  and AES included — the only feasible route there), and (c) documenting the Wu
+  2005 RC4 keystream-reuse weakness and the pure-Go ZipCrypto password recovery
+  as known-but-not-built, with reasons.
 
 ## PR #19 — 2026-10-17 — Staged cryptanalysis shortcuts: ZipCrypto cross-entry, PDF 40-bit RC4, Access Jet
 
