@@ -3,6 +3,7 @@ module github.com/rom/xcrack
 go 1.25.5
 
 require (
+	github.com/klauspost/compress v1.19.0
 	github.com/rom/xcrypto v0.0.0
 	github.com/rom/xfileformats v0.0.0
 	gopkg.in/yaml.v3 v3.0.1
@@ -14,7 +15,6 @@ require (
 	github.com/bodgit/sevenzip v1.6.5 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/klauspost/compress v1.19.0 // indirect
 	github.com/nwaples/rardecode/v2 v2.4.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
