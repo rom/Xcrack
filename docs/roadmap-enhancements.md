@@ -174,8 +174,9 @@ A sweep of the current feature set turned up these as the notable remaining gaps
 **Approaches / cryptanalysis (advanced):**
 - 🚧 **GPU kernels for the 40-bit key-space attacks.** ✅ Office 97/2000 MD5+RC4
   shipped (`office-keyattack --gpu`, `oldoffice_md5rc4` kernel, validated on
-  pocl); ⬜ PDF R2–R4 MD5+RC4 (same key-search shape, reuses the MD5+RC4 cores)
-  and the VBA salted-SHA-1 (hashcat-110 shape) remain.
+  pocl); ✅ PDF R2–R4 RC4 shipped (`pdf-keyattack --gpu`, `pdf_rc4keysearch`
+  RC4-only kernel reusing the same cores and key-search shape, validated on pocl);
+  ⬜ the VBA salted-SHA-1 (hashcat-110 shape) remains.
 - ⬜ **Precomputed TMTO / "Thunder Tables"** for the 2^40 sweeps (turns minutes
   into sub-second) — large, needs a table store.
 - 🔬 Neural candidate models (PassGAN / RNN), beyond the shipped Markov + PCFG.

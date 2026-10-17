@@ -155,6 +155,23 @@ type OldOfficeKeySearcher interface {
 	OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, start, count uint64) (trunc []byte, found bool, err error)
 }
 
+// PDFRC4KeySearcher is an optional capability of an Accelerator that sweeps the
+// PDF Standard Security Handler's 40-bit RC4 file-key space on the device — the
+// same key-search shape as OldOfficeKeySearcher, RC4-only (the R3/R4 MD5 input is
+// constant across keys and precomputed by the caller). The engine/CLI
+// type-asserts for it and offloads the sweep, falling back to the CPU
+// (pdf.Handler.RC4KeyAttack) when unavailable; a hit is always re-checked on the
+// CPU (pdf.Handler.VerifyFileKey), so the device never decides correctness.
+type PDFRC4KeySearcher interface {
+	// PDFRC4KeySearch sweeps file-key indices [start, start+count) for the key
+	// satisfying /U. input is RC4'd `rounds` times (round r keyed by fileKey XOR r)
+	// and the first cmpLen bytes compared to u. Per pdf.Handler.RC4KeyAttackParams:
+	// R2 → input=pad(32), rounds=1, cmpLen=32; R3/R4 → input=MD5(pad||ID)(16),
+	// rounds=20, cmpLen=16. Returns the 5-byte file key (little-endian of the
+	// winning index) and found=true on success.
+	PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int, start, count uint64) (key []byte, found bool, err error)
+}
+
 // BatchTuner is an optional capability of an Accelerator that can recommend a
 // per-dispatch batch size tuned to its device(s) (count, compute units,
 // throughput). The engine type-asserts for it and sizes its offload batches

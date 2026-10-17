@@ -5,6 +5,7 @@ package accel
 import (
 	"bytes"
 	"context"
+	"crypto/md5" //nolint:gosec // the PDF handler mandates MD5; building test inputs
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/rom/xcrypto/prim"
 	"github.com/rom/xcrypto/scheme/officebinary"
+	"github.com/rom/xcrypto/scheme/pdf"
 )
 
 // TestGPUSelfTest validates the OpenCL PBKDF2-HMAC-SHA1 kernel against the Go
@@ -82,6 +84,72 @@ func TestGPUOldOfficeKeySearch(t *testing.T) {
 		// A window that excludes the trunc must not match.
 		if _, f2, _ := ks.OldOfficeKeySearch(salt, encV, encVH, idx+1000, 100); f2 {
 			t.Fatalf("idx %#x: false positive on a non-containing window", idx)
+		}
+	}
+}
+
+// TestGPUPDFKeySearch cross-validates the PDF 40-bit RC4 file-key search kernel
+// against the CPU reference (pdf.Handler.RC4KeyAttack) for both R2 and R3/R4
+// (40-bit): for a known file key the device must recover exactly it, the CPU
+// attack must find the same key over the same window, pdf.Handler.VerifyFileKey
+// must accept it, and a non-containing window must return not-found.
+func TestGPUPDFKeySearch(t *testing.T) {
+	a, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	defer a.Close()
+	ks, ok := a.(PDFRC4KeySearcher)
+	if !ok {
+		t.Skip("accelerator does not implement PDFRC4KeySearcher")
+	}
+	id := []byte("pdf-id-16-bytes!")
+	r34in := md5.Sum(append(append([]byte{}, pdfPad...), id...)) //nolint:gosec
+
+	for _, tc := range []struct {
+		name   string
+		r      int
+		input  []byte
+		rounds int
+	}{
+		{"R2", 2, pdfPad, 1},
+		{"R3R4", 3, r34in[:], 20},
+	} {
+		for _, idx := range []uint64{0, 9, 0x0102030405} {
+			key5 := []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}
+			u := pdfRC4U(key5, tc.input, tc.rounds)
+			h := &pdf.Handler{R: tc.r, Length: 5, Cipher: pdf.CipherRC4, U: u, ID: id}
+			input, rounds, cmpLen, uu, okp := h.RC4KeyAttackParams()
+			if !okp {
+				t.Fatalf("%s idx %#x: RC4KeyAttackParams not ok", tc.name, idx)
+			}
+			if !bytes.Equal(input, tc.input) || rounds != tc.rounds {
+				t.Fatalf("%s: params mismatch input=%x rounds=%d", tc.name, input, rounds)
+			}
+			if !h.VerifyFileKey(key5) {
+				t.Fatalf("%s idx %#x: VerifyFileKey rejected constructed /U", tc.name, idx)
+			}
+			start := uint64(0)
+			if idx > 2048 {
+				start = idx - 2048
+			}
+			got, found, err := ks.PDFRC4KeySearch(input, rounds, uu, cmpLen, start, 4096)
+			if err != nil {
+				t.Fatalf("%s idx %#x: PDFRC4KeySearch: %v", tc.name, idx, err)
+			}
+			if !found || !bytes.Equal(got, key5) {
+				t.Fatalf("%s idx %#x: GPU got (%x,%v) want %x", tc.name, idx, got, found, key5)
+			}
+			cpu, cfound, err := h.RC4KeyAttack(context.Background(), start, 4096)
+			if err != nil {
+				t.Fatalf("%s idx %#x: CPU RC4KeyAttack: %v", tc.name, idx, err)
+			}
+			if !cfound || !bytes.Equal(cpu, got) {
+				t.Fatalf("%s idx %#x: CPU/GPU disagree cpu (%x,%v) gpu %x", tc.name, idx, cpu, cfound, got)
+			}
+			if _, f2, _ := ks.PDFRC4KeySearch(input, rounds, uu, cmpLen, idx+1000, 100); f2 {
+				t.Fatalf("%s idx %#x: false positive on a non-containing window", tc.name, idx)
+			}
 		}
 	}
 }

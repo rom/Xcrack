@@ -59,6 +59,9 @@ var officeSrcSHA512 string
 //go:embed kernel_oldoffice_md5rc4.cl
 var oldofficeSrc string
 
+//go:embed kernel_pdf_rc4keysearch.cl
+var pdfKeySrc string
+
 // Host-side limits that keep each kernel single-block per PRF message. SHA-1 and
 // SHA-256 use a 64-byte block (salt||INT fits when saltlen+4 <= 55); SHA-512
 // uses a 128-byte block (saltlen+4 <= 111). A request outside these falls back
@@ -100,6 +103,8 @@ type clAccel struct {
 	officePrograms []C.cl_program        // released in Close
 	oldoffice      []C.cl_kernel         // Office 97/2000 40-bit MD5+RC4 key search, one per device
 	oldofficeProg  C.cl_program          // released in Close
+	pdfKey         []C.cl_kernel         // PDF 40-bit RC4 key search, one per device
+	pdfKeyProg     C.cl_program          // released in Close
 	optimalBatch   int                   // autotuned per-dispatch batch size (BatchTuner)
 }
 
@@ -218,6 +223,15 @@ func Detect() (Accelerator, error) {
 	a.oldofficeProg = ooProg
 	a.oldoffice = ooKerns
 
+	// PDF 40-bit RC4 key-search kernel (PDFRC4KeySearcher).
+	pkProg, pkKerns, berr := buildKernels(ctx, devs, pdfKeySrc, "pdf_rc4keysearch")
+	if berr != nil {
+		a.Close()
+		return nil, berr
+	}
+	a.pdfKeyProg = pkProg
+	a.pdfKey = pkKerns
+
 	for _, d := range devs {
 		a.devices = append(a.devices, describeDevice(d))
 	}
@@ -331,6 +345,14 @@ func (a *clAccel) Close() error {
 	}
 	if a.oldofficeProg != nil {
 		C.clReleaseProgram(a.oldofficeProg)
+	}
+	for _, k := range a.pdfKey {
+		if k != nil {
+			C.clReleaseKernel(k)
+		}
+	}
+	if a.pdfKeyProg != nil {
+		C.clReleaseProgram(a.pdfKeyProg)
 	}
 	for _, q := range a.queues {
 		if q != nil {
@@ -690,6 +712,76 @@ func (a *clAccel) OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, 
 	return nil, false, nil
 }
 
+// PDFRC4KeySearch sweeps the PDF 40-bit RC4 file-key space [start, start+count)
+// on device 0, implementing PDFRC4KeySearcher. It is byte-for-byte equivalent to
+// pdf.Handler.RC4KeyAttack for the same params; the caller re-checks a hit on the
+// CPU. Unsupported shapes return ErrUnsupported so the caller falls back.
+func (a *clAccel) PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int, start, count uint64) ([]byte, bool, error) {
+	if len(input) == 0 || len(input) > 32 || rounds <= 0 || cmpLen <= 0 || cmpLen > len(u) || cmpLen > len(input) {
+		return nil, false, ErrUnsupported
+	}
+	if count == 0 {
+		return nil, false, nil
+	}
+	dev := 0
+	kern := a.pdfKey[dev]
+	queue := a.queues[dev]
+
+	var errc C.cl_int
+	inBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(input)), unsafe.Pointer(&input[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf input): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(inBuf)
+	uBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(u)), unsafe.Pointer(&u[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf u): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(uBuf)
+	out := make([]uint32, 4)
+	outBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_WRITE|C.CL_MEM_COPY_HOST_PTR), C.size_t(16), unsafe.Pointer(&out[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf out): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(outBuf)
+
+	cBufLen := C.cl_uint(len(input))
+	cRounds := C.cl_uint(rounds)
+	cCmpLen := C.cl_uint(cmpLen)
+	end := start + count
+	if end < start {
+		end = ^uint64(0)
+	}
+	for base := start; base < end; base += oldofficeChunk {
+		n := uint64(oldofficeChunk)
+		if base+n > end {
+			n = end - base
+		}
+		cStart := C.cl_ulong(base)
+		cN := C.cl_uint(n)
+		C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(inBuf)), unsafe.Pointer(&inBuf))
+		C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cBufLen)), unsafe.Pointer(&cBufLen))
+		C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(cRounds)), unsafe.Pointer(&cRounds))
+		C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(uBuf)), unsafe.Pointer(&uBuf))
+		C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cCmpLen)), unsafe.Pointer(&cCmpLen))
+		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(cStart)), unsafe.Pointer(&cStart))
+		C.clSetKernelArg(kern, 6, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
+		C.clSetKernelArg(kern, 7, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
+		global := C.size_t(n)
+		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+			return nil, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(pdf): %d", int(r))
+		}
+		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(16), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
+			return nil, false, fmt.Errorf("accel: clEnqueueReadBuffer(pdf): %d", int(r))
+		}
+		if out[0] != 0 {
+			idx := uint64(out[1]) | uint64(out[2])<<32
+			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
 
 // autotuneBatch measures SHA-1 derivation throughput at a few batch sizes and
@@ -847,7 +939,65 @@ func GPUSelfTest() error {
 	} else {
 		return fmt.Errorf("GPU self-test: accelerator does not implement OldOfficeKeySearcher")
 	}
+
+	// PDF 40-bit RC4 file-key search (PDFRC4KeySearcher): build /U for a known key
+	// via the documented algorithm (R2 and R3/R4) and confirm the device recovers
+	// exactly that key over a small window.
+	if ks, ok := a.(PDFRC4KeySearcher); ok {
+		r34in := md5.Sum(append(append([]byte{}, pdfPad...), []byte("pdf-id-16-bytes!")...)) //nolint:gosec
+		cases := []struct {
+			input  []byte
+			rounds int
+			cmpLen int
+		}{
+			{pdfPad, 1, 32},    // R2
+			{r34in[:], 20, 16}, // R3/R4 (40-bit)
+		}
+		for _, tc := range cases {
+			for _, idx := range []uint64{0, 5, 0x0102030405} {
+				key5 := []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}
+				u := pdfRC4U(key5, tc.input, tc.rounds)
+				start := uint64(0)
+				if idx > 2048 {
+					start = idx - 2048
+				}
+				got, found, err := ks.PDFRC4KeySearch(tc.input, tc.rounds, u, tc.cmpLen, start, 4096)
+				if err != nil {
+					return fmt.Errorf("GPU self-test pdf (rounds %d, idx %#x): %w", tc.rounds, idx, err)
+				}
+				if !found || !bytes.Equal(got, key5) {
+					return fmt.Errorf("GPU self-test pdf MISMATCH (rounds %d, idx %#x): found=%v got %x want %x",
+						tc.rounds, idx, found, got, key5)
+				}
+			}
+		}
+	} else {
+		return fmt.Errorf("GPU self-test: accelerator does not implement PDFRC4KeySearcher")
+	}
 	return nil
+}
+
+// pdfPad is the 32-byte PDF Standard Security Handler padding string (used to
+// construct self-test /U inputs; matches pdf.pad).
+var pdfPad = []byte{
+	0x28, 0xBF, 0x4E, 0x5E, 0x4E, 0x75, 0x8A, 0x41, 0x64, 0x00, 0x4E, 0x56, 0xFF, 0xFA, 0x01, 0x08,
+	0x2E, 0x2E, 0x00, 0xB6, 0xD0, 0x68, 0x3E, 0x80, 0x2F, 0x0C, 0xA9, 0xFE, 0x64, 0x53, 0x69, 0x7A,
+}
+
+// pdfRC4U computes the PDF /U verifier for a 5-byte file key by RC4-ing input
+// `rounds` times (round r keyed by key XOR r) — the inverse of the key-search
+// check, used only to build self-test / known-answer inputs.
+func pdfRC4U(key5, input []byte, rounds int) []byte {
+	buf := append([]byte(nil), input...)
+	for r := 0; r < rounds; r++ {
+		kr := make([]byte, len(key5))
+		for i := range key5 {
+			kr[i] = key5[i] ^ byte(r)
+		}
+		c, _ := rc4.NewCipher(kr) //nolint:gosec // RC4 is the scheme's cipher
+		c.XORKeyStream(buf, buf)
+	}
+	return buf
 }
 
 // oldOfficeVerifier builds a valid (encVerifier, encVerifierHash) pair for a

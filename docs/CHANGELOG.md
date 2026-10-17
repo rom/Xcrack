@@ -15,6 +15,21 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU kernel: PDF 40-bit RC4 file-key search.** The second key-SEARCH OpenCL
+  kernel: `pdf-keyattack --gpu` offloads the PDF Standard Security Handler's 2^40
+  file-key sweep (V1/R2 and 40-bit R3/R4) to an OpenCL device. Because the file
+  key is `MD5(…)[:5]` and `/U` is a function of that 5-byte key alone,
+  `kernel_pdf_rc4keysearch.cl` is **RC4-only** — the one per-document MD5 the R3/R4
+  path needs (`MD5(pad‖ID)`) is constant across keys and precomputed on the host
+  (`pdf.Handler.RC4KeyAttackParams`), so each work-item just RC4s the input
+  `rounds` times (round `r` keyed by `key5 XOR r`) and compares to `/U`. It reuses
+  the MD5+RC4 cores and the hit/atomic plumbing of the Office sweep. The new
+  `accel.PDFRC4KeySearcher` capability drives it, with transparent CPU fallback
+  (`pdf.Handler.RC4KeyAttack`) and an authoritative CPU re-check of any hit
+  (`pdf.Handler.VerifyFileKey`). Validated on pocl against the CPU reference —
+  `GPUSelfTest` gains R2 and R3/R4 cases, plus a kernel cross-validation test and a
+  `-tags opencl` end-to-end CLI test. Default build stays pure-Go (ADR 0001); ships
+  only with `-tags opencl`.
 - **GPU kernel: Office 97/2000 40-bit MD5+RC4 key search.** The first key-SEARCH
   OpenCL kernel (distinct from the per-password PBKDF2/Office-spin batch kernels):
   `office-keyattack --gpu` offloads the 2^40 trunc sweep (the Elcomsoft "Thunder
@@ -25,7 +40,8 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   Validated on pocl against the CPU reference (`officebinary.RC4KeyAttack`) —
   `GPUSelfTest` gains an oldoffice case, plus a kernel cross-validation test and a
   `-tags opencl` end-to-end CLI test. Default build stays pure-Go (ADR 0001);
-  ships only with `-tags opencl`. PDF R2–R4 (same key-search shape) is a follow-up.
+  ships only with `-tags opencl`. PDF R2–R4 (same key-search shape) shipped as the
+  follow-up above.
 - **CLI parity features (basic/intermediate gap review).**
   - `-1/-2/-3/-4` (`--custom-charset1..4`): command-line mask custom charsets
     `?1..?4` (hashcat `-1..-4`), used by `--hcmask`/`--pattern` masks.

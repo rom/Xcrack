@@ -2,6 +2,7 @@ package pdf
 
 import (
 	"context"
+	"crypto/md5" //nolint:gosec // the PDF Standard Security Handler mandates MD5; this attacks legacy files.
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -56,6 +57,28 @@ func (h *Handler) VerifyFileKey(key []byte) bool {
 		return len(h.U) >= 32 && prim.ConstantTimeEqual(u, h.U[:32])
 	}
 	return len(h.U) >= 16 && prim.ConstantTimeEqual(u[:16], h.U[:16])
+}
+
+// RC4KeyAttackParams returns the parameters an external or accelerated sweep
+// needs to reproduce the /U verifier without this package: the RC4 input buffer,
+// the number of XOR-RC4 rounds (round r is keyed by fileKey XOR r), the compare
+// length, and the expected /U prefix. It mirrors computeU exactly —
+//
+//	R2:     input = pad (32 bytes),      rounds = 1,  cmpLen = 32
+//	R3/R4:  input = MD5(pad || ID) (16), rounds = 20, cmpLen = 16
+//
+// ok is false when the document is not 40-bit-RC4 attackable.
+func (h *Handler) RC4KeyAttackParams() (input []byte, rounds, cmpLen int, u []byte, ok bool) {
+	if !h.RC4KeyAttackable() {
+		return nil, 0, 0, nil, false
+	}
+	if h.R == 2 {
+		return append([]byte(nil), pad...), 1, 32, append([]byte(nil), h.U[:32]...), true
+	}
+	m := md5.New() //nolint:gosec
+	m.Write(pad)
+	m.Write(h.ID)
+	return m.Sum(nil), 20, 16, append([]byte(nil), h.U[:16]...), true
 }
 
 // RC4KeyAttack sweeps the 40-bit file-key indices [start, start+count) for the
