@@ -110,7 +110,17 @@ func (e *engine) decompose(ctx context.Context, path string, src *source, depth 
 			ok, _, verr := enc.Verify(ch, pw)
 			return ok, verr
 		}
-		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText, ch.Hint)
+		// A whole-file format may expose a batchable KDF for the GPU tier; the
+		// engine uses it only when an accelerator is configured (see searchTarget).
+		var ak *xfileformats.AccelKDF
+		if e.opts.Accelerator != nil {
+			if ae, ok := enc.(xfileformats.Accelerable); ok {
+				if k, ok := safeAccelKDF(ae, ch); ok {
+					ak = &k
+				}
+			}
+		}
+		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText, ch.Hint, ak)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
@@ -216,7 +226,7 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
-		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText, hintOf(entry.Challenge))
+		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText, hintOf(entry.Challenge), entry.Accel)
 		if !found {
 			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
 			if !acc.addNode() {
@@ -283,7 +293,7 @@ func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, ent
 // searchTarget finds a password that satisfies verify: it tries promoted
 // (ancestor) passwords first (cheap, usually hits for nested archives), then
 // runs a concurrent search over the base candidate source.
-func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte, hint string) (string, bool) {
+func (e *engine) searchTarget(ctx context.Context, path string, verify func([]byte) (bool, error), depth int, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte, hint string, ak *xfileformats.AccelKDF) (string, bool) {
 	// Proven passwords from outer layers are tried first; FastReject is NOT
 	// applied to them (they are evidence, not guesses).
 	for _, pw := range prom.snapshot() {
@@ -346,6 +356,22 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 	if base == nil {
 		return "", false
 	}
+	// GPU/accelerator batch path: when an accelerator is configured and this
+	// target exposes a batchable PBKDF2-HMAC-SHA1 derivation, sweep the keyspace
+	// on the device in bulk instead of one candidate at a time on the CPU. It
+	// falls back (fellBack) to the CPU search below when the backend cannot serve
+	// these parameters or errors; a hit is always re-checked by ak.Finish, so the
+	// device never decides correctness on its own.
+	if e.opts.Accelerator != nil && ak != nil {
+		pw, found, fellBack := e.crackAccel(ctx, path, ak, depth, acc, base)
+		if found {
+			e.found(path, pw)
+			return pw, true
+		}
+		if !fellBack {
+			return "", false // accelerator swept the whole space, no match
+		}
+	}
 	probe := func(pw []byte) (bool, error) {
 		if reject != nil && reject(path, pw) {
 			return false, nil // cheaply rejected: definitely not the password
@@ -362,6 +388,85 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 	}
 	e.found(path, string(pw))
 	return string(pw), true
+}
+
+// accelBatch is how many candidate passwords are derived per accelerator
+// dispatch. Large enough to amortize device round-trips, small enough that a hit
+// (or ctx cancellation) is noticed promptly and per-batch host memory stays
+// modest (batch*DKLen bytes of output).
+const accelBatch = 2048
+
+// crackAccel runs the batched accelerator KDF sweep for a target whose
+// verification is one shared PBKDF2-HMAC-SHA1 derivation (ak). It pulls
+// candidates from base in batches, derives their keys on the accelerator in a
+// single call per batch, and runs ak.Finish (the cheap, authoritative verifier)
+// on each derived key. It returns (password, true, false) on a hit. It returns
+// (_, false, true) — fellBack — when the backend cannot serve these parameters
+// (accel.ErrUnsupported), errors, or returns a malformed result, so the caller
+// runs the unchanged CPU search instead. A clean no-match sweep returns
+// (_, false, false). Every flagged candidate is re-checked by Finish, so a
+// faulty backend can never yield a false positive.
+func (e *engine) crackAccel(ctx context.Context, path string, ak *xfileformats.AccelKDF, depth int, acc *accounting, base CandidateSource) (string, bool, bool) {
+	if base == nil || ak == nil || ak.Finish == nil {
+		return "", false, true // nothing to sweep here; let the CPU path decide
+	}
+	if err := base.Reset(); err != nil {
+		return "", false, true
+	}
+	reject := e.opts.FastReject
+	maxCand := e.opts.Limits.MaxCandidates
+
+	batch := make([][]byte, 0, accelBatch)
+	var tried int64
+	// flush derives the pending batch on the accelerator and tests each key.
+	// hit is the winning password; fellBack signals the caller to use the CPU.
+	flush := func() (hit string, found, fellBack bool) {
+		if len(batch) == 0 {
+			return "", false, false
+		}
+		dks, err := e.opts.Accelerator.PBKDF2SHA1(batch, ak.Salt, ak.Iter, ak.DKLen)
+		if err != nil || len(dks) != len(batch) {
+			return "", false, true // unsupported/errored/malformed => CPU fallback
+		}
+		acc.addCandidates(int64(len(batch)))
+		for i, dk := range dks {
+			if safeFinish(ak.Finish, dk, batch[i]) {
+				return string(batch[i]), true, false
+			}
+		}
+		if e.opts.OnProgress != nil {
+			e.opts.OnProgress(Progress{Path: path, CandidatesTried: acc.candidatesTried(), Depth: depth})
+		}
+		batch = batch[:0]
+		return "", false, false
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return "", false, false
+		}
+		pw, nerr := base.Next()
+		if nerr != nil { // io.EOF or a source error: test whatever remains, then stop
+			hit, found, fellBack := flush()
+			return hit, found, fellBack
+		}
+		if maxCand > 0 && tried >= maxCand {
+			break
+		}
+		if reject != nil && reject(path, pw) {
+			continue // cheaply rejected: never derive it
+		}
+		tried++
+		batch = append(batch, append([]byte(nil), pw...)) // copy: source reuses its buffer
+		if len(batch) >= accelBatch {
+			if hit, found, fellBack := flush(); found || fellBack {
+				return hit, found, fellBack
+			}
+		}
+	}
+	// Hit the per-call candidate cap: test the final partial batch and stop.
+	hit, found, fellBack := flush()
+	return hit, found, fellBack
 }
 
 // promoter holds passwords recovered in outer layers for "promotion" to inner
@@ -628,6 +733,30 @@ func safeOpen(entry *xfileformats.Entry, pw []byte) (r io.Reader, err error) {
 func safeVerify(verify func([]byte) (bool, error), pw []byte) (ok bool, err error) {
 	defer guard(&err)
 	return verify(pw)
+}
+
+// safeAccelKDF fetches a format's batchable derivation under a recover() guard:
+// AccelKDF parses already-probed Challenge data, but the guard keeps a malformed
+// Challenge from ever panicking the engine (it just disables acceleration).
+func safeAccelKDF(a xfileformats.Accelerable, ch *xcrypto.Challenge) (ak xfileformats.AccelKDF, ok bool) {
+	defer func() {
+		if recover() != nil {
+			ak, ok = xfileformats.AccelKDF{}, false
+		}
+	}()
+	return a.AccelKDF(ch)
+}
+
+// safeFinish runs an AccelKDF verifier under a recover() guard. Finish runs the
+// scheme's authoritative check on a device-derived key; a panic there (hostile
+// input) must degrade to "not a match", never crash the sweep.
+func safeFinish(fn func(dk, pw []byte) bool, dk, pw []byte) (ok bool) {
+	defer func() {
+		if recover() != nil {
+			ok = false
+		}
+	}()
+	return fn(dk, pw)
 }
 
 // guard converts a panic in a format parser (exposed to hostile input) into an

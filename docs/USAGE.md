@@ -121,6 +121,10 @@ unlocked almost for free.
 | `--spray-token STR` | an org/product/user token mangled into the spray set (year, `!`/`@`/`#` suffixes, case variants) — repeatable, implies `--spray` |
 | `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
+| `--markov` | train a Markov model on the candidate words and emit guesses best-first (`--markov-max N` caps how many) |
+| `--increment MIN:MAX` | expand each mask (from `--pattern`/config) into shortest-first prefix masks over the token-length range (hashcat `--increment`) |
+| `--combinator-left FILE` / `--combinator-right FILE` / `--combinator-sep S` | combinator attack: every left word + every right word, optional separator (hashcat `-a 1`) |
+| `--as SCHEME` | force a scheme for an input with no magic bytes, bypassing detection (currently `sqlcipher`) |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
@@ -681,9 +685,18 @@ bin/xcrackd-gpu -gpu-selftest        # prove the kernel matches the CPU referenc
 bin/xcrackd-gpu -gpu -addr :8080     # hardware-gated; falls back to CPU if absent
 ```
 
+When a device is present and the kernel passes its self-test, `--gpu` wires the
+accelerator straight into the **live crack loop**: for acceleration-capable
+targets (WinZip-AES ZIP entries, encrypted DMG, and other PBKDF2-HMAC-SHA1
+schemes) the keyspace sweep is derived on the device in batches, and the CPU
+verifier re-checks every candidate the device flags. Promoted / hint / context
+passwords are still tried on the CPU first, and any unsupported parameter or
+device error falls back transparently to the pure-Go CPU search — so the GPU
+only ever changes speed, never results.
+
 The GPU tier only accelerates PBKDF2-HMAC-SHA1 key derivation (the shared KDF);
-it never parses or opens file content, and the default build / CI never include
-it (ADR 0001 amendment).
+it never parses or opens file content, never decides a match on its own, and the
+default build / CI never include it (ADR 0001 amendment).
 
 **Endpoints:**
 

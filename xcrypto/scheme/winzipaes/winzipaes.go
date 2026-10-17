@@ -100,6 +100,32 @@ func Verify(password []byte, p Params, raw []byte) (bool, error) {
 	return hmac.Equal(m.Sum(nil)[:MACLen], mac), nil
 }
 
+// VerifyWithDK authoritatively checks a password given the pre-derived PBKDF2
+// output dk = PBKDF2-HMAC-SHA1(password, salt, PBKDF2Iter, 2*keyLen+PWVerifLen),
+// i.e. with the (expensive) key derivation already performed by an external
+// batch tier (the xcrackd OpenCL accelerator). It splits dk into the enc key,
+// auth key, and 2-byte verifier exactly as Derive does, then runs the same
+// verifier + HMAC check as Verify. The salt the caller derived with must be the
+// entry's own salt (raw[:SaltLen]).
+func VerifyWithDK(dk []byte, p Params, raw []byte) (bool, error) {
+	keyLen := p.KeyLen()
+	if keyLen == 0 || len(dk) < 2*keyLen+PWVerifLen {
+		return false, xcrypto.ErrMalformed
+	}
+	_, pwv, ct, mac, err := Split(p, raw)
+	if err != nil {
+		return false, err
+	}
+	authKey := dk[keyLen : 2*keyLen]
+	wantVerif := dk[2*keyLen : 2*keyLen+PWVerifLen]
+	if !prim.ConstantTimeEqual(wantVerif, pwv) {
+		return false, nil
+	}
+	m := hmac.New(sha1.New, authKey)
+	m.Write(ct)
+	return hmac.Equal(m.Sum(nil)[:MACLen], mac), nil
+}
+
 // Decrypt verifies then decrypts a raw AES entry, returning the still-compressed
 // plaintext bytes.
 func Decrypt(password []byte, p Params, raw []byte) ([]byte, error) {

@@ -95,6 +95,13 @@ func runCrack(args []string) int {
 	hintRulesF := fs_.String("hint-rules", "", "hashcat-style rule file applied to hint-derived words (implies --hint)")
 	pcfgF := fs_.Bool("pcfg", false, "train a PCFG on the candidate words and generate guesses in probability order")
 	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
+	markovF := fs_.Bool("markov", false, "train a Markov model on the candidate words and generate guesses best-first")
+	markovMax := fs_.Int("markov-max", 1_000_000, "max Markov guesses to generate (with --markov)")
+	incrementF := fs_.String("increment", "", "expand each mask over a token-length range MIN:MAX, shortest first (hashcat --increment)")
+	combLeft := fs_.String("combinator-left", "", "left wordlist for a combinator attack (each left word + each right word)")
+	combRight := fs_.String("combinator-right", "", "right wordlist for a combinator attack (requires --combinator-left)")
+	combSep := fs_.String("combinator-sep", "", "separator inserted between the two words in a combinator attack")
+	asF := fs_.String("as", "", "force the input to be treated as SCHEME, bypassing content detection (for formats with no magic bytes, e.g. 'sqlcipher')")
 	var hybridAppend, hybridPrepend stringSlice
 	fs_.Var(&hybridAppend, "hybrid-append", "append every expansion of MASK to each wordlist word (hashcat dict+mask; repeatable)")
 	fs_.Var(&hybridPrepend, "hybrid-prepend", "prepend every expansion of MASK to each wordlist word (hashcat mask+dict; repeatable)")
@@ -195,7 +202,7 @@ func runCrack(args []string) int {
 	opts.Logger = newLogger(logLvl)
 
 	// Build the pattern set from --pattern files and the config's patterns block.
-	patternSet, customCharsets, err := buildPatternSet(patterns, cfg)
+	patternSet, customCharsets, maskSpecs, err := buildPatternSet(patterns, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "xcrack: pattern: %v\n", err)
 		return 2
@@ -297,11 +304,44 @@ func runCrack(args []string) int {
 		return 2
 	}
 
-	// Optional PCFG: trained once from the candidate corpus (explicit passwords,
-	// the built-in list, and wordlist files, bounded), then cloned per file.
+	// Optional PCFG / Markov: trained once from the candidate corpus (explicit
+	// passwords, the built-in list, and wordlist files, bounded), then cloned per
+	// file.
 	var pcfgModel *candidates.PCFG
 	if *pcfgF {
 		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
+	}
+	var markovModel *candidates.Markov
+	if *markovF || (cfg != nil && cfg.Search.Markov) {
+		words := collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20)
+		samples := make([][]byte, len(words))
+		for i, w := range words {
+			samples[i] = []byte(w)
+		}
+		markovModel = candidates.TrainMarkov(samples)
+	}
+
+	// Mask length incrementing (hashcat --increment): expand each configured mask
+	// into shortest-first prefix masks over MIN:MAX tokens, in place of the
+	// full-length masks.
+	incMin, incMax, ierr := parseIncrement(*incrementF)
+	if ierr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: --increment: %v\n", ierr)
+		return 2
+	}
+	if (*combLeft == "") != (*combRight == "") {
+		fmt.Fprintln(os.Stderr, "xcrack: --combinator-left and --combinator-right must be given together")
+		return 2
+	}
+	// --as forces a specific scheme, bypassing content detection (for magic-less
+	// formats such as SQLCipher that cannot be auto-detected).
+	if *asF != "" {
+		reg, ok := xcrack.ForceRegistry(*asF)
+		if !ok {
+			fmt.Fprintf(os.Stderr, "xcrack: --as: unknown force-format %q (supported: sqlcipher)\n", *asF)
+			return 2
+		}
+		opts.Registry = reg
 	}
 
 	// Extra generators (flags, or the config's search block).
@@ -315,6 +355,8 @@ func runCrack(args []string) int {
 		keyWalkMin     = 4         // shortest keyboard walk
 		keyWalkMax     = 10        // longest keyboard walk
 		keyWalkCount   = 1_000_000 // cap on generated walks
+		markovMinLen   = 1         // shortest Markov guess
+		markovMaxLen   = 16        // longest Markov guess
 	)
 
 	// A fresh, re-iterable chain of the file wordlists (stdin excluded, since it
@@ -337,6 +379,9 @@ func runCrack(args []string) int {
 		var srcs []candidates.Source
 		if pcfgModel != nil {
 			srcs = append(srcs, pcfgModel.Source(*pcfgMax))
+		}
+		if markovModel != nil {
+			srcs = append(srcs, candidates.MarkovGen(markovModel, markovMinLen, markovMaxLen, *markovMax))
 		}
 		// Root-name context: the engine derives name candidates for every nested
 		// node, but the top-level file's name is only known here, so seed it first.
@@ -374,8 +419,26 @@ func runCrack(args []string) int {
 			base = patternSet.ApplyRules(base)
 			srcs = append(srcs, base)
 		}
-		// Masks are standalone keyspaces appended after the wordlists.
-		srcs = append(srcs, patternSet.MaskSources()...)
+		// Masks are standalone keyspaces appended after the wordlists. With
+		// --increment, each mask spec is expanded into shortest-first prefix masks
+		// over the requested token-length range instead of used at full length.
+		if incMin > 0 || incMax > 0 {
+			for _, spec := range maskSpecs {
+				for _, inc := range pattern.ExpandIncrement(spec, incMin, incMax) {
+					if m, err := pattern.CompileMask(inc, customCharsets); err == nil {
+						srcs = append(srcs, m.Source())
+					}
+				}
+			}
+		} else {
+			srcs = append(srcs, patternSet.MaskSources()...)
+		}
+		// Combinator (hashcat -a 1): every left word followed by every right word
+		// (optional separator). Built over fresh file readers so each file run is
+		// independent.
+		if *combLeft != "" && *combRight != "" {
+			srcs = append(srcs, candidates.Combinator(candidates.File(*combLeft), candidates.File(*combRight), []byte(*combSep)))
+		}
 		// Hybrid attacks: each wordlist word combined with every expansion of a
 		// mask (dict+mask / mask+dict). Built over a fresh file-wordlist chain
 		// (stdin cannot be re-iterated per mask, so it is excluded here).
@@ -744,6 +807,10 @@ COMMON FLAGS:
       --toggle-case              also try case-toggle variants of each wordlist word
       --prince                   also try PRINCE chains (concatenated wordlist words)
       --keyboard-walk            also try QWERTY keyboard-adjacency walks
+      --markov                   generate best-first guesses from a Markov model (--markov-max N)
+      --increment MIN:MAX        expand each mask over a token-length range, shortest first
+      --combinator-left FILE --combinator-right FILE [--combinator-sep S]   combinator attack
+      --as SCHEME                force a scheme for a magic-less file (e.g. sqlcipher)
       --shard I/N                distributed cracking: test only shard I of N of the keyspace
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --spray                    curated spray set (common + season/year), tried early
@@ -795,16 +862,16 @@ func buildHintRules(file string, cfg *fileConfig) (func(string) []string, error)
 	}, nil
 }
 
-func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]string, error) {
+func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]string, []string, error) {
 	spec := pattern.Spec{CustomCharsets: map[rune]string{}}
 	for _, f := range files {
 		data, err := os.ReadFile(f)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		s, err := pattern.ParseText(data)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		spec.Masks = append(spec.Masks, s.Masks...)
 		spec.Rules = append(spec.Rules, s.Rules...)
@@ -822,7 +889,7 @@ func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]st
 		}
 	}
 	set, err := pattern.Compile(spec)
-	return set, spec.CustomCharsets, err
+	return set, spec.CustomCharsets, spec.Masks, err
 }
 
 // compileMasks compiles each mask spec (sharing the custom charset table) for a

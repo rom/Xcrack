@@ -33,7 +33,7 @@ appears in challenges, JSON output, and the `identify` command.
 | Family | Formats | Caps |
 | ------ | ------- | ---- |
 | [Archives & mail](#archives--mail) | ZIP, tar, gzip, bzip2, xz, 7-Zip, RAR, MIME `.eml` | 📦 🔓 🧩 |
-| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`) | 🔓 📦 |
+| [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), Access detection | 🔓 📦 |
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
 | [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass | 🔑 |
@@ -71,6 +71,20 @@ for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR obfuscation are
 implemented and unit-tested; XOR *content* reconstruction is wired for Excel but
 not Word (no reference oracle), and only the main document streams are decrypted
 (auxiliary encrypted streams are left as-is).
+
+**Wider Office family (Publisher / Visio / Project / Access).** An *encrypted*
+Office file of any application is the same CFB container — an `EncryptionInfo`
+stream plus an `EncryptedPackage` — so detection is content-first and
+extension-independent: encrypted **Publisher** (`.pub`), **Visio**
+(`.vsd`/`.vsdx`) and **Project** (`.mpp`) that use the standard agile/standard
+Office encryption are recovered through the same `ooxml` path as `.docx` (there
+is no way to tell them apart before decryption; the application only shows in
+the decrypted payload, which the engine then decomposes). **Access** is the
+exception — `.mdb` (Jet) and `.accdb` (ACE) are *not* CFB files; the `access`
+format detects and names them (jet3/jet4/ace) by their `Standard Jet DB` /
+`Standard ACE DB` signature. Known gaps: Access password *recovery* is staged
+(no validated oracle in this build), and pre-2007 Publisher/Visio/Project
+binaries that used bespoke RC4-in-stream encryption are not yet decoded.
 
 ### OOXML agile variants (hashcat `$office$` version)
 
@@ -126,9 +140,10 @@ private keys or database body are surfaced as-is, not reconstructed.
 | **KeePass** `.kdbx` (KDBX4) | `9AA2D903 B54BFB67`, major version 4 | `keepass-kdbx4-argon2d` (default), `-argon2id`, `-aeskdf` | **Argon2d** / Argon2id / legacy AES-KDF | the header **HMAC-SHA256** | `pykeepass`; the in-tree Argon2d is checked against the reference `argon2` CLI |
 
 **SQLCipher** databases have no cleartext magic, so the engine cannot
-auto-detect them; point Xcrack at a `.db` explicitly (library API or the CLI
-targeting the file). **KeePass** KDBX **3.x** uses a different (stream-start-bytes)
-verifier and is reported unsupported; KDBX4 is the handled version.
+auto-detect them; force the scheme from the CLI with `xcrack --as sqlcipher FILE`
+(or target the scheme via the library API). **KeePass** KDBX **3.x** uses a
+different (stream-start-bytes) verifier and is reported unsupported; KDBX4 is the
+handled version.
 
 **In-tree Argon2.** KeePass KDBX4 defaults to **Argon2d**, which
 `golang.org/x/crypto/argon2` does not expose (only Argon2i/Argon2id). Xcrack
@@ -142,15 +157,19 @@ known-answer vectors (so PuTTY v3 and KeePass both have a vetted Argon2).
 
 | Format | Signature | Scheme(s) | KDF | Cipher | Verifier | Oracle |
 | ------ | --------- | --------- | --- | ------ | -------- | ------ |
-| **Apple encrypted DMG** 🔓 | a `dmg2john` `$dmg$1*…` / `$dmg$2*…` line | `dmg-v1` (AES-128) and `dmg-v2` (AES-128 / **AES-256**) | PBKDF2-HMAC-SHA1 | v1: 3DES key-unwrap; v2: 3DES-unwrapped AES-CBC | v1: valid PKCS padding on both unwrapped blobs; v2: AES-CBC chunk decrypt yields 8 consecutive NUL bytes (per-chunk IV = HMAC-SHA1(key, chunkNo)) | **John the Ripper's authoritative `dmg` vectors** (both versions, AES-128 & AES-256, cross-validated byte-for-byte) |
+| **Apple encrypted DMG** 🔓 | on-disk `encrcdsa` v2 magic, or a `dmg2john` `$dmg$1*…` / `$dmg$2*…` line | `dmg-v1` (AES-128) and `dmg-v2` (AES-128 / **AES-256**) | PBKDF2-HMAC-SHA1 | v1: 3DES key-unwrap; v2: 3DES-unwrapped AES-CBC | v1: valid PKCS padding on both unwrapped blobs; v2: AES-CBC chunk decrypt yields 8 consecutive NUL bytes (per-chunk IV = HMAC-SHA1(key, chunkNo)) | **real macOS AES-128/256 images** (known password) + **John the Ripper's authoritative `dmg` vectors** (byte-for-byte) |
 
-Xcrack consumes the portable `$dmg$` line `dmg2john image.dmg` produces, the
-same way John/hashcat users already work: `dmg2john image.dmg > h` then
-`xcrack h -w wordlist` (the whole candidate pipeline — spray, breach, masks,
-sharding — applies). The DMG *cryptography* is oracle-validated against John's
-vectors; parsing the raw on-disk `encrcdsa`/koly container directly is deferred
-until a real-image test sample is available to validate the header parser (the
-crypto would be unchanged). The recovered passphrase is the deliverable.
+Xcrack reads a real on-disk **`encrcdsa` v2** image directly — just
+`xcrack image.dmg -w wordlist`, with the whole candidate pipeline (spray,
+breach, masks, sharding) — and also accepts the portable `$dmg$` line
+`dmg2john image.dmg` produces (`dmg2john image.dmg > h` then `xcrack h`). The
+on-disk parser follows the dmg2john / vilefault layout and reads only the
+header, key blob and one data chunk (via `ReadAt`), never the whole image; it is
+**validated against genuine macOS-produced AES-128 and AES-256 images** with a
+known password, and the crypto is additionally cross-validated against John's
+authoritative `dmg` vectors. The recovered passphrase is the deliverable (the
+image is not mounted). Older v1 (`.dmg`, pre-10.5) images are handled via the
+`$dmg$` line.
 
 ## GPU offload — hash-line export
 
@@ -173,6 +192,16 @@ emitter exists yet. (ZipCrypto entries are not exported as hash lines — they
 have the `kp` known-plaintext path and the external-engine challenge export
 instead.)
 
+**In-tree GPU tier (opt-in, server only).** Besides exporting to an external
+cracker, the `xcrackd` server can accelerate the search itself: a binary built
+with `-tags opencl` and run with `--gpu` batches the PBKDF2-HMAC-SHA1 sweep of
+acceleration-capable targets onto an OpenCL device. Today those are **WinZip-AES
+ZIP entries** (1000-iteration KDF) and **encrypted DMG** (the high-iteration
+`encrcdsa` KDF — where a GPU helps most); every other scheme and anything the
+kernel can't serve stays on the unchanged CPU path. The device only derives
+keys; the format's own verifier re-checks every hit, so acceleration never
+affects correctness. The default build is pure-Go/CPU-only (ADR 0001 amendment).
+
 ---
 
 ## Not handled (yet) / out of scope
@@ -182,7 +211,9 @@ disk images (ISO/UDF, VHD(X), DMG), installers (MSI/CAB/NSIS/Inno), OneNote /
 Outlook mail carriers, Hangul HWP, more codecs (zstd/lz4/brotli/…), and
 full-volume encryption (BitLocker, VeraCrypt, LUKS, FileVault).
 
-**Out of scope by design:** in-tree GPU cracking, any online/network attack,
-weakening of *sound* ciphers, document rendering or macro execution, and
+**Out of scope by design:** GPU cracking in the default build (the opt-in
+`xcrackd` OpenCL server tier above is the one sanctioned exception), any
+online/network attack, weakening of *sound* ciphers, document rendering or
+macro execution, and
 public-key PDF (which needs a private key, not a password). See
 [`asr.md`](asr.md) §5.

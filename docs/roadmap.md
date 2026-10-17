@@ -44,12 +44,14 @@ they are not date-bound. Each phase leaves `main` releasable.
 - **Resilience:** checkpoint/resume for long single-file searches (FR-11).
 
 ## Phase 3 — Smarter search
-- Combinator and hybrid attack modes.
-- Markov / statistical candidate ordering; frequency-weighted wordlists.
-- ✅ Statistical (Markov) candidate ordering (`candidates.ByScore` + `Markov`).
+- ✅ Combinator (`--combinator-left/-right/-sep`) and hybrid (`--hybrid-append/-prepend`) attack modes.
+- ✅ Statistical candidate ordering/generation: Markov (`candidates.ByScore` + `Markov`;
+  generator `--markov`) and a Weir-style PCFG (`--pcfg`); plus PRINCE, toggle-case,
+  keyboard-walk generators, and frequency-ordered breach corpora (`--breach`).
 - ✅ Challenge export/import (portable JSON envelope) so probing and heavy
-  cracking can be split across processes/machines (and offloaded to a GPU tier).
-- Combinator/hybrid modes; per-format "fast reject" heuristics.
+  cracking can be split across processes/machines (and offloaded to a GPU tier),
+  with keyspace sharding (`--shard I/N`).
+- ✅ Per-format "fast reject" heuristics (`Options.FastReject`).
 
 ## Phase 4 — Scale & operations
 - ✅ **HTTP service tier** (`xcrackd` + `pkg/api`) so the engine runs on a
@@ -70,9 +72,9 @@ they are not date-bound. Each phase leaves `main` releasable.
 - ✅ **KeePass** (KDBX4, in-tree Argon2d), ✅ **Apple iWork**, ✅ **SQLCipher**,
   ✅ **ODF AES-GCM**.
 - ✅ **Apple encrypted DMG**: v1 (AES-128) and v2 (AES-128/256) password
-  verification, cross-validated against John the Ripper's authoritative `dmg`
-  vectors; consumed via the portable `dmg2john` `$dmg$` line (direct on-disk
-  `encrcdsa` header parsing staged pending a real-image sample).
+  recovery. Reads a real on-disk `encrcdsa` v2 image directly (`xcrack image.dmg`)
+  and the portable `dmg2john` `$dmg$` line; validated against genuine macOS
+  AES-128/256 images and John the Ripper's authoritative `dmg` vectors.
 - RAR5 specifics remain; the few others need test oracles not present in the
   build environment and are implemented as fixtures become available.
 - Full-volume formats (BitLocker/VeraCrypt/LUKS/FileVault) — large, separate

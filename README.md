@@ -27,23 +27,28 @@ many worked examples.
 | Family | Formats |
 | ------ | ------- |
 | **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
-| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR) |
+| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** (`.mdb/.accdb`) detected |
 | **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC **and AES-256-GCM**); **Apple iWork** (Pages/Numbers/Keynote) |
+| **Disk images** | Apple **encrypted DMG** (v2 AES-128/256) read on-disk directly, plus v1/v2 via the `dmg2john` `$dmg$` line |
 | **Mail / passphrase** | MIME (`.eml`) attachments; **age** (scrypt); **symmetric OpenPGP** (`gpg -c`) |
-| **Keys / key stores** | OpenSSH keys; PEM/PKCS#8; JKS; PKCS#12 (`.p12`); PuTTY `.ppk`; SQLCipher; **KeePass** (`.kdbx` KDBX4, Argon2d/Argon2id/AES-KDF) |
+| **Keys / key stores** | OpenSSH keys; PEM/PKCS#8; JKS; PKCS#12 (`.p12`); PuTTY `.ppk`; **SQLCipher** (`--as sqlcipher`); **KeePass** (`.kdbx` KDBX4, Argon2d/Argon2id/AES-KDF) |
 
 Every scheme is cross-validated — against known-answer vectors, the real
 `zip` / `qpdf` / `7z` / `rar` / `age` / `gpg` CLIs, and byte-for-byte against
 gold-standard decrypted legacy-Office documents.
 
 Recovery features: recursive decomposition of nested layers into a result tree
-(password **and** content reported per layer), password promotion across layers,
-a hashcat-compatible pattern engine (masks + rules + hybrid wordlist±mask) with
-optional statistical (Markov/PCFG) ordering, two-axis globally-bounded
-concurrency, disk-spill for large intermediates, resource budgets + bomb
-defenses, and — to offload heavy cracking to an external GPU engine — challenge
-export/import plus `$office$`/`$pdf$` hash-line emitters (`xcrack hashline`) for
-hashcat / John the Ripper.
+(password **and** content reported per layer), password promotion across layers
+(and corpus-wide with `--adaptive`), a hashcat-compatible pattern engine (masks
++ rules + hybrid wordlist±mask + mask-increment) and candidate generators
+(combinator, PRINCE, toggle-case, keyboard-walk, Markov/PCFG, spray, breach
+corpora), keyspace **sharding** across machines (`--shard I/N`), two-axis
+globally-bounded concurrency, disk-streaming of large entries, resource budgets
++ bomb defenses, and — to offload heavy cracking to an external GPU engine —
+challenge export/import plus `$office$`/`$pdf$`/`$zip2$`/`$dmg$` hash-line
+emitters (`xcrack hashline`) for hashcat / John the Ripper. The `xcrackd` server
+also has an optional, opt-in **built-in** OpenCL tier (`-tags opencl`, `--gpu`)
+that batches the PBKDF2-HMAC-SHA1 sweep of the live search onto the device.
 
 ## Quick start
 
@@ -133,15 +138,21 @@ the service tier and several Phase 3/4 engine features landed:
   `/v1/metrics`, `/v1/healthz`); `Pool.Metrics()` telemetry; a pluggable live
   candidate provider.
 - **Search** — statistical (Markov) candidate ordering; challenge export/import
-  so heavy cracking can be offloaded to an external GPU/OpenCL engine (Xcrack
-  itself stays pure Go and CPU-only).
+  so heavy cracking can be offloaded to an external GPU/OpenCL engine. The
+  default build stays pure Go and CPU-only; the opt-in `xcrackd` OpenCL tier
+  (`-tags opencl`, `--gpu`) now feeds the **live crack loop** directly —
+  acceleration-capable targets (WinZip-AES, encrypted DMG, and other
+  PBKDF2-HMAC-SHA1 schemes) have their key-derivation sweep batched onto the
+  device, with the CPU verifier re-checking every hit and handling everything
+  the kernel can't.
 - **Hardening** — fuzz targets on every hostile-input parser plus the whole
   pipeline, a decompression-bomb / fan-out / cycle corpus, `recover()` guards on
   every format call, and a GitHub Actions CI workflow (build · vet · gofmt ·
   `-race` · govulncheck · bounded fuzz).
 
-**Staged** (implemented as test fixtures become available): encrypted DMG and
-legacy-Office macro/VBA auxiliary-stream decryption.
+**Staged** (implemented as test fixtures / oracles become available): MS Access
+password *recovery* (detection ships now) and legacy-Office macro/VBA
+auxiliary-stream decryption.
 
 > **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is fully decrypted and
 > cross-validated for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR

@@ -2,6 +2,7 @@ package dmg
 
 import (
 	"bytes"
+	"os"
 	"testing"
 )
 
@@ -16,6 +17,13 @@ func FuzzProbe(f *testing.F) {
 	f.Add([]byte("name:$dmg$9*nope"))
 	f.Add([]byte("no marker here"))
 	f.Add([]byte{})
+	// On-disk encrcdsa seeds: the 8-byte magic alone, a truncated header, and a
+	// real fixture if present — the binary parser must stay panic-free on all.
+	f.Add([]byte("encrcdsa"))
+	f.Add(append([]byte("encrcdsa\x00\x00\x00\x02"), make([]byte, 80)...))
+	if b, err := os.ReadFile("testdata/encrcdsa-aes256.dmg"); err == nil {
+		f.Add(b)
+	}
 	fm := New()
 	f.Fuzz(func(t *testing.T, b []byte) {
 		fm.Detect(b)

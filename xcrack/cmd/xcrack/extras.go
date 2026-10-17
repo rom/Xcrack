@@ -168,6 +168,32 @@ func (p *potfile) add(pws ...string) {
 // used (with the target file's name and size) to key a resume checkpoint so a
 // changed keyspace is not silently resumed. It is best-effort: it covers the
 // explicit passwords, wordlists, default-list toggle, and pattern files.
+// parseIncrement parses a "--increment MIN:MAX" (or "MIN", or "MIN-MAX") spec
+// into min/max token lengths. Empty means no incrementing (0,0).
+func parseIncrement(spec string) (min, max int, err error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" {
+		return 0, 0, nil
+	}
+	sep := ":"
+	if !strings.Contains(spec, ":") && strings.Contains(spec, "-") {
+		sep = "-"
+	}
+	parts := strings.SplitN(spec, sep, 2)
+	min, err = strconv.Atoi(strings.TrimSpace(parts[0]))
+	if err != nil || min < 1 {
+		return 0, 0, fmt.Errorf("want MIN[:MAX] with MIN>=1, got %q", spec)
+	}
+	max = min
+	if len(parts) == 2 {
+		max, err = strconv.Atoi(strings.TrimSpace(parts[1]))
+		if err != nil || max < min {
+			return 0, 0, fmt.Errorf("want MIN:MAX with MAX>=MIN, got %q", spec)
+		}
+	}
+	return min, max, nil
+}
+
 // parseShard parses a "--shard I/N" spec into a zero-based index and a count.
 // An empty spec means no sharding (index 0, count 1). It rejects malformed
 // specs and an out-of-range index so a mistyped shard can never silently skip
