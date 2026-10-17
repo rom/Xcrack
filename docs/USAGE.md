@@ -122,6 +122,9 @@ unlocked almost for free.
 | `--spray-year N` | year used in spray patterns — repeatable (default: current and previous) |
 | `--pcfg` | train a PCFG on the candidate words and emit guesses in probability order (`--pcfg-max N` caps how many) |
 | `--markov` | train a Markov model on the candidate words and emit guesses best-first (`--markov-max N` caps how many) |
+| `--order markov` | reorder the wordlist candidates so the statistically likeliest words are tried first (`--order-max N` caps how many are buffered); distinct from `--markov`, which *generates* |
+| `--swedish` | also try the built-in Swedish-targeted wordlist (common Swedish words/names/places + typical mutations, ordered most-probable-first) |
+| `--resume-from FILE` | import a recovered-password envelope (from an external cracker that solved an exported challenge) and try its password first — repeatable |
 | `--increment MIN:MAX` | expand each mask (from `--pattern`/config) into shortest-first prefix masks over the token-length range (hashcat `--increment`) |
 | `--combinator-left FILE` / `--combinator-right FILE` / `--combinator-sep S` | combinator attack: every left word + every right word, optional separator (hashcat `-a 1`) |
 | `--as SCHEME` | force a scheme for an input with no magic bytes, bypassing detection (currently `sqlcipher`) |
@@ -281,6 +284,7 @@ envelope (see [ADR-0006](adr/0006-concurrency-model.md)).
 | `--batch-size N` | candidates per worker hand-off (0 = auto); amortizes channel overhead |
 | `--throttle PCT` | approximate CPU duty cycle `1..99` (0 = no throttle) |
 | `--timeout D` | per-file time budget, e.g. `30s`, `5m` |
+| `--time-limit D` | give up on a file after `D` with no success and move on (per-file; a clear alias of `--timeout`). A file that hits the limit is reported *locked* (exit 1), never an error, so one stuck file never fails a batch |
 | `--max-duration D` | whole-run deadline |
 
 ```sh
@@ -768,6 +772,50 @@ _ = rec.Password
 
 The envelope's `scheme` field is the stable discriminator an external bridge
 keys on; byte fields are hex-encoded.
+
+From the command line, without writing any Go:
+
+```sh
+# Probe a file and print its challenge envelope(s) for an external cracker:
+xcrack export-challenge invoice.docx > invoice.challenge.json
+
+# ... crack it elsewhere, producing a recovered-password envelope, then resume:
+xcrack --resume-from invoice.recovered.json invoice.docx   # tries the password first
+```
+
+A recovered-password envelope is just
+`{"xcrack_recovered_version":1,"password":"..."}`; `--resume-from` accepts one
+object or a JSON array and is repeatable.
+
+---
+
+## Distributed cracking across servers
+
+For a hard password, run many `xcrackd` workers (each optionally GPU-accelerated)
+and let `xcrack` coordinate. It probes and assembles candidates locally and
+streams disjoint batches of the keyspace to the fleet.
+
+```sh
+# Collective: every server attacks the SAME file on disjoint batches; first hit wins.
+xcrack --server http://gpu1:8080 --server http://gpu2:8080 \
+       -w rockyou.txt --cluster-mode collective secret.docx
+
+# Partition: server groups take DIFFERENT files, cracked in parallel.
+xcrack --server http://a:8080@g1 --server http://b:8080@g1 \
+       --server http://c:8080@g2 --server http://d:8080@g2 \
+       --cluster-mode partition -w rockyou.txt *.docx
+```
+
+Flags: `--server URL[@GROUP]` (repeatable), `--cluster-mode collective|partition`,
+`--cluster-batch N` (candidates per request, default 20000),
+`--cluster-allow-defaults` (let each server also try its own default list),
+`--cluster-per-request D` (per-request server deadline hint). The same set is
+configurable under a `cluster:` block (servers, mode, batch, allow_defaults,
+per_request). Every attack type works — the coordinator pulls from the usual
+candidate builder and ships batches — and a worker can only ever confirm a
+candidate it was handed, so it cannot cause a false positive. Each server must
+run `xcrackd` (behind your own authn/TLS); point it at a GPU build (`-gpu`) for
+the real speed-up.
 
 ---
 
