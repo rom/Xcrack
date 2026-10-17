@@ -105,6 +105,7 @@ func runCrack(args []string) int {
 	markovF := fs_.Bool("markov", false, "train a Markov model on the candidate words and generate guesses best-first")
 	markovMax := fs_.Int("markov-max", 1_000_000, "max Markov guesses to generate (with --markov)")
 	markovThreshold := fs_.Int("markov-threshold", 0, "cap the per-position branching of --markov to the N likeliest next characters (hashcat --markov-threshold; 0=default 15)")
+	markovPosF := fs_.Bool("markov-pos", false, "use a position-aware (2D) Markov model for --markov generation (digits/specials cluster at the end); implies --markov")
 	orderF := fs_.String("order", "", "reorder the wordlist candidates before mangling: 'markov' tries the statistically likeliest words first (none=keep file order)")
 	orderMax := fs_.Int("order-max", 1_000_000, "max wordlist entries to buffer and reorder (with --order markov)")
 	incrementF := fs_.String("increment", "", "expand each mask over a token-length range MIN:MAX, shortest first (hashcat --increment)")
@@ -400,13 +401,18 @@ func runCrack(args []string) int {
 		pcfgModel = candidates.TrainPCFG(collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20))
 	}
 	var markovModel *candidates.Markov
-	if *markovF || (cfg != nil && cfg.Search.Markov) {
+	var markovPosModel *candidates.MarkovPos
+	if *markovF || *markovPosF || (cfg != nil && cfg.Search.Markov) {
 		words := collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20)
 		samples := make([][]byte, len(words))
 		for i, w := range words {
 			samples[i] = []byte(w)
 		}
-		markovModel = candidates.TrainMarkov(samples)
+		if *markovPosF {
+			markovPosModel = candidates.TrainMarkovPos(samples)
+		} else {
+			markovModel = candidates.TrainMarkov(samples)
+		}
 	}
 	// Statistical ordering (`--order markov`): reorder the wordlist candidates so
 	// the likeliest words are tried first (per a Markov model trained on the
@@ -512,12 +518,16 @@ func runCrack(args []string) int {
 		if pcfgModel != nil {
 			srcs = append(srcs, pcfgModel.Source(*pcfgMax))
 		}
-		if markovModel != nil {
+		if markovModel != nil || markovPosModel != nil {
 			topK := *markovThreshold
 			if topK <= 0 {
-				topK = 15 // MarkovGen's default per-position branching
+				topK = 15 // the default per-position branching
 			}
-			srcs = append(srcs, candidates.MarkovGenTopK(markovModel, markovMinLen, markovMaxLen, *markovMax, topK))
+			if markovPosModel != nil {
+				srcs = append(srcs, candidates.MarkovGenPos(markovPosModel, markovMinLen, markovMaxLen, *markovMax, topK))
+			} else {
+				srcs = append(srcs, candidates.MarkovGenTopK(markovModel, markovMinLen, markovMaxLen, *markovMax, topK))
+			}
 		}
 		// Root-name context: the engine derives name candidates for every nested
 		// node, but the top-level file's name is only known here, so seed it next.
