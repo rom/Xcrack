@@ -68,20 +68,24 @@ archives and documents is found and cracked automatically.
 
 ```mermaid
 flowchart TD
-  IN["input file / bytes"] --> DET{"detect by content<br/>(magic + structure, not extension)"}
-  DET -->|"container"| UNP["enumerate entries<br/>ZIP · tar · 7z · RAR · CFB · zstd/lz4 · eml"]
-  DET -->|"encrypted"| PRB["probe once → Challenge<br/>salt · iterations · verifier"]
-  DET -->|"leaf"| OUT["hand real content to the caller / scanner"]
-  UNP --> RE["re-detect each entry"] --> DET
-  PRB --> CS["ordered candidate stream"]
-  CS --> FR{"fast-reject<br/>1–2 byte check"}
-  FR -->|"fail"| CS
-  FR -->|"pass"| VF{"verify<br/>run the KDF, check the verifier"}
-  VF -->|"wrong"| CS
-  VF -->|"right"| DC["decrypt with the recovered key"]
-  DC --> RE2["re-detect plaintext"] --> DET
-  CS -. "opt-in GPU tier" .-> GPU["batch the KDF on device"] -. "every hit re-checked on CPU" .-> VF
-  PRB -. "shortcut where one exists" .-> SC["key attack · known-plaintext · header decode<br/>— no password search"] --> DC
+  IN["Input file or bytes"] --> DET{"Detect"}
+  DET -->|container| UNP["Unpack entries:<br/>ZIP, tar, 7z, RAR, CFB, zstd/lz4, eml"]
+  DET -->|encrypted| PRB["Probe once into a Challenge:<br/>salt, iterations, verifier"]
+  DET -->|leaf| OUT["Return real content to the caller"]
+  UNP --> RE["Re-detect each entry"]
+  RE --> DET
+  PRB --> CS["Ordered candidate stream"]
+  CS --> FR{"Fast-reject?"}
+  FR -->|fail| CS
+  FR -->|pass| VF{"Verify?"}
+  VF -->|wrong| CS
+  VF -->|right| DC["Decrypt with the recovered key"]
+  DC --> RD["Re-detect plaintext"]
+  RD --> DET
+  CS -. GPU tier .-> GPU["Batch the KDF on device"]
+  GPU -. re-checked on CPU .-> VF
+  PRB -. shortcut .-> SC["Key attack, known-plaintext,<br/>or header decode"]
+  SC --> DC
 ```
 
 Candidates are tried highest-yield first: cached/promoted passwords and the

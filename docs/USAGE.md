@@ -251,8 +251,10 @@ unlocked almost for free.
 | `--swedish` | also try the built-in Swedish-targeted wordlist (common Swedish words/names/places + typical mutations, ordered most-probable-first) |
 | `--resume-from FILE` | import a recovered-password envelope (from an external cracker that solved an exported challenge) and try its password first — repeatable |
 | `--increment MIN:MAX` | expand each mask (from `--pattern`/config) into shortest-first prefix masks over the token-length range (hashcat `--increment`) |
+| `-1`/`-2`/`-3`/`-4` STR (aka `--custom-charset1..4`) | define mask custom charsets `?1`–`?4` on the command line (hashcat `-1..-4`), used by `--hcmask`/`--pattern` masks; wins over any `?1..?4` from a pattern file/config |
+| `--generate-rules N` | fold `N` reproducible random mangling rules into the rule pool (hashcat `-g`); `--generate-rules-seed S` fixes the seed |
 | `--combinator-left FILE` / `--combinator-right FILE` / `--combinator-sep S` | combinator attack: every left word + every right word, optional separator (hashcat `-a 1`) |
-| `--as SCHEME` | force a scheme for an input with no magic bytes, bypassing detection (currently `sqlcipher`) |
+| `--as SCHEME` | force a scheme for an input with no magic bytes (or a carrier-embedded one), bypassing detection: `sqlcipher`, `vbaproject` |
 | `--checkpoint FILE` | persist/resume the search position for a long single-target run (see [Checkpoint / resume](#checkpoint--resume)) |
 | `--no-default-list` | disable the built-in common-password list |
 
@@ -375,7 +377,10 @@ deterministic (masks, wordlists, chains — not `stdin`).
 | `-o`, `--out DIR` | write the decrypted tree under `DIR/<name>.extracted/` + a `manifest.json` |
 | `--extract-suffix S` | change the per-source directory suffix (default `.extracted`; `''` = the bare source name). Must be a single path segment (no `/` or `..`) |
 | `--results-file FILE` | append a JSON manifest per input to `FILE` |
+| `--outfile-format LIST` | emit found-password lines to `--results-file`/stdout in a field format: comma list of `1`=target, `2`=plain, `3`=hex-plain (e.g. `1,2`), joined by `:` (hashcat-style) |
+| `--reuse-output` | with `-o`: skip any source whose extracted output is already present and still valid (same content + candidate set), recorded per-output in `.xcrack-stamp` — a repeat extraction becomes near-instant (unlike `--found-cache`, which still re-verifies and re-extracts). `--session FILE` similarly skips searched files but keeps no `-o` output |
 | `--progress` | print live progress to stderr: files done/total, candidates, rate, elapsed, ETA |
+| `--status-timer N` | print a files-done/elapsed heartbeat to stderr every `N` seconds (independent of `--progress`) |
 | `--log-level LEVEL` | `debug\|info\|warn\|error` structured logging to stderr (never logs secrets) |
 | `--show-config` | print the effective configuration (flags + env + config file + defaults, merged) and exit — no cracking |
 | `--show-cache` | list the passwords held in the found-password cache / potfile and exit (needs `--found-cache`/`--remember`/`--potfile`) |

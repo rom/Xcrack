@@ -15,6 +15,25 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **CLI parity features (basic/intermediate gap review).**
+  - `-1/-2/-3/-4` (`--custom-charset1..4`): command-line mask custom charsets
+    `?1..?4` (hashcat `-1..-4`), used by `--hcmask`/`--pattern` masks.
+  - `--generate-rules N` (`--generate-rules-seed S`): fold N reproducible random
+    mangling rules into the rule pool (hashcat `-g`); `pattern.GenerateRules`
+    emits only rules that compile.
+  - `xcrack wordlist`: wordlist maintenance (hashcat-utils niche) — `--dedupe`,
+    `--sort`/`--sort-length`, `--min-length`/`--max-length`, `--split N`.
+  - `--outfile-format LIST`: found-password line format for `--results-file`/
+    stdout (1=target, 2=plain, 3=hex-plain).
+  - `--status-timer N`: a files-done/elapsed heartbeat every N seconds.
+- **`--reuse-output` output result cache.** With `-o`, record each source's
+  content hash + candidate signature + recovered passwords in a per-output
+  `.xcrack-stamp`, and on a repeat run skip any still-valid source entirely — no
+  verification KDF, no decrypt, no decompose, no rewrite. This is the gap behind
+  "why isn't a cached re-run instant?": `--found-cache` only *orders* candidates
+  (so the known password is tried first, skipping wrong-guess KDFs) but still
+  re-verifies and re-extracts every run; `--reuse-output` skips the file. A warm
+  `--reuse-output -o DIR samples/*` run drops from ~18s to ~0.02s.
 - **MS VBA project password recovery (MS-OVBA).** `xcrack vba-recover FILE` and
   `--as vbaproject` recover the VBA IDE "lock project for viewing" password from
   the DPB field of the VBA `PROJECT` stream (MS-OVBA 2.4.3 reversible Data
@@ -76,11 +95,24 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   `.extracted`; `''` = the bare source name). Validated as a single path segment
   (no `/` or `..`) so it can never redirect the write outside `--out`.
 
+### Tests
+- **`gold/` cross-validation fixture index.** A top-level `gold/README.md` records
+  the provenance (source tool/version or spec, licence, known answer, in-repo
+  path) of every externally-sourced cross-validation fixture, so cross-validation
+  survives the source moving/disappearing; fixtures stay committed in-tree with a
+  per-directory `ATTRIBUTION.md`. Committed `gold/vba/vba_oracle.py` (the MS-OVBA
+  reference generator for the VBA DPB fixtures, previously output-only; verified
+  to reproduce them). Filled two missing `ATTRIBUTION.md` files (the qpdf PDFs and
+  the header-encrypted `hdr.7z`/`hdr.rar`).
+
 ### Docs
 - **Mermaid attack-pipeline diagram** added to README.md ("How it works") and
   docs/CRACKING.md §1 (replacing the ASCII sketch): detect → probe → candidate
   stream → fast-reject → verify → decrypt → re-detect, with the opt-in GPU tier
-  and the verification-shortcut branch shown.
+  and the verification-shortcut branch shown. (Diamond labels shortened so GitHub's
+  renderer no longer clips them.)
+- FAQ: explain why a cached re-run isn't instant (candidate-ordering vs result
+  cache) and point to `--reuse-output`; USAGE documents the new flags.
 - CRACKING.md §3 + REFERENCES.md: record hashcat forum **thread-3665**
   ("Colliding password protected MS office 97-2003 documents") as the canonical
   reference for the Office 97/2000 40-bit MD5+RC4 key attack Xcrack already ships

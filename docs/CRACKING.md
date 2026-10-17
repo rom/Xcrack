@@ -20,20 +20,24 @@ cross-validation notes) see [`FILEFORMATS.md`](FILEFORMATS.md). For the attack
 
 ```mermaid
 flowchart TD
-  IN["input file / bytes"] --> DET{"detect by content<br/>(magic + structure, not extension)"}
-  DET -->|"container"| UNP["enumerate entries<br/>ZIP · tar · 7z · RAR · CFB · zstd/lz4 · eml"]
-  DET -->|"encrypted"| PRB["probe once → Challenge<br/>salt · iterations · verifier"]
-  DET -->|"leaf"| OUT["hand real content to the caller"]
-  UNP --> RE["re-detect each entry"] --> DET
-  PRB --> CS["ordered candidate stream"]
-  CS --> FR{"fast-reject<br/>1–2 byte check"}
-  FR -->|"fail"| CS
-  FR -->|"pass"| VF{"verify<br/>run the KDF, check the verifier — the expensive step"}
-  VF -->|"wrong"| CS
-  VF -->|"right"| DC["decrypt / stream plaintext with the recovered key"]
-  DC --> RE2["re-detect plaintext"] --> DET
-  CS -. "opt-in GPU tier (§4)" .-> GPU["batch the KDF on device"] -. "every hit re-checked on CPU" .-> VF
-  PRB -. "shortcut where one exists (§3)" .-> SC["key attack · known-plaintext · header decode<br/>— recovers the key/password with no search"] --> DC
+  IN["Input file or bytes"] --> DET{"Detect<br/>by content"}
+  DET -->|container| UNP["Unpack entries:<br/>ZIP, tar, 7z, RAR, CFB, zstd/lz4, eml"]
+  DET -->|encrypted| PRB["Probe once into a Challenge:<br/>salt, iterations, verifier"]
+  DET -->|leaf| OUT["Return real content to the caller"]
+  UNP --> RE["Re-detect each entry"]
+  RE --> DET
+  PRB --> CS["Ordered candidate stream"]
+  CS --> FR{"Fast-reject?"}
+  FR -->|fail| CS
+  FR -->|pass| VF{"Verify?<br/>run KDF"}
+  VF -->|wrong| CS
+  VF -->|right| DC["Decrypt / stream plaintext"]
+  DC --> RD["Re-detect plaintext"]
+  RD --> DET
+  CS -. GPU tier .-> GPU["Batch the KDF on device §4"]
+  GPU -. re-checked on CPU .-> VF
+  PRB -. shortcut .-> SC["Key attack, known-plaintext,<br/>or header decode §3"]
+  SC --> DC
 ```
 
 The engine probes a file's crypto once, then tests many candidates cheaply, and
