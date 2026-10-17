@@ -437,3 +437,59 @@ func TestZipCLIInterop(t *testing.T) {
 		t.Fatalf("interop content mismatch:\n got %q\nwant %q", got, plain)
 	}
 }
+
+// TestDecryptArchiveWithStart proves cross-entry key reuse: one shared pre-entry
+// key state (NewKeys(password), which is exactly what a known-plaintext recovery
+// rolls back to) decrypts every ZipCrypto entry in the archive, and a wrong
+// state decrypts none (CRC-gated, no false positives).
+func TestDecryptArchiveWithStart(t *testing.T) {
+	pw := []byte("s3cr3t-reused")
+	files := []fixtureFile{
+		{"a.txt", []byte("alpha payload, entry one")},
+		{"b.txt", bytes.Repeat([]byte("beta "), 300)},
+		{"c.bin", []byte{0, 1, 2, 3, 4, 5, 6, 7, 8, 9}},
+	}
+	archive := buildZipCrypto(t, pw, files)
+
+	start := zipcrypto.NewKeys(pw) // the archive-wide shared state
+	got, err := DecryptArchiveWithStart(bytes.NewReader(archive), int64(len(archive)), start)
+	if err != nil {
+		t.Fatalf("DecryptArchiveWithStart: %v", err)
+	}
+	byName := map[string]ArchivePlain{}
+	for _, r := range got {
+		byName[r.Name] = r
+	}
+	for _, f := range files {
+		r, ok := byName[f.name]
+		if !ok || !r.OK {
+			t.Fatalf("%s: not decrypted (ok=%v)", f.name, r.OK)
+		}
+		if !bytes.Equal(r.Plaintext, f.plain) {
+			t.Fatalf("%s: plaintext mismatch", f.name)
+		}
+	}
+
+	// A wrong shared state recovers nothing (CRC fails on every entry).
+	bad, _ := DecryptArchiveWithStart(bytes.NewReader(archive), int64(len(archive)), zipcrypto.NewKeys([]byte("wrong")))
+	for _, r := range bad {
+		if r.OK {
+			t.Fatalf("%s: wrong key state falsely reported a hit", r.Name)
+		}
+	}
+}
+
+// TestDecryptArchiveWithStartSkipsAES confirms AES and unencrypted entries are
+// skipped (OK=false) while the ZipCrypto entry in a mixed archive decrypts.
+func TestDecryptArchiveWithStartSkipsAES(t *testing.T) {
+	pw := []byte("mixbag")
+	zc := buildZipCrypto(t, pw, []fixtureFile{{"zc.txt", []byte("zipcrypto entry")}})
+	start := zipcrypto.NewKeys(pw)
+	got, err := DecryptArchiveWithStart(bytes.NewReader(zc), int64(len(zc)), start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || !got[0].OK || string(got[0].Plaintext) != "zipcrypto entry" {
+		t.Fatalf("zipcrypto entry not decrypted: %+v", got)
+	}
+}

@@ -903,6 +903,29 @@ from the entry-start state via bkcrack (re-validated locally). The engine can do
 the same automatically for an archive entry via `Options.KnownPlaintext{For,
 Offload}` (e.g. a STORED entry whose content an embedder already holds).
 
+Because every entry in a ZipCrypto archive shares one password-derived
+pre-header key state, that single recovery unlocks the *whole* archive. Add
+`--zip ARCHIVE` to a `--decrypt` run and `kp` seeds the recovered entry-start
+state into every other entry and decrypts them all with no further search —
+`--zip-out DIR` writes the decrypted files, otherwise it lists what decrypts.
+Each entry is independently CRC-re-validated (so a wrong state decrypts nothing),
+and WinZip-AES / non-ZipCrypto entries are skipped.
+
+The 40-bit **PDF** RC4 schemes have the same password-independent key
+bottleneck as legacy Office: `xcrack pdf-keyattack FILE` sweeps the 2^40 file-key
+space against the `/U` verifier and recovers the key for a V1/R2 (or 40-bit
+R3/R4) PDF with no password, shardable with `--shard i/N` and parallel over
+`--workers`. 128-bit RC4 and the AES PDF schemes have no such shortcut and the
+command declines them.
+
+**Microsoft Access** goes further still: a Jet (`.mdb`, Access 97–2003) database
+stores its password merely XOR-obfuscated in the header, so there is nothing to
+crack at all. `xcrack access-recover FILE` de-obfuscates it (the fixed header
+mask, and on Jet4 a second mask folded from the creation date) and prints the
+password directly. ACE (`.accdb`, Access 2007+) uses a real Office-style KDF with
+no shortcut and is reported as needing a password search. The Jet decode is
+cross-validated against jackcess, an independent implementation.
+
 Two further knobs: the compute-heavy in-process attack honors context
 cancellation (`RecoverKeysCtx`), so an embedder can bound it; and *sparse* known
 plaintext (scattered known bytes) is available through the offload by passing

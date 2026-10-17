@@ -29,7 +29,7 @@ func TestResolveRange(t *testing.T) {
 		{"1/0", 0, 0, 0, 0, true}, // N == 0
 	}
 	for _, c := range cases {
-		lo, hi, err := resolveRange(c.shard, c.start, c.max)
+		lo, hi, err := resolveRange(c.shard, c.start, c.max, max)
 		if c.wantErr {
 			if err == nil {
 				t.Errorf("resolveRange(%q,%d,%d): want error", c.shard, c.start, c.max)

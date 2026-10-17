@@ -53,7 +53,7 @@ check · **attack** = the primary recovery path.
 
 | Format | KDF / cipher | Verifier | Attack & shortcuts |
 |--------|--------------|----------|--------------------|
-| **ZIP — ZipCrypto** | bespoke 32-bit×3 key schedule; PKWARE stream cipher | 1 check byte (1/256), then CRC32 of the content | Dictionary/rules, **and a password-free known-plaintext key recovery** (Biham–Kocher) — see §3. |
+| **ZIP — ZipCrypto** | bespoke 32-bit×3 key schedule; PKWARE stream cipher | 1 check byte (1/256), then CRC32 of the content | Dictionary/rules, **a password-free known-plaintext key recovery** (Biham–Kocher), **and cross-entry reuse** — one recovery decrypts the whole archive (`kp --zip`) — see §3. |
 | **ZIP — WinZip-AES** (AE-1/2) | PBKDF2-HMAC-SHA1 ×1000; AES-CTR | 2-byte verifier, then HMAC-SHA1 | Dictionary/rules; the PBKDF2 step is GPU-accelerable. Per-entry salt ⇒ no cross-entry key reuse. |
 | **7-Zip** (AES-256) | SHA-256 iterated; AES-256-CBC | none cheap — decrypt + CRC | Dictionary/rules; one archive password unlocks all entries. |
 | **RAR5** (AES-256) | PBKDF2-HMAC-SHA256 (custom chain); | **8-byte PswCheck in the header — verify with no decrypt** | Dictionary/rules; the fast 8-byte check serves every entry and `-hp` headers. |
@@ -73,7 +73,7 @@ check · **attack** = the primary recovery path.
 
 | Format | KDF / cipher | Verifier | Attack & shortcuts |
 |--------|--------------|----------|--------------------|
-| **PDF** (RC4 V1–V2, AESV2, AESV3 R5/R6) | MD5 (R2–R4) / SHA-2 "2.B" (R6) | `/U` (user) and, via `/O`, the owner password | Dictionary/rules on user **and** owner password; **owner/permission-only PDFs open with the empty password** (§3). |
+| **PDF** (RC4 V1–V2, AESV2, AESV3 R5/R6) | MD5 (R2–R4) / SHA-2 "2.B" (R6) | `/U` (user) and, via `/O`, the owner password | Dictionary/rules on user **and** owner password; **owner/permission-only PDFs open with the empty password**; **a direct 40-bit file-key attack** on V1/R2 (and 40-bit R3/R4) RC4 (`pdf-keyattack`) — see §3. |
 | **ODF** | PBKDF2-HMAC-SHA1; AES-256-CBC or -GCM | SHA-256 1K checksum (CBC) / GCM tag | Dictionary/rules; PBKDF2 GPU-accelerable. |
 | **Apple iWork** | PBKDF2-HMAC-SHA1; AES-128 | `sha256(plain[:32]) == plain[32:64]` | Dictionary/rules; the embedded `.iwph` **hint** is tried first. |
 | **Encrypted DMG** (v1/v2) | PBKDF2-HMAC-SHA1; 3DES-unwrap + AES-CBC | double-padding (v1) / 8 NUL bytes (v2) | Dictionary/rules; PBKDF2 GPU-accelerable (high iteration — a prime target). |
@@ -98,7 +98,8 @@ check · **attack** = the primary recovery path.
 
 | Format | Status |
 |--------|--------|
-| **MS Access** (.mdb Jet, .accdb ACE) | Detection/identification only; password *recovery* is staged pending a validated oracle. Jet stores the DB password XOR-obfuscated in the header (recoverable with **no cracking**) — see §3. |
+| **MS Access — Jet** (.mdb, Access 97–2003) | Password recovered directly from the header XOR obfuscation — **no cracking** (`xcrack access-recover`), see §3. |
+| **MS Access — ACE** (.accdb, Access 2007+) | Detection/identification only; the Office-style RC4/AES KDF has no shortcut, so a password search is the only route. |
 
 ---
 
@@ -116,11 +117,37 @@ bypass or shrink the search:
   Implemented in-tree (`xcrypto/scheme/zipcrypto`) with an external bkcrack
   offload (`--bkcrack`); results are CRC-re-validated, so a wrong known-plaintext
   cannot false-positive.
+- **ZipCrypto cross-entry key reuse.** Every entry in a ZipCrypto archive shares
+  one password and hence one pre-header key state, so a single recovery unlocks
+  the whole archive. Once `xcrack kp --decrypt` has recovered that state (from a
+  known-plaintext key recovery *or* a found password), `--zip ARCHIVE` seeds it
+  into every other entry and decrypts them all with **no further search**
+  (`--zip-out DIR` writes them out). Each entry is independently CRC-re-validated
+  (`zip.DecryptArchiveWithStart`); AES and non-ZipCrypto entries are skipped.
 - **Office 97/2000 40-bit RC4 key attack ("Thunder Tables").** The password
   enters only as `trunc = MD5(UTF16LE(pw))[:5]` — 40 bits — and the verifier and
   every block key derive from `trunc` and the salt alone. `xcrack office-keyattack`
   sweeps the 2^40 trunc space against the verifier and recovers the document key
   regardless of password length/complexity. Shardable and GPU-friendly.
+- **PDF 40-bit RC4 key attack (V1/R2, and 40-bit R3/R4).** The PDF file key is a
+  single MD5 truncated to 5 bytes — 40 bits — independent of the password's
+  length, and the `/U` verifier, every per-object key and the whole document are
+  functions of that file key alone. `xcrack pdf-keyattack` sweeps the 2^40
+  file-key space against `/U` and recovers the key with no password, using only
+  the public `/U`, `/ID` and revision (not `/O`, `/P`, or the password). The
+  common R2 case runs an allocation-free inline-RC4 hot loop; shardable
+  (`--shard i/N`) and parallel (`--workers`). 128-bit RC4 and the AES schemes
+  (AESV2/AESV3) have no such bottleneck and the command declines them. Validated
+  against a real 40-bit PDF produced by qpdf (`keyattack_test.go`).
+- **MS Access (Jet) header XOR.** Jet3/Jet4 store the database password
+  XOR-obfuscated with fixed, public material — the header page is masked with a
+  fixed 128-byte mask, and (Jet4 only) the password field is additionally masked
+  with a 4-byte value folded from the creation date. `xcrack access-recover`
+  reverses both and reads the password straight out of the header with **no
+  cracking** (`xfileformats/formats/access.RecoverJetPassword`). ACE (.accdb,
+  Access 2007+) uses a real Office-style KDF and is declined. Cross-validated
+  against jackcess (an independent implementation that produced a known-password
+  Jet4 fixture; `jet_test.go`), with the decoder fuzzed against hostile headers.
 - **VelvetSweatshop / empty password.** Excel "encrypts" a read-only-recommended
   workbook with the fixed key `VelvetSweatshop`; owner/permission-only PDFs and
   read-only Office documents open with the **empty** password. Both are the first
@@ -134,22 +161,12 @@ bypass or shrink the search:
 
 ### Known, real, and staged (documented, not yet implemented)
 
-These are genuine non-brute-force recoveries deliberately left staged, mostly
-for lack of a validated oracle in this build:
-
-- **MS Access (Jet) header XOR.** Jet3/Jet4 store the database password
-  XOR-obfuscated with a fixed, per-Office-version mask in the file header — it is
-  recoverable with **no cracking at all**. The `access` format already detects
-  and names the container; recovery is staged pending a cross-validation oracle.
-- **ZipCrypto cross-entry key reuse.** Every entry in a ZipCrypto archive shares
-  one password and hence one pre-header key state; after a single known-plaintext
-  recovery, every other entry in the same archive could be decrypted with no
-  further search by seeding from that shared state. The rollback to the shared
-  state already exists; propagating it to sibling entries in the engine is the
-  remaining step.
-- **PDF 40-bit RC4 (V1/R2) key attack.** The 40-bit file key is independent of
-  password length — the direct analogue of the Office Thunder-Tables attack, and
-  a natural GPU target. Currently only the password is attacked.
+Nothing is currently staged here — the three weaknesses that were staged in the
+previous cycle (ZipCrypto cross-entry reuse, PDF 40-bit RC4, and MS Access Jet
+header XOR) are all implemented and listed above, each cross-validated against
+an external oracle. ACE (.accdb, Access 2007+) is the one Access variant without
+a shortcut: its Office-style RC4/AES KDF leaves only a password search, so it is
+identified but not key-attacked.
 
 ### Judged not worth it / not applicable (and why)
 

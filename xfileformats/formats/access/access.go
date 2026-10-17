@@ -4,12 +4,11 @@
 // signature at offset 4. The format recognizes and names them so `identify`
 // reports the right application and the engine can surface them in a scan.
 //
-// Scope note: recovering an Access database password is NOT implemented here.
-// Jet stores the database password XOR-obfuscated in the header and ACE uses an
-// RC4/office-style scheme, but there is no validated test oracle in this build
-// to cross-check an implementation against, and the project ships only crypto
-// it has verified against an oracle. So this format identifies the file (and
-// whether it carries a database password) and leaves recovery staged.
+// Jet (.mdb) database passwords are recovered directly, with no cracking:
+// RecoverJetPassword (jet.go) reverses the header XOR obfuscation that Jet3/Jet4
+// use to store the password, cross-validated against jackcess. ACE (.accdb,
+// Access 2007+) uses a real Office-style RC4/AES KDF with no such shortcut and
+// is identified only — its recovery remains out of scope here.
 package access
 
 import (
