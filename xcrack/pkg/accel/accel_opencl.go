@@ -23,6 +23,7 @@ import (
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
+	"encoding/binary"
 	"fmt"
 	"hash"
 	"os"
@@ -64,6 +65,9 @@ var pdfKeySrc string
 
 //go:embed kernel_vba_sha1.cl
 var vbaSHA1Src string
+
+//go:embed kernel_pdf_thunderchain.cl
+var pdfChainSrc string
 
 // maxSaltedMsg bounds the padded message (password + salt) the batch salted-SHA-1
 // kernel handles: its MSGBUF is 256 bytes and SHA-1 padding needs 9, so the true
@@ -115,6 +119,8 @@ type clAccel struct {
 	pdfKeyProg     C.cl_program          // released in Close
 	vbaSHA1        []C.cl_kernel         // salted SHA-1 batch (hashcat-110 / VBA), one per device
 	vbaSHA1Prog    C.cl_program          // released in Close
+	pdfChain       []C.cl_kernel         // PDF R2 thunder-table rainbow-chain generator, one per device
+	pdfChainProg   C.cl_program          // released in Close
 	optimalBatch   int                   // autotuned per-dispatch batch size (BatchTuner)
 }
 
@@ -251,6 +257,15 @@ func Detect() (Accelerator, error) {
 	a.vbaSHA1Prog = vbProg
 	a.vbaSHA1 = vbKerns
 
+	// PDF R2 thunder-table rainbow-chain generator (PDFThunderChainer).
+	pcProg, pcKerns, berr := buildKernels(ctx, devs, pdfChainSrc, "pdf_thunderchain")
+	if berr != nil {
+		a.Close()
+		return nil, berr
+	}
+	a.pdfChainProg = pcProg
+	a.pdfChain = pcKerns
+
 	for _, d := range devs {
 		a.devices = append(a.devices, describeDevice(d))
 	}
@@ -380,6 +395,14 @@ func (a *clAccel) Close() error {
 	}
 	if a.vbaSHA1Prog != nil {
 		C.clReleaseProgram(a.vbaSHA1Prog)
+	}
+	for _, k := range a.pdfChain {
+		if k != nil {
+			C.clReleaseKernel(k)
+		}
+	}
+	if a.pdfChainProg != nil {
+		C.clReleaseProgram(a.pdfChainProg)
 	}
 	for _, q := range a.queues {
 		if q != nil {
@@ -954,6 +977,56 @@ func (a *clAccel) saltedSHA1One(dev int, passwords [][]byte, salt []byte) ([][]b
 	return res, nil
 }
 
+// PDFThunderChain computes rainbow-chain endpoints for the PDF R2 thunder table
+// on device 0, implementing PDFThunderChainer. n must be a power of two; the
+// reduction uses the mask n-1, which equals `% n` for the power-of-two key space,
+// so the endpoints are byte-identical to the Go walk. Chains are swept in chunks
+// to bound the output buffer.
+func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
+	if n == 0 || (n&(n-1)) != 0 || chainLen <= 0 || count == 0 {
+		return nil, ErrUnsupported
+	}
+	out := make([]uint64, count)
+	dev := 0
+	kern := a.pdfChain[dev]
+	queue := a.queues[dev]
+	mask := n - 1
+	const chunk = uint64(1) << 20 // endpoints per enqueue (8 MiB out buffer)
+	var errc C.cl_int
+	cMask := C.cl_ulong(mask)
+	cChainLen := C.cl_uint(chainLen)
+	cSeed := C.cl_ulong(seed)
+	for base := uint64(0); base < count; base += chunk {
+		nn := chunk
+		if base+nn > count {
+			nn = count - base
+		}
+		outBuf := C.clCreateBuffer(a.ctx, C.CL_MEM_WRITE_ONLY, C.size_t(nn*8), nil, &errc)
+		if errc != C.CL_SUCCESS {
+			return nil, fmt.Errorf("accel: clCreateBuffer(thunderchain): %d", int(errc))
+		}
+		cStart := C.cl_ulong(startIdx + base)
+		cN := C.cl_uint(nn)
+		C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(cMask)), unsafe.Pointer(&cMask))
+		C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cChainLen)), unsafe.Pointer(&cChainLen))
+		C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(cSeed)), unsafe.Pointer(&cSeed))
+		C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(cStart)), unsafe.Pointer(&cStart))
+		C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
+		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
+		global := C.size_t(nn)
+		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+			C.clReleaseMemObject(outBuf)
+			return nil, fmt.Errorf("accel: clEnqueueNDRangeKernel(thunderchain): %d", int(r))
+		}
+		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(nn*8), unsafe.Pointer(&out[base]), 0, nil, nil); r != C.CL_SUCCESS {
+			C.clReleaseMemObject(outBuf)
+			return nil, fmt.Errorf("accel: clEnqueueReadBuffer(thunderchain): %d", int(r))
+		}
+		C.clReleaseMemObject(outBuf)
+	}
+	return out, nil
+}
+
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
 
 // autotuneBatch measures SHA-1 derivation throughput at a few batch sizes and
@@ -1172,7 +1245,50 @@ func GPUSelfTest() error {
 	} else {
 		return fmt.Errorf("GPU self-test: accelerator does not implement SaltedSHA1Hasher")
 	}
+
+	// PDF R2 thunder-table chain generator (PDFThunderChainer): a few chain
+	// endpoints from the device must equal the CPU rainbow walk (r2 image +
+	// column/seed reduction) that Lookup inverts with.
+	if tc, ok := a.(PDFThunderChainer); ok {
+		const bits = 20
+		n := uint64(1) << bits
+		mask := n - 1
+		cpuImg := func(idx uint64) uint64 {
+			u := pdfRC4U(keyLE5(idx), pdfPad, 1) // RC4(key5, pad), R2 image source
+			return binary.LittleEndian.Uint64(u[:8])
+		}
+		cpuChain := func(start uint64, chainLen int, seed uint64) uint64 {
+			k := start
+			for c := 0; c < chainLen; c++ {
+				k = (cpuImg(k) + seed + uint64(c)) & mask
+			}
+			return k
+		}
+		for _, seed := range []uint64{0, 0x9E3779B97F4A7C15} {
+			const chainLen, count = 6, 16
+			got, err := tc.PDFThunderChain(n, chainLen, seed, 0, count)
+			if err != nil {
+				return fmt.Errorf("GPU self-test thunderchain (seed %#x): %w", seed, err)
+			}
+			if len(got) != count {
+				return fmt.Errorf("GPU self-test thunderchain: got %d endpoints, want %d", len(got), count)
+			}
+			for i := uint64(0); i < count; i++ {
+				if want := cpuChain(i, chainLen, seed); got[i] != want {
+					return fmt.Errorf("GPU self-test thunderchain MISMATCH (seed %#x, chain %d): gpu %#x cpu %#x", seed, i, got[i], want)
+				}
+			}
+		}
+	} else {
+		return fmt.Errorf("GPU self-test: accelerator does not implement PDFThunderChainer")
+	}
 	return nil
+}
+
+// keyLE5 is the 5-byte little-endian encoding of a 40-bit key index (for the
+// thunder-chain self-test's CPU reference).
+func keyLE5(idx uint64) []byte {
+	return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}
 }
 
 // pdfPad is the 32-byte PDF Standard Security Handler padding string (used to

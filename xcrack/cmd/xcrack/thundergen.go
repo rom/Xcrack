@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto/scheme/pdf"
 )
 
@@ -28,6 +29,7 @@ func runThunderGen(args []string) int {
 	chains := fs_.Int("chains", 1<<20, "chains per sub-table m")
 	tables := fs_.Int("tables", 4, "independent sub-tables (more => higher coverage)")
 	workers := fs_.Int("workers", 0, "generation workers (0 = all cores)")
+	gpu := fs_.Bool("gpu", false, "offload chain generation to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
 	dryRun := fs_.Bool("dry-run", false, "print the generation plan (work, size, time estimate) and exit")
 	if err := fs_.Parse(args); err != nil {
 		return 2
@@ -69,9 +71,30 @@ func runThunderGen(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
+	// Optional GPU offload of the chain walk — the heavy part of generation. The
+	// chain is byte-identical to the CPU walk, so the table is inverted by the same
+	// CPU lookup; GenerateTable falls back to the CPU per sub-table if the device
+	// errors, so a GPU hiccup never corrupts the table.
+	var chain pdf.ChainComputer
+	if *gpu {
+		if acc, derr := accel.Detect(); derr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack thunder-gen: --gpu unavailable (%v); generating on CPU\n", derr)
+		} else {
+			defer acc.Close()
+			if c := gpuChainComputer(acc); c != nil {
+				chain = c
+				for _, d := range acc.Devices() {
+					fmt.Fprintf(os.Stderr, "  offloading chains to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
+				}
+			} else {
+				fmt.Fprintln(os.Stderr, "xcrack thunder-gen: --gpu device has no thunder-chain kernel; generating on CPU")
+			}
+		}
+	}
+
 	started := time.Now()
 	tbl, err := pdf.GenerateTable(ctx, pdf.TableParams{
-		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers,
+		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers, Chain: chain,
 	})
 	if err != nil {
 		if ctx.Err() != nil {
@@ -103,6 +126,20 @@ func runThunderGen(args []string) int {
 		*out, humanBytes(uint64(n)), tbl.Chains(), tbl.KeyspaceBits(), tbl.ChainLen(), *tables, roundDur(time.Since(started)))
 	fmt.Println("use it with: xcrack pdf-keyattack --table " + *out + " FILE.pdf")
 	return 0
+}
+
+// gpuChainComputer adapts an accelerator's PDFThunderChainer capability to the
+// pdf.ChainComputer seam, or returns nil when the backend lacks it (so
+// GenerateTable uses the CPU walk). The accelerator must outlive the returned
+// closure (the caller keeps it open until generation finishes).
+func gpuChainComputer(acc accel.Accelerator) pdf.ChainComputer {
+	tc, ok := acc.(accel.PDFThunderChainer)
+	if !ok {
+		return nil
+	}
+	return func(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
+		return tc.PDFThunderChain(n, chainLen, seed, startIdx, count)
+	}
 }
 
 func humanCount(n uint64) string {

@@ -415,6 +415,7 @@ offload via `hashline`/`export-challenge` instead.
 | **MD5+RC4 key search** (`oldoffice_md5rc4`) | **Office 97/2000 40-bit RC4** (`office-keyattack --gpu`) — sweeps the 2^40 trunc keyspace on the device (a key-search kernel, not a per-password batch) |
 | **RC4 key search** (`pdf_rc4keysearch`) | **PDF 40-bit RC4** (`pdf-keyattack --gpu`) — sweeps the 2^40 file-key space (V1/R2 and 40-bit R3/R4) on the device; RC4-only, the one per-document MD5 is precomputed on the host |
 | **Salted SHA-1 batch** (`vba_sha1`) | **MS VBA project** password (`SHA1(pass‖salt)`, hashcat's `sha1($pass.$salt)` / mode 110) — a whole candidate batch hashed per dispatch |
+| **Rainbow-chain generator** (`pdf_thunderchain`) | **PDF V1/R2 Thunder Tables** (`thunder-gen --gpu`) — builds the precomputed TMTO table by walking rainbow chains on the device (one work-item per chain), the heavy one-time cost of a table |
 
 ODF's start-key hash and Office's first hash are done per-candidate on the CPU;
 the device runs the expensive loop. RAR5's check value is derived directly by
