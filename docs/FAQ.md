@@ -19,8 +19,12 @@ Archives (ZipCrypto, WinZip-AES, 7-Zip, RAR4/RAR5), Microsoft Office (legacy
 shared Office path), PDF, OpenDocument (ODF), Apple iWork, encrypted DMG, keys
 and stores (OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY .ppk, SQLCipher, KeePass
 KDBX3/KDBX4), Ethereum keystore wallets, age (passphrase), and symmetric
-OpenPGP (`gpg -c`). The full catalogue with cross-validation notes is in
-[`FILEFORMATS.md`](FILEFORMATS.md).
+OpenPGP (`gpg -c`). It also unpacks the plain (non-encrypted) compressors and
+containers — tar, gzip, bzip2, xz/lzma, **zstd**, **lz4**, and `.eml`/MIME — so a
+protected file wrapped in one (e.g. `.tar.zst` or `.tar.lz4`) is reached and
+cracked. The full catalogue with cross-validation notes is in
+[`FILEFORMATS.md`](FILEFORMATS.md); the vocabulary is in
+[`TERMINOLOGY.md`](TERMINOLOGY.md).
 
 **How does it know the format?** By content, not extension: each format reports a
 confidence from a bounded peek of the file head. Container formats (ZIP, Office

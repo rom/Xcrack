@@ -151,7 +151,9 @@ Apple iWork (Pages/Numbers/Keynote), KeePass KDBX4 (.kdbx), Apple encrypted DMG
 | ✅ | **ODF AES-256-GCM** | ODF 1.3's authenticated AES-256-GCM variant, alongside the existing AES-256-CBC (the GCM tag is the verifier; no false positives). Validated by round-trip (Go stdlib GCM) and the CBC path cross-validated against a real LibreOffice 24.2 document. |
 | ⬜ | Hangul HWP | Remaining document suite. |
 | 🔬 | Full-volume: BitLocker, VeraCrypt, LUKS, FileVault | Large, separate effort + threat review. |
-| ⬜ | More codecs: zstd, lz4, brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth. |
+| ✅ | **Codecs — zstd & lz4** | Single-stream compressors wired as containers (`xfileformats/formats/archive/codec.go`), so a file wrapped in a modern codec — most importantly `.tar.zst` / `.tar.lz4`, where the inner tar and any encrypted file in it were previously unreachable — is decompressed and recursed into. Pure-Go decoders already in the module (`klauspost/compress`, `pierrec/lz4`); bounded by `maxDecompressed` and the engine budgets. Round-trip + `.tar.zst` recursion tests. |
+| ⬜ | More codecs: brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth (zstd/lz4 shipped above). |
+| ⬜ | More container parsers: cpio, ar, CAB, ISO 9660/UDF | New parsers (no pure-Go dep in tree yet); needed for installer/image carriers. |
 
 ## Out of scope (non-goals)
 

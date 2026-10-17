@@ -16,6 +16,9 @@ Xcrack and its standalone formats library, **Xfileformats**.
   cryptanalysis exploited (or staged), and what the GPU tier accelerates.
 - **[FAQ](FAQ.md)** — quick answers on formats, orchestration, methods, KDFs,
   ciphers, shortcuts, candidate ordering, cryptanalysis, config and CLI options.
+- **[Terminology](TERMINOLOGY.md)** — the glossary: engine concepts, KDFs,
+  ciphers & modes, formats, attacks & shortcuts, and the abbreviations/TLAs that
+  recur across these docs.
 - **[References](REFERENCES.md)** — the cryptography, cryptanalysis, and
   candidate/attack methods Xcrack uses, with primary references and commentary.
 - **[Changelog](CHANGELOG.md)** — notable changes, grouped by the pull request
@@ -56,13 +59,21 @@ context, the options weighed, and the consequences.
 
 ## Terminology
 
-| Term | Meaning |
-| ---- | ------- |
-| **Candidate** | A single password string to test against a file. |
-| **Challenge** | The crypto material (salt, verifier, KDF parameters) a format exposes so candidates can be tested without re-reading the whole file. |
-| **Encryption layer** | A file (or entry) that is password-protected and must be decrypted. |
-| **Container layer** | A file (or entry) that holds other files (an archive or compound document) and must be unpacked. |
-| **Node** | One position in the decomposition tree — a file at some depth, with its format, the password that unlocked it (if any), its content, and its children. |
-| **Leaf** | A node that is neither encrypted nor a container: real content handed back to the caller. |
-| **Password promotion** | Trying a password that unlocked an outer layer first on inner layers, since nested packaging reuses passwords. |
-| **Budget / limits** | The caps (depth, total bytes, node count, compression ratio, time) that bound work and defeat decompression bombs. |
+The glossary has moved to **[TERMINOLOGY.md](TERMINOLOGY.md)** and been extended
+well beyond the core engine terms to cover KDFs, ciphers & modes, file formats &
+containers, attacks & cryptanalysis shortcuts, acceleration, and the
+abbreviations/TLAs used throughout the docs. The essentials:
+
+- **Candidate** — a single password string to test against a file.
+- **Challenge** — the crypto material (salt, verifier, KDF parameters) a format
+  exposes so candidates can be tested without re-reading the whole file.
+- **Encryption layer / Container layer** — a file that must be decrypted / a file
+  that holds other files and must be unpacked.
+- **Node / Leaf** — one position in the decomposition tree / a node that is
+  neither encrypted nor a container (real content handed back to the caller).
+- **Password promotion** — trying a password that unlocked an outer layer first
+  on inner layers, since nested packaging reuses passwords.
+- **Budget / limits** — the caps (depth, bytes, node count, ratio, time) that
+  bound work and defeat decompression bombs.
+
+→ **Full glossary: [TERMINOLOGY.md](TERMINOLOGY.md).**

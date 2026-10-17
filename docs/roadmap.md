@@ -28,16 +28,19 @@ they are not date-bound. Each phase leaves `main` releasable.
   - ✅ **ODF** (LibreOffice/OpenOffice): modern **AES-256-CBC** (PBKDF2-HMAC-SHA1,
     SHA-256/SHA-1 start key, 1K checksum). Legacy Blowfish-CFB is detected and
     reported as unsupported.
-  - ✅ **archive unpackers:** tar, gzip, bzip2, xz/lzma, **7z**, **rar** (4.x + 5.x);
-    `.eml`/MIME attachment extraction.
+  - ✅ **archive unpackers:** tar, gzip, bzip2, xz/lzma, **zstd**, **lz4**, **7z**,
+    **rar** (4.x + 5.x); `.eml`/MIME attachment extraction. `.tar.zst` / `.tar.lz4`
+    and any file wrapped in a modern codec are decompressed and recursed into.
   - ✅ **legacy MS Office** (`.doc/.xls/.ppt`): RC4 CryptoAPI (Office XP/2003),
     Office 97/2000 RC4, and XOR obfuscation. The RC4 CryptoAPI decryption is
     cross-validated byte-for-byte against gold-standard decrypted Word, Excel,
     and PowerPoint documents. Known limitations: Word XOR *body* reconstruction
     is not implemented (no reference oracle); only the main document streams are
     decrypted.
-- **Document explosion:** full OOXML/OLE part decomposition behind
-  `--explode-documents`.
+- ✅ **Document explosion:** full OOXML/OLE part decomposition behind
+  `--explode-documents` (ADR 0007) — an opt-in that decomposes an Office document
+  into its internal parts so the engine can recurse into each, rather than
+  treating the document as an opaque leaf.
 - ✅ **Concurrency ergonomics:** `--batch-size`, `--max-duration`, `--throttle`
   (and `--workers`/`--file-jobs`/`--max-procs`/`--timeout`); `--input-list`
   streaming.
