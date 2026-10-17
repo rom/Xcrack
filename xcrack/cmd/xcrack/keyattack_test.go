@@ -75,7 +75,7 @@ func TestSweepKeyspaceRecovers(t *testing.T) {
 	}
 	hi := idx + 4
 
-	trunc, found, err := sweepKeyspace(context.Background(), ch, lo, hi, 2, false)
+	trunc, found, err := sweepKeyspace(context.Background(), ch, lo, hi, 2, false, false)
 	if err != nil || !found {
 		t.Fatalf("sweepKeyspace found=%v err=%v", found, err)
 	}

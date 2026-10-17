@@ -4,6 +4,7 @@ package accel
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -11,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/rom/xcrypto/prim"
+	"github.com/rom/xcrypto/scheme/officebinary"
 )
 
 // TestGPUSelfTest validates the OpenCL PBKDF2-HMAC-SHA1 kernel against the Go
@@ -30,6 +32,57 @@ func TestGPUSelfTest(t *testing.T) {
 	}
 	for _, d := range a.Devices() {
 		t.Logf("device: %s / %s (%s, %d CU)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
+	}
+}
+
+// TestGPUOldOfficeKeySearch cross-validates the Office 97/2000 40-bit MD5+RC4
+// key-search kernel against the CPU reference (officebinary.RC4KeyAttack): for a
+// known trunc the device must recover exactly it, the CPU key-attack must find
+// the same trunc over the same window, and officebinary.VerifyRC4Trunc must
+// accept it. A window that excludes the trunc must return not-found.
+func TestGPUOldOfficeKeySearch(t *testing.T) {
+	a, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	defer a.Close()
+	ks, ok := a.(OldOfficeKeySearcher)
+	if !ok {
+		t.Skip("accelerator does not implement OldOfficeKeySearcher")
+	}
+	salt := []byte("0123456789abcdef")
+	for _, idx := range []uint64{0, 7, 0x0102030405} {
+		trunc := []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}
+		encV, encVH := oldOfficeVerifier(trunc, salt)
+
+		// CPU reference must accept this trunc.
+		if okv, _ := officebinary.VerifyRC4Trunc(trunc, salt, encV, encVH); !okv {
+			t.Fatalf("idx %#x: officebinary.VerifyRC4Trunc rejected the constructed verifier", idx)
+		}
+		start := uint64(0)
+		if idx > 2048 {
+			start = idx - 2048
+		}
+		// GPU sweep finds it.
+		got, found, err := ks.OldOfficeKeySearch(salt, encV, encVH, start, 4096)
+		if err != nil {
+			t.Fatalf("idx %#x: OldOfficeKeySearch: %v", idx, err)
+		}
+		if !found || !bytes.Equal(got, trunc) {
+			t.Fatalf("idx %#x: GPU got (%x, %v), want %x", idx, got, found, trunc)
+		}
+		// CPU key-attack over the same window finds the same trunc.
+		cpu, cfound, err := officebinary.RC4KeyAttack(context.Background(), salt, encV, encVH, start, 4096)
+		if err != nil {
+			t.Fatalf("idx %#x: RC4KeyAttack: %v", idx, err)
+		}
+		if !cfound || !bytes.Equal(cpu, got) {
+			t.Fatalf("idx %#x: CPU/GPU disagree: cpu (%x,%v) gpu %x", idx, cpu, cfound, got)
+		}
+		// A window that excludes the trunc must not match.
+		if _, f2, _ := ks.OldOfficeKeySearch(salt, encV, encVH, idx+1000, 100); f2 {
+			t.Fatalf("idx %#x: false positive on a non-containing window", idx)
+		}
 	}
 }
 

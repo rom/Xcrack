@@ -159,18 +159,21 @@ a false positive or a wrong "found".
 | PBKDF2-HMAC-SHA256 | **RAR5** (the 8-byte password-check derivation) |
 | PBKDF2-HMAC-SHA512 | PBKDF2-SHA512 schemes |
 | **Office iterated-hash spin** (SHA-1/256/384/512) | **Office 2010+ agile OOXML** (`.docx/.xlsx/.pptx`) — the ~100k-iteration spin that dominates every modern Office document |
+| **MD5+RC4 key search** (`oldoffice_md5rc4`) | **Office 97/2000 40-bit RC4** (`office-keyattack --gpu`) — sweeps the 2^40 trunc keyspace on the device (a key-search kernel, not a per-password batch) |
 
 ODF's start-key hash and Office's first hash are done per-candidate on the CPU;
 the device runs the expensive loop. RAR5's check value is derived directly by
-the SHA-256 kernel.
+the SHA-256 kernel. The Office 97/2000 key search tests one trunc index per
+work-item and re-checks any hit on the CPU.
 
 **Why isn't *my* format accelerated?** Three reasons a scheme stays on the CPU:
 it's **memory-hard or GPU-hostile** (Argon2 — KeePass KDBX4 / PuTTY v3; scrypt —
 Ethereum / age / PBES2; bcrypt — OpenSSH), it has an **ambiguous profile**
 (SQLCipher v3 vs v4 can't be told apart before a password verifies, and the
-offload derives one profile per candidate), or **no kernel exists yet** (Office
-97/2000 and PDF 40-bit MD5+RC4 key-search, Office 2007 "standard" `Finish`,
-KeePass AES-KDF — catalogued in [`CRACKING.md`](CRACKING.md) §4).
+offload derives one profile per candidate), or **no kernel exists yet** (PDF
+40-bit MD5+RC4 key-search, Office 2007 "standard" `Finish`, KeePass AES-KDF —
+catalogued in [`CRACKING.md`](CRACKING.md) §4; the Office 97/2000 key search now
+ships).
 
 **Multiple GPUs / which device?** The tier enumerates every OpenCL device, ranks
 them (discrete GPU > integrated GPU/APU > accelerator > CPU) across NVIDIA / AMD

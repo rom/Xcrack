@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"time"
 
+	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/scheme/officebinary"
@@ -35,6 +36,7 @@ func runOfficeKeyAttack(args []string) int {
 	maxN := fs_.Uint64("max", 0, "scan at most this many keys this run (0 = to end of range)")
 	quiet := fs_.Bool("quiet", false, "suppress progress output")
 	fs_.BoolVar(quiet, "q", false, "alias for --quiet")
+	gpu := fs_.Bool("gpu", false, "offload the 2^40 sweep to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
 	if err := fs_.Parse(args); err != nil {
 		return 2
 	}
@@ -65,7 +67,7 @@ func runOfficeKeyAttack(args []string) int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 
-	trunc, found, aerr := sweepKeyspace(ctx, ch, lo, hi, *workers, !*quiet)
+	trunc, found, aerr := sweepKeyspace(ctx, ch, lo, hi, *workers, !*quiet, *gpu)
 	if aerr != nil && aerr != context.Canceled {
 		fmt.Fprintf(os.Stderr, "xcrack office-keyattack: %v\n", aerr)
 		return 2
@@ -135,11 +137,33 @@ func resolveRange(shard string, start, maxN, max uint64) (lo, hi uint64, err err
 }
 
 // sweepKeyspace runs the attack over [lo, hi), chunking so it can report
-// progress and react to interruption between chunks.
-func sweepKeyspace(ctx context.Context, ch *xcrypto.Challenge, lo, hi uint64, workers int, progress bool) ([]byte, bool, error) {
+// progress and react to interruption between chunks. With useGPU it offloads the
+// per-chunk sweep to an OpenCL device (OldOfficeKeySearcher), re-checking any hit
+// on the CPU; it falls back to the CPU sweep when no device is built/available.
+func sweepKeyspace(ctx context.Context, ch *xcrypto.Challenge, lo, hi uint64, workers int, progress, useGPU bool) ([]byte, bool, error) {
 	salt := ch.KDF.Salt
 	encVerifier := ch.Extra["enc_verifier"]
 	encVerifierHash := ch.Verifier
+
+	var ks accel.OldOfficeKeySearcher
+	if useGPU {
+		acc, err := accel.Detect()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack office-keyattack: --gpu unavailable (%v); using CPU\n", err)
+		} else {
+			defer acc.Close()
+			if k, ok := acc.(accel.OldOfficeKeySearcher); ok {
+				ks = k
+				if progress {
+					for _, d := range acc.Devices() {
+						fmt.Fprintf(os.Stderr, "offloading to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
+					}
+				}
+			} else {
+				fmt.Fprintln(os.Stderr, "xcrack office-keyattack: --gpu device has no key-search kernel; using CPU")
+			}
+		}
+	}
 
 	const chunk = uint64(1) << 28 // ~268M keys per progress step
 	started := time.Now()
@@ -151,7 +175,22 @@ func sweepKeyspace(ctx context.Context, ch *xcrypto.Challenge, lo, hi uint64, wo
 		if base+n > hi {
 			n = hi - base
 		}
-		trunc, found, err := officebinary.RC4KeyAttackParallel(ctx, salt, encVerifier, encVerifierHash, base, n, workers)
+		var (
+			trunc []byte
+			found bool
+			err   error
+		)
+		if ks != nil {
+			trunc, found, err = ks.OldOfficeKeySearch(salt, encVerifier, encVerifierHash, base, n)
+			// Authoritative CPU re-check: the device never decides correctness.
+			if found {
+				if ok, _ := officebinary.VerifyRC4Trunc(trunc, salt, encVerifier, encVerifierHash); !ok {
+					trunc, found = nil, false
+				}
+			}
+		} else {
+			trunc, found, err = officebinary.RC4KeyAttackParallel(ctx, salt, encVerifier, encVerifierHash, base, n, workers)
+		}
 		if err != nil {
 			return nil, false, err
 		}

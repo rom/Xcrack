@@ -18,6 +18,8 @@ import "C"
 
 import (
 	"bytes"
+	"crypto/md5"
+	"crypto/rc4"
 	"crypto/sha1"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -53,6 +55,9 @@ var officeSrcSHA256 string
 
 //go:embed kernel_office_sha512.cl
 var officeSrcSHA512 string
+
+//go:embed kernel_oldoffice_md5rc4.cl
+var oldofficeSrc string
 
 // Host-side limits that keep each kernel single-block per PRF message. SHA-1 and
 // SHA-256 use a 64-byte block (salt||INT fits when saltlen+4 <= 55); SHA-512
@@ -93,6 +98,8 @@ type clAccel struct {
 	sha512         prf
 	office         map[string]officeKern // Office iterated-hash spin, by algo
 	officePrograms []C.cl_program        // released in Close
+	oldoffice      []C.cl_kernel         // Office 97/2000 40-bit MD5+RC4 key search, one per device
+	oldofficeProg  C.cl_program          // released in Close
 	optimalBatch   int                   // autotuned per-dispatch batch size (BatchTuner)
 }
 
@@ -202,6 +209,15 @@ func Detect() (Accelerator, error) {
 		a.office[s.algo] = officeKern{kernels: kerns, digest: s.digest}
 	}
 
+	// Office 97/2000 40-bit MD5+RC4 key-search kernel (OldOfficeKeySearcher).
+	ooProg, ooKerns, berr := buildKernels(ctx, devs, oldofficeSrc, "oldoffice_md5rc4")
+	if berr != nil {
+		a.Close()
+		return nil, berr
+	}
+	a.oldofficeProg = ooProg
+	a.oldoffice = ooKerns
+
 	for _, d := range devs {
 		a.devices = append(a.devices, describeDevice(d))
 	}
@@ -307,6 +323,14 @@ func (a *clAccel) Close() error {
 		if p != nil {
 			C.clReleaseProgram(p)
 		}
+	}
+	for _, k := range a.oldoffice {
+		if k != nil {
+			C.clReleaseKernel(k)
+		}
+	}
+	if a.oldofficeProg != nil {
+		C.clReleaseProgram(a.oldofficeProg)
 	}
 	for _, q := range a.queues {
 		if q != nil {
@@ -591,6 +615,81 @@ func (a *clAccel) runOneOffice(ok officeKern, dev int, seeds [][]byte, spin int)
 
 // OptimalBatch reports the autotuned per-dispatch batch size (BatchTuner). It is
 // measured once at Detect; see autotuneBatch.
+// oldofficeChunk is the number of trunc indices swept per kernel enqueue. The
+// full 2^40 space is swept in chunks so a very large shard still progresses and
+// a hit returns promptly; each work-item does three MD5s and one RC4.
+const oldofficeChunk = 1 << 22
+
+// OldOfficeKeySearch sweeps the Office 97/2000 40-bit trunc keyspace
+// [start, start+count) on device 0, implementing OldOfficeKeySearcher. It is
+// byte-for-byte equivalent to officebinary.RC4KeyAttack; the caller re-checks a
+// hit on the CPU. Unsupported salt sizes return ErrUnsupported so the caller
+// falls back to the CPU sweep.
+func (a *clAccel) OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, start, count uint64) ([]byte, bool, error) {
+	if len(encVerifier) != 16 || len(encVerifierHash) != 16 || len(salt) == 0 || len(salt) > 16 {
+		return nil, false, ErrUnsupported
+	}
+	if count == 0 {
+		return nil, false, nil
+	}
+	dev := 0
+	kern := a.oldoffice[dev]
+	queue := a.queues[dev]
+
+	var errc C.cl_int
+	saltBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(salt)), unsafe.Pointer(&salt[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice salt): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(saltBuf)
+	ev := make([]byte, 32)
+	copy(ev, encVerifier)
+	copy(ev[16:], encVerifierHash)
+	evBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(32), unsafe.Pointer(&ev[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice ev): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(evBuf)
+	out := make([]uint32, 4) // [0]=found, [1]=idx low32, [2]=idx high
+	outBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_WRITE|C.CL_MEM_COPY_HOST_PTR), C.size_t(16), unsafe.Pointer(&out[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice out): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(outBuf)
+
+	cSaltLen := C.cl_uint(len(salt))
+	end := start + count
+	if end < start { // overflow guard; callers bound to 2^40
+		end = ^uint64(0)
+	}
+	for base := start; base < end; base += oldofficeChunk {
+		n := uint64(oldofficeChunk)
+		if base+n > end {
+			n = end - base
+		}
+		cStart := C.cl_ulong(base)
+		cN := C.cl_uint(n)
+		C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(saltBuf)), unsafe.Pointer(&saltBuf))
+		C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cSaltLen)), unsafe.Pointer(&cSaltLen))
+		C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(evBuf)), unsafe.Pointer(&evBuf))
+		C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(cStart)), unsafe.Pointer(&cStart))
+		C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
+		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
+		global := C.size_t(n)
+		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+			return nil, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(oldoffice): %d", int(r))
+		}
+		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(16), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
+			return nil, false, fmt.Errorf("accel: clEnqueueReadBuffer(oldoffice): %d", int(r))
+		}
+		if out[0] != 0 {
+			idx := uint64(out[1]) | uint64(out[2])<<32
+			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
 
 // autotuneBatch measures SHA-1 derivation throughput at a few batch sizes and
@@ -721,5 +820,54 @@ func GPUSelfTest() error {
 			}
 		}
 	}
+
+	// Office 97/2000 40-bit MD5+RC4 key search (OldOfficeKeySearcher): build a
+	// valid verifier for a known trunc with the documented algorithm, then sweep a
+	// small range containing it and confirm the device recovers exactly that trunc.
+	if ks, ok := a.(OldOfficeKeySearcher); ok {
+		salt := []byte("0123456789abcdef") // 16-byte EncryptionHeader salt
+		for _, idx := range []uint64{0, 1, 0x00000000ff, 0x0102030405} {
+			trunc := []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}
+			encV, encVH := oldOfficeVerifier(trunc, salt)
+			// A window of ~4096 indices around idx (clamped to >= 0), big enough to
+			// exercise many non-matching work-items alongside the single hit.
+			start := uint64(0)
+			if idx > 2048 {
+				start = idx - 2048
+			}
+			got, found, err := ks.OldOfficeKeySearch(salt, encV, encVH, start, 4096)
+			if err != nil {
+				return fmt.Errorf("GPU self-test oldoffice (idx %#x): %w", idx, err)
+			}
+			if !found || !bytes.Equal(got, trunc) {
+				return fmt.Errorf("GPU self-test oldoffice MISMATCH (idx %#x): found=%v got %x want %x",
+					idx, found, got, trunc)
+			}
+		}
+	} else {
+		return fmt.Errorf("GPU self-test: accelerator does not implement OldOfficeKeySearcher")
+	}
 	return nil
+}
+
+// oldOfficeVerifier builds a valid (encVerifier, encVerifierHash) pair for a
+// given 40-bit trunc and salt, following MS-OFFCRYPTO 2.3.6 — the inverse of the
+// key-attack check, used only to construct self-test / known-answer inputs.
+func oldOfficeVerifier(trunc, salt []byte) (encVerifier, encVerifierHash []byte) {
+	inter := make([]byte, 0, 16*(len(trunc)+len(salt)))
+	for i := 0; i < 16; i++ {
+		inter = append(inter, trunc...)
+		inter = append(inter, salt...)
+	}
+	t2 := md5.Sum(inter) //nolint:gosec // MS-OFFCRYPTO mandates MD5
+	kb := make([]byte, 9)
+	copy(kb, t2[:5])                    // kb[5:9] == LE32(block 0)
+	key := md5.Sum(kb)                  //nolint:gosec
+	plain := []byte("verifier-block!!") // 16 bytes
+	ph := md5.Sum(plain)                //nolint:gosec
+	buf := append(append([]byte{}, plain...), ph[:]...)
+	c, _ := rc4.NewCipher(key[:16]) //nolint:gosec // RC4 is the scheme's cipher
+	out := make([]byte, 32)
+	c.XORKeyStream(out, buf)
+	return out[:16], out[16:]
 }
