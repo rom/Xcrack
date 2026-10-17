@@ -44,6 +44,7 @@ type fileConfig struct {
 		Adaptive      bool     `yaml:"adaptive"`       // corpus-wide adaptive promotion across files
 		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
 		Markov        bool     `yaml:"markov"`         // Markov best-first generated guesses
+		Order         string   `yaml:"order"`          // reorder wordlist candidates: "markov" | "none"
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`
