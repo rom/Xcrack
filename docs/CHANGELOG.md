@@ -62,6 +62,10 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   `--extract-suffix`, `--show-config`, `--show-cache`.
 - FAQ: new **Output & extracted files** and **Inspecting & troubleshooting**
   categories, plus entries for the new flags, formats, logging and exit codes.
+- FAQ: new **GPU acceleration** category — what the device does vs. the CPU, the
+  accelerated-formats table, why a scheme stays on the CPU (memory-hard /
+  ambiguous profile / no kernel yet), multi-device selection, and the
+  no-false-positive guarantee.
 - CRACKING.md §3: record a fresh cryptanalysis survey of every supported format.
   Net outcome — the formats are already well covered; the notable additions are
   (a) a precise refutation of the common claim that Office **XP/2003 CryptoAPI**
