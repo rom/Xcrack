@@ -98,7 +98,8 @@ check · **attack** = the primary recovery path.
 
 | Format | Status |
 |--------|--------|
-| **MS Access** (.mdb Jet, .accdb ACE) | Detection/identification only; password *recovery* is staged pending a validated oracle. Jet stores the DB password XOR-obfuscated in the header (recoverable with **no cracking**) — see §3. |
+| **MS Access — Jet** (.mdb, Access 97–2003) | Password recovered directly from the header XOR obfuscation — **no cracking** (`xcrack access-recover`), see §3. |
+| **MS Access — ACE** (.accdb, Access 2007+) | Detection/identification only; the Office-style RC4/AES KDF has no shortcut, so a password search is the only route. |
 
 ---
 
@@ -138,6 +139,15 @@ bypass or shrink the search:
   (`--shard i/N`) and parallel (`--workers`). 128-bit RC4 and the AES schemes
   (AESV2/AESV3) have no such bottleneck and the command declines them. Validated
   against a real 40-bit PDF produced by qpdf (`keyattack_test.go`).
+- **MS Access (Jet) header XOR.** Jet3/Jet4 store the database password
+  XOR-obfuscated with fixed, public material — the header page is masked with a
+  fixed 128-byte mask, and (Jet4 only) the password field is additionally masked
+  with a 4-byte value folded from the creation date. `xcrack access-recover`
+  reverses both and reads the password straight out of the header with **no
+  cracking** (`xfileformats/formats/access.RecoverJetPassword`). ACE (.accdb,
+  Access 2007+) uses a real Office-style KDF and is declined. Cross-validated
+  against jackcess (an independent implementation that produced a known-password
+  Jet4 fixture; `jet_test.go`), with the decoder fuzzed against hostile headers.
 - **VelvetSweatshop / empty password.** Excel "encrypts" a read-only-recommended
   workbook with the fixed key `VelvetSweatshop`; owner/permission-only PDFs and
   read-only Office documents open with the **empty** password. Both are the first
@@ -151,20 +161,12 @@ bypass or shrink the search:
 
 ### Known, real, and staged (documented, not yet implemented)
 
-This is a genuine non-brute-force recovery deliberately left staged for lack of
-a validated oracle in this build:
-
-- **MS Access (Jet) header XOR.** Jet3/Jet4 store the database password
-  XOR-obfuscated with a fixed, per-Office-version mask in the file header
-  (the Jet4 mask is further XOR'd with the creation date read from a fixed
-  offset) — it is recoverable with **no cracking at all**. The `access` format
-  already detects and names the container. Recovery stays staged because this
-  build has no way to cross-validate it: no `mdb-tools`/`jackcess`, no documented
-  per-version mask vector, and no Jet fixture with a *known* password to confirm
-  the decode against (the Access samples on hand are either ACE/agile .accdb, not
-  Jet XOR, or have unknown passwords). Per the project's verify-first rule, the
-  decode is not shipped until it can be checked against an independent oracle — a
-  self-consistent XOR with no ground truth would be worse than nothing.
+Nothing is currently staged here — the three weaknesses that were staged in the
+previous cycle (ZipCrypto cross-entry reuse, PDF 40-bit RC4, and MS Access Jet
+header XOR) are all implemented and listed above, each cross-validated against
+an external oracle. ACE (.accdb, Access 2007+) is the one Access variant without
+a shortcut: its Office-style RC4/AES KDF leaves only a password search, so it is
+identified but not key-attacked.
 
 ### Judged not worth it / not applicable (and why)
 

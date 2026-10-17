@@ -73,8 +73,9 @@ crypto allows — a direct key attack instead of a password search. See
 recovery (`xcrack kp`, no password needed) and cross-entry reuse that unlocks a
 whole archive from one recovery (`kp --zip`); the Office 97/2000 40-bit key
 attack (`office-keyattack`) and the PDF 40-bit RC4 file-key attack
-(`pdf-keyattack`); owner/permission-only PDFs and read-only Office docs that open
-with the empty password / VelvetSweatshop.
+(`pdf-keyattack`); the MS Access Jet header-XOR decode (`access-recover`, no
+cracking); owner/permission-only PDFs and read-only Office docs that open with
+the empty password / VelvetSweatshop.
 
 **My password is long and random — is it hopeless?** Not necessarily. ZipCrypto
 and Office 97/2000 are attackable at the **key** level regardless of password
@@ -185,9 +186,9 @@ algorithms with the project's own verified primitives — no third-party crypto.
 **Why not attack the key for everything?** Because most modern schemes have no
 such weakness: their key derives from a 128/256-bit (or memory-hard) secret with
 no shortcut, so the password search is the only route. [`CRACKING.md`](CRACKING.md)
-§3 lists what is and isn't attackable, including the one remaining staged
-weakness (MS Access Jet header XOR, blocked on a validation oracle) and the ones
-judged not worth it.
+§3 lists what is and isn't attackable — including MS Access Jet, whose password
+is read straight out of the header XOR obfuscation with no cracking at all
+(`access-recover`) — and the weaknesses judged not worth it.
 
 **Is every crypto result trustworthy?** Each scheme is cross-validated against an
 external oracle (published test vectors or a real CLI like openssl/keepassxc/
@@ -217,7 +218,7 @@ those.
 
 **Where's the full list?** `xcrack --help`. Subcommands: `xcrack` (crack),
 `identify`, `kp` (ZipCrypto known-plaintext), `hashline`, `export-challenge`,
-`office-keyattack`, `pdf-keyattack`, `version`.
+`office-keyattack`, `pdf-keyattack`, `access-recover`, `version`.
 
 **The most useful flags.**
 
@@ -231,6 +232,6 @@ those.
 | inspect without cracking | `--stdout`, `--keyspace`, `--benchmark`, `--estimate`, `--debug-rules`, `--show`/`--left` |
 | restrict candidates | `--min-length`/`--max-length`, `--encoding` |
 | distribute | `--shard I/N`, `--server URL`, `--cluster-session FILE` |
-| key-level attacks | `xcrack kp …` (incl. `kp --zip`), `xcrack office-keyattack FILE`, `xcrack pdf-keyattack FILE` |
+| key-level attacks | `xcrack kp …` (incl. `kp --zip`), `xcrack office-keyattack FILE`, `xcrack pdf-keyattack FILE`, `xcrack access-recover FILE` |
 
 Full worked examples are in [`USAGE.md`](USAGE.md).

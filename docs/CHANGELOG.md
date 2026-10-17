@@ -30,6 +30,15 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   Shardable (`--shard i/N`), parallel (`--workers`); 128-bit RC4 and the AES
   schemes are declined. Cross-validated against a real 40-bit PDF produced by
   qpdf (`keyattack_test.go`).
+- **MS Access (Jet) header-XOR decode** — `xcrack access-recover FILE`
+  (`xfileformats/formats/access.RecoverJetPassword`): Jet3/Jet4 (.mdb) store the
+  database password XOR-obfuscated with fixed, public material (a 128-byte header
+  mask, plus a creation-date-derived 4-byte mask on Jet4), so the password is
+  read straight out of the header with no cracking. ACE (.accdb, Access 2007+)
+  uses a real Office-style KDF and is declined. Cross-validated against jackcess
+  (an independent implementation that produced a known-password Jet4 fixture)
+  and fuzzed against hostile headers. This clears the last of the three
+  cryptanalysis shortcuts that CRACKING.md §3 had staged.
 
 ### Fixed
 - `resolveRange` (the `--shard`/`--start`/`--max` keyspace splitter) now takes

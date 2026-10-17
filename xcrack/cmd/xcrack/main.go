@@ -45,6 +45,8 @@ func run(args []string) int {
 			return runOfficeKeyAttack(args[1:])
 		case "pdf-keyattack":
 			return runPDFKeyAttack(args[1:])
+		case "access-recover":
+			return runAccessRecover(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -1051,6 +1053,8 @@ USAGE:
                                    (recovers the key, not the password; --shard i/N)
   xcrack pdf-keyattack FILE        direct 40-bit key attack on V1/R2 (and 40-bit
                                    R3/R4) RC4 PDFs (recovers the key; --shard i/N)
+  xcrack access-recover FILE       recover a Jet (.mdb) database password from the
+                                   header, no cracking (ACE .accdb not shortcuttable)
   xcrack version
 
 COMMON FLAGS:

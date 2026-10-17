@@ -918,6 +918,14 @@ R3/R4) PDF with no password, shardable with `--shard i/N` and parallel over
 `--workers`. 128-bit RC4 and the AES PDF schemes have no such shortcut and the
 command declines them.
 
+**Microsoft Access** goes further still: a Jet (`.mdb`, Access 97–2003) database
+stores its password merely XOR-obfuscated in the header, so there is nothing to
+crack at all. `xcrack access-recover FILE` de-obfuscates it (the fixed header
+mask, and on Jet4 a second mask folded from the creation date) and prints the
+password directly. ACE (`.accdb`, Access 2007+) uses a real Office-style KDF with
+no shortcut and is reported as needing a password search. The Jet decode is
+cross-validated against jackcess, an independent implementation.
+
 Two further knobs: the compute-heavy in-process attack honors context
 cancellation (`RecoverKeysCtx`), so an embedder can bound it; and *sparse* known
 plaintext (scattered known bytes) is available through the offload by passing
