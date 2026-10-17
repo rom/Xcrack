@@ -21,6 +21,7 @@ import (
 	"github.com/rom/xfileformats/formats/age"
 	"github.com/rom/xfileformats/formats/archive"
 	fdmg "github.com/rom/xfileformats/formats/dmg"
+	"github.com/rom/xfileformats/formats/ethwallet"
 	"github.com/rom/xfileformats/formats/iwork"
 	"github.com/rom/xfileformats/formats/jks"
 	"github.com/rom/xfileformats/formats/keepass"
@@ -216,6 +217,10 @@ func DefaultRegistry() *xfileformats.Registry {
 	puttykey.Register(r)
 	fdmg.Register(r)
 	access.Register(r)
+	// Ethereum keystore (Web3 Secret Storage v3) wallet JSON; detects on its
+	// unique "crypto"/"ciphertext"/"kdf" markers, so it never claims a non-wallet
+	// file.
+	ethwallet.Register(r)
 	return r
 }
 
