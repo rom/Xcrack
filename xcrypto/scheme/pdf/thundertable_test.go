@@ -3,11 +3,30 @@ package pdf
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"math/rand"
 	"testing"
 
 	"github.com/rom/xcrypto/prim"
 )
+
+// TestReadTableRejectsHugeCountWithoutOOM guards against a crafted sub-table
+// count: a header claiming ~4.3e9 chains followed by a truncated stream must
+// fail fast with ErrBadTable, not pre-allocate tens of GB and OOM. The fix caps
+// the up-front allocation and grows as bytes are actually read.
+func TestReadTableRejectsHugeCountWithoutOOM(t *testing.T) {
+	var b bytes.Buffer
+	b.WriteString("XTHUNDR1")                                  // magic + version
+	b.WriteByte(40)                                            // bits
+	_ = binary.Write(&b, binary.LittleEndian, uint32(1))       // chainLen
+	_ = binary.Write(&b, binary.LittleEndian, uint32(1))       // nsub
+	_ = binary.Write(&b, binary.LittleEndian, uint64(0))       // sub seed
+	_ = binary.Write(&b, binary.LittleEndian, uint32(1<<32-1)) // lying chain count
+	// No chain bytes follow: the first chain read must hit EOF.
+	if _, err := ReadTable(&b); err != ErrBadTable {
+		t.Fatalf("ReadTable = %v, want ErrBadTable", err)
+	}
+}
 
 // r2U builds the R2 user-verifier /U = RC4(key5, pad) for a 40-bit key index —
 // the exact value a V1/R2 PDF stores, and the thunder table's lookup input.

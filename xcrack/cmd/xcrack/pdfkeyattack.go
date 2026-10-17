@@ -63,7 +63,7 @@ func runPDFKeyAttack(args []string) int {
 
 	// Precomputed thunder-table lookup: for a V1/R2 document /U = RC4(fileKey,
 	// pad) is a salt/ID-free function of the key, so one table inverts it in
-	// sub-second — no sweep. A hit is re-checked with VerifyFileKey; a miss (or an
+	// seconds — no sweep. A hit is re-checked with VerifyFileKey; a miss (or an
 	// R3/R4 document, whose /U is file-specific) falls through to the live sweep.
 	if *table != "" {
 		key, ok, terr := tryThunderTable(*table, h)
@@ -208,9 +208,19 @@ func sweepPDFKeyspace(ctx context.Context, h *pdf.Handler, lo, hi uint64, worker
 		)
 		if ks != nil {
 			key, found, err = ks.PDFRC4KeySearch(input, rounds, uu, cmpLen, base, n)
-			// Authoritative CPU re-check: the device never decides correctness.
-			if found && !h.VerifyFileKey(key) {
-				key, found = nil, false
+			switch {
+			case err != nil:
+				// A GPU error mid-sweep must not abort the attack: fall back to the
+				// CPU for this chunk and every remaining one (the documented
+				// behaviour), instead of leaving the rest of the keyspace unsearched.
+				fmt.Fprintf(os.Stderr, "xcrack pdf-keyattack: GPU error (%v); continuing on CPU\n", err)
+				ks = nil
+				key, found, err = h.RC4KeyAttackParallel(ctx, base, n, workers)
+			case found && !h.VerifyFileKey(key):
+				// Device false alarm (authoritative CPU re-check): the real key may
+				// sit later in this same chunk, so re-sweep the whole chunk on the
+				// CPU (exhaustive) before advancing rather than skipping it.
+				key, found, err = h.RC4KeyAttackParallel(ctx, base, n, workers)
 			}
 		} else {
 			key, found, err = h.RC4KeyAttackParallel(ctx, base, n, workers)

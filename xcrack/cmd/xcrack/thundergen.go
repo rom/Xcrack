@@ -5,6 +5,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"os/signal"
 	"runtime"
@@ -18,15 +19,15 @@ import (
 // time-memory-trade-off ("Thunder Table") that inverts the PDF V1/R2 user
 // verifier /U = RC4(fileKey, pad) → 40-bit file key. Because that function has
 // no per-file salt or ID, ONE table inverts every V1/R2 document, turning the
-// 2^40 live sweep into a sub-second `pdf-keyattack --table` lookup. Generation is
+// 2^40 live sweep into a seconds-long `pdf-keyattack --table` lookup. Generation is
 // the one-time cost; a full 2^40 table is a long job, so --dry-run prints the
 // plan and a quick `--bits 24`-style partial table is good for a trial.
 func runThunderGen(args []string) int {
 	fs_ := flag.NewFlagSet("xcrack thunder-gen", flag.ContinueOnError)
 	out := fs_.String("out", "", "output table file (required)")
 	bits := fs_.Int("bits", 40, "key-space exponent to cover: 40 inverts every V1/R2 PDF; smaller builds a partial/trial table")
-	length := fs_.Int("length", 1<<20, "chain length t (larger t => smaller table, slower lookup)")
-	chains := fs_.Int("chains", 1<<20, "chains per sub-table m")
+	length := fs_.Int("length", 4096, "chain length t: lookup costs ~tables×t²/2 image ops, so SMALL t => fast lookup but a larger table; the default balances a few-second lookup against table size (t=2^20 makes lookup as slow as the brute-force sweep)")
+	chains := fs_.Int("chains", 1<<26, "chains per sub-table m: coverage rises with m×t×tables toward 2^bits, so larger t needs fewer chains (table size ≈ chains×tables×10 bytes)")
 	tables := fs_.Int("tables", 4, "independent sub-tables (more => higher coverage)")
 	workers := fs_.Int("workers", 0, "generation workers (0 = all cores)")
 	gpu := fs_.Bool("gpu", false, "offload chain generation to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
@@ -54,7 +55,15 @@ func runThunderGen(args []string) int {
 	}
 	est := time.Duration(0)
 	if rate > 0 {
-		est = time.Duration(float64(totalOps)/(rate*float64(cores))) * time.Second
+		// Clamp: seconds × 1e9 overflows int64 nanoseconds past ~9.2e9 s, which
+		// would print a negative/garbage estimate for a very large plan. roundDur
+		// renders the clamped max as ">1000 years".
+		ns := float64(totalOps) / (rate * float64(cores)) * 1e9
+		if ns >= float64(math.MaxInt64) {
+			est = time.Duration(math.MaxInt64)
+		} else {
+			est = time.Duration(ns)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "thunder-gen plan: 2^%d key space, %d sub-tables × %d chains × %d columns\n", *bits, *tables, *chains, *length)
 	fmt.Fprintf(os.Stderr, "  chain work   ~%s image ops   (≈ %s on %d core(s) at ~%.0fk/s/core)\n",
