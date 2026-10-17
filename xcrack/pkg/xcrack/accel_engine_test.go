@@ -20,7 +20,33 @@ import (
 	"github.com/rom/xcrypto/prim"
 	"github.com/rom/xcrypto/scheme/winzipaes"
 	"github.com/rom/xfileformats"
+	fooxml "github.com/rom/xfileformats/formats/ooxml"
 )
+
+// TestAccelOfficeAgile cracks an agile OOXML document through the engine with
+// the pure-Go accelerator stub running the Office iterated-hash spin, proving
+// the AccelKDF.Office offload path (seed on the CPU, spin on the accelerator,
+// authoritative verify in Finish) is wired end to end — no GPU needed.
+func TestAccelOfficeAgile(t *testing.T) {
+	const password = "AgileOffice2010!"
+	pkg := bytes.Repeat([]byte("ooxml package bytes "), 50)
+	data, err := fooxml.BuildEncryptedAgile([]byte(password), pkg, 1500)
+	if err != nil {
+		t.Fatalf("build agile OOXML: %v", err)
+	}
+	stub := &stubAccel{}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("nope", "wrong", password), Options{Accelerator: stub})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != password {
+		t.Fatalf("Office-agile accel path did not recover the password (node=%+v)", n)
+	}
+	if stub.calls.Load() == 0 {
+		t.Fatal("accelerator OfficeSpin was never dispatched (unexpected CPU fallback)")
+	}
+}
 
 // stubAccel is a pure-Go stand-in for the OpenCL accelerator: it derives
 // PBKDF2-HMAC-SHA1 keys with the CPU reference (prim.PBKDF2) — the exact
@@ -47,6 +73,35 @@ func (s *stubAccel) PBKDF2SHA256(passwords [][]byte, salt []byte, iter, dkLen in
 
 func (s *stubAccel) PBKDF2SHA512(passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {
 	return s.derive(sha512.New, passwords, salt, iter, dkLen)
+}
+
+// OfficeSpin is the pure-Go stand-in for the Office iterated-hash kernel: it
+// runs the same spin (cur = H(LE32(i)||cur)) on the CPU so the engine's Office
+// offload path is exercised in CI without a GPU. It implements accel.OfficeHasher.
+func (s *stubAccel) OfficeSpin(seeds [][]byte, spin int, algo string) ([][]byte, error) {
+	if s.unsupported {
+		return nil, accel.ErrUnsupported
+	}
+	nh := officeHashCtor(algo)
+	if nh == nil {
+		return nil, accel.ErrUnsupported
+	}
+	s.calls.Add(1)
+	s.derived.Add(int64(len(seeds)))
+	out := make([][]byte, len(seeds))
+	for i, seed := range seeds {
+		cur := append([]byte(nil), seed...)
+		var ib [4]byte
+		for it := 0; it < spin; it++ {
+			binary.LittleEndian.PutUint32(ib[:], uint32(it))
+			h := nh()
+			h.Write(ib[:])
+			h.Write(cur)
+			cur = h.Sum(nil)
+		}
+		out[i] = cur
+	}
+	return out, nil
 }
 
 func (s *stubAccel) derive(h func() hash.Hash, passwords [][]byte, salt []byte, iter, dkLen int) ([][]byte, error) {

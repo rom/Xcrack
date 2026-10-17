@@ -19,6 +19,7 @@ import (
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto/candidates"
+	fooxml "github.com/rom/xfileformats/formats/ooxml"
 )
 
 // realAccel detects a device and validates the kernel, skipping the test when
@@ -127,5 +128,26 @@ func TestOpenCLRAR5Live(t *testing.T) {
 	}
 	if n := findDecrypted(res.Root); n == nil || n.Password != pw {
 		t.Fatalf("GPU RAR5 path did not recover the password (node=%+v)", n)
+	}
+}
+
+// TestOpenCLOfficeAgileLive cracks an agile OOXML (Office 2010+, SHA-512 spin)
+// document through the engine with the OpenCL accelerator running the Office
+// iterated-hash spin — the dominant cost of every modern Office document.
+func TestOpenCLOfficeAgileLive(t *testing.T) {
+	acc := realAccel(t)
+	const password = "Secret-Office-99"
+	pkg := bytes.Repeat([]byte("inner ooxml package bytes "), 64)
+	data, err := fooxml.BuildEncryptedAgile([]byte(password), pkg, 4000)
+	if err != nil {
+		t.Fatalf("build agile OOXML: %v", err)
+	}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("wrong", "nope", password), Options{Accelerator: acc})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != password {
+		t.Fatalf("GPU Office-agile path did not recover the password (node=%+v)", n)
 	}
 }

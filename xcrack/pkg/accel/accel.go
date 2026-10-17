@@ -119,6 +119,24 @@ type Accelerator interface {
 	Close() error
 }
 
+// OfficeHasher is an optional capability of an Accelerator that runs the Office
+// agile/standard iterated-hash "spin" on the device — the dominant cost of every
+// modern (2007+) Office document. The caller computes the single variable-length
+// first hash cur0 = H(salt || UTF16LE(password)) per candidate on the CPU and
+// passes the digest-length seeds; the device runs the fixed-size loop
+//
+//	for i in [0, spin):  cur = H(LE32(i) || cur)
+//
+// and returns the final digest per seed, in input order. algo is "sha1",
+// "sha256", "sha384" or "sha512". The engine type-asserts for this capability
+// and falls back to the CPU (per-candidate OfficeAgileHash) when the accelerator
+// does not implement it or returns ErrUnsupported. The result is byte-for-byte
+// identical to prim.OfficeAgileHash, re-checked by the format's Finish, so the
+// device never decides correctness on its own.
+type OfficeHasher interface {
+	OfficeSpin(seeds [][]byte, spin int, algo string) ([][]byte, error)
+}
+
 // BatchTuner is an optional capability of an Accelerator that can recommend a
 // per-dispatch batch size tuned to its device(s) (count, compute units,
 // throughput). The engine type-asserts for it and sizes its offload batches

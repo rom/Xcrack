@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU kernel: Office 2010+ agile iterated-hash spin.** A new OpenCL kernel
+  (SHA-1/256/384/512) runs the ~100k-iteration spin that dominates every modern
+  Office document's key derivation — the single biggest per-candidate cost for
+  encrypted OOXML. It is not a PBKDF2: the CPU does the one variable-length first
+  hash `H(salt‖UTF16LE(pw))` and the device runs the fixed-size loop
+  `cur = H(LE32(i)‖cur)` (a new optional `accel.OfficeHasher` capability and
+  `AccelKDF.Office` seam; ooxml exposes it via `AccelKDF`, with `Finish` running
+  the authoritative agile verifier on the device-derived digest). Byte-for-byte
+  self-tested against `prim.OfficeAgileHash` for all four hashes at startup and
+  validated end-to-end through the engine against pocl (`TestOpenCLOfficeAgileLive`)
+  and with a pure-Go stub in the default build (`TestAccelOfficeAgile`). The spin
+  kernel is shared with Office 2007 "standard"; only that scheme's post-spin
+  `Finish` wiring remains.
 - **GPU acceleration for ODF and RAR5.** The opt-in OpenCL tier already shipped
   PBKDF2-HMAC-SHA1/256/512 kernels but only WinZip-AES and encrypted DMG were
   wired to them. Now **ODF** offloads its PBKDF2-HMAC-SHA1 content-key spin (via
