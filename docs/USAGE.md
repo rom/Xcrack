@@ -1065,6 +1065,23 @@ build (every hit re-checked on the CPU; falls back to CPU otherwise), exactly as
 `office-keyattack --gpu` does for the Office 97/2000 trunc sweep. 128-bit RC4 and
 the AES PDF schemes have no such shortcut and the command declines them.
 
+For **V1/R2** PDFs the sweep can be replaced by a precomputed **Thunder Table**
+(rainbow time-memory trade-off): because R2's `/U = RC4(fileKey, pad)` is a salt-
+and ID-free function of the key, one table inverts *every* V1/R2 document in
+sub-second.
+
+```sh
+xcrack thunder-gen --out r2.table                  # build it (one-time; --dry-run prints the plan)
+xcrack thunder-gen --bits 24 --out trial.table     # a quick partial/trial table first
+xcrack pdf-keyattack --table r2.table scanned.pdf  # instant lookup; falls back to the sweep on a miss
+```
+
+`thunder-gen` tunes coverage vs. size with `--length` (chain length), `--chains`
+and `--tables`; a full 2^40 table is a long one-time job (`--dry-run` estimates
+the work, size and time). A table hit is re-checked with `VerifyFileKey`, and
+R3/R4 (per-file `/ID`) and Office (per-file salt) are not table-invertible, so
+they run the live sweep.
+
 **Microsoft Access** goes further still: a Jet (`.mdb`, Access 97–2003) database
 stores its password merely XOR-obfuscated in the header, so there is nothing to
 crack at all. `xcrack access-recover FILE` de-obfuscates it (the fixed header
