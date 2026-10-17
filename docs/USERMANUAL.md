@@ -16,7 +16,8 @@ for the vocabulary see [`TERMINOLOGY.md`](TERMINOLOGY.md); for quick answers see
 3. [GPU acceleration](#3-gpu-acceleration)
 4. [Distributed environments](#4-distributed-environments)
 5. [Advanced usage](#5-advanced-usage)
-6. [Debugging and troubleshooting](#6-debugging-and-troubleshooting)
+6. [Logging and the audit trail](#6-logging-and-the-audit-trail)
+7. [Debugging and troubleshooting](#7-debugging-and-troubleshooting)
 
 ---
 
@@ -325,7 +326,132 @@ See [`USAGE.md`](USAGE.md#embedding-the-library) and [`design.md`](design.md).
 
 ---
 
-## 6. Debugging and troubleshooting
+## 6. Logging and the audit trail
+
+Both `xcrack` and `xcrackd` write a single, structured log. It is an **audit
+trail**: it records what was processed and, for every successful recovery, an
+entry naming the file, its type and how long the crack took — so a run can be
+followed step by step and kept as evidence of what was opened. The same stream
+also carries the ordinary diagnostics (startup, GPU-tier status, warnings), so
+one set of options governs everything a run emits.
+
+### Where logs go, and in what shape
+
+By default the log goes to **stderr in text** (`key=value`) form, which keeps it
+separate from the machine-readable results on stdout. Three independent choices
+change that:
+
+- **Destination** — stderr (default), a **file** (`--log-file PATH`, appended,
+  created `0600`), or the **system logger** (`--syslog`). Pick exactly one of
+  `--log-file` / `--syslog`; `--syslog` wins if both are set.
+- **Format** — `--log-format text` (default) or `--log-format json` (one JSON
+  object per line, for a log pipeline / SIEM).
+- **Verbosity** — `--log-level debug|info|warn|error` (default `info`).
+
+### Command-line options
+
+These flags are identical on `xcrack` and `xcrackd` (the server spells them with
+a single dash, e.g. `-syslog`, as Go's flag package allows either form):
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--log-level debug\|info\|warn\|error` | `info` | Verbosity. Crack successes and request summaries are **info**; the per-node / per-file trace is **debug**; transient fallbacks are **warn**. |
+| `--log-format text\|json` | `text` | `key=value` lines, or one JSON object per line. |
+| `--log-file PATH` | *(stderr)* | Append the log + audit trail to a file instead of stderr. |
+| `--syslog` | off | Send the log + audit trail to the system logger (Unix only; a clean error elsewhere). |
+| `--syslog-address host:port` | *(local socket)* | Ship to a remote syslog server. Empty uses the local `/dev/log` socket. |
+| `--syslog-network udp\|tcp` | *(local socket)* | Transport for a remote `--syslog-address`. |
+| `--syslog-tag NAME` | program name | The syslog tag / ident. |
+| `--audit-log-password` | off | **Also record the recovered password** in the crack entry. Off by default, so the trail never persists a cleartext secret unless you ask. |
+
+### Config-file settings
+
+Every flag has a config-file equivalent under the `output:` block (flags still
+win over the file; see [`config/README.md`](../config/README.md)):
+
+```yaml
+output:
+  log_level: info            # debug | info | warn | error
+  log_format: json           # text | json
+  log_file: /var/log/xcrack/audit.log   # omit for stderr
+  syslog: false              # true => system logger (ignores log_file)
+  syslog_address: ""         # host:port for a remote sink; "" = local socket
+  syslog_network: ""         # udp | tcp (with syslog_address)
+  syslog_tag: xcrack         # syslog ident
+  audit_log_password: false  # include the recovered password in the crack entry
+```
+
+### The log messages
+
+Each run emits two kinds of line: **audit records** (what was processed) and
+**diagnostics** (what the tool is doing). The audit records are:
+
+| Message | Level | When | Key fields |
+|---------|-------|------|------------|
+| `file cracked` | info | a source file had at least one layer recovered | `file`, `type` (top-level format), `encrypted`, `cracked=true`, `size`, `time_to_crack`, `time_to_crack_ms`, `cracked_entries` (inner paths), `key_recovered` (if unlocked without a password), `passwords` (only with `--audit-log-password`) |
+| `file processed` | debug | a source file finished without a recovery (plain, or still locked) | `file`, `type`, `encrypted`, `cracked=false`, `size` |
+| `node scanned` | debug | one node in the decomposition tree (every file/entry) — the fine-grained execution trace | `node` (lineage), `type`, `status` (`plain`/`decrypted`/`locked`/…), `encrypted`, `size`, plus `time_to_crack`/`password` for a decrypted node |
+| `request served` | info | **`xcrackd` only** — one HTTP request completed | `client`, `endpoint`, `bytes`, `elapsed` |
+
+On `xcrackd` every audit record additionally carries `client` and `endpoint`, so
+the server keeps a complete trail of who asked for what. The "file type" on the
+headline is the **top-level** format (e.g. `zip`, `msoffice`, `pdf`), even when
+the encryption lives in an inner stream or entry.
+
+A cracked entry in text form (the `passwords=` field appears only with
+`--audit-log-password`):
+
+```
+level=INFO msg="file cracked" file=invoice.zip type=zip encrypted=true \
+  cracked=true size=0 time_to_crack=4.2s time_to_crack_ms=4200 \
+  cracked_entries="[invoice.zip!/secret.xlsx]"
+```
+
+The same record as JSON (`--log-format json`), ready for a log pipeline:
+
+```json
+{"time":"2026-10-17T12:00:00Z","level":"INFO","msg":"file cracked",
+ "file":"invoice.zip","type":"zip","encrypted":true,"cracked":true,"size":0,
+ "time_to_crack":"4.2s","time_to_crack_ms":4200,
+ "cracked_entries":["invoice.zip!/secret.xlsx"]}
+```
+
+Diagnostics use the standard levels: **info** for lifecycle lines
+(`xcrackd listening`, `GPU tier active across 1 device(s)`, `shutting down`),
+**warn** for transparent fallbacks (`--gpu requested but this binary is
+pure-Go … Continuing on CPU`), and **error** for a failed startup or a per-file
+error. Raising `--log-level debug` adds the `node scanned` trace and the engine's
+own debug chatter; lowering it to `warn` keeps only warnings and errors (crack
+successes are then not logged — use `info` to keep the audit trail).
+
+### Worked examples
+
+```sh
+# Human-readable audit trail to the terminal (the default):
+xcrack -s invoice.zip -w rockyou.txt
+
+# JSON audit trail to a file, including the recovered password, for an archive:
+xcrack --log-format json --log-file /var/log/xcrack/audit.log \
+       --audit-log-password -s invoice.zip -w rockyou.txt
+
+# Ship the trail to a central syslog server over TCP:
+xcrack --syslog --syslog-network tcp --syslog-address logs.example.net:514 \
+       --syslog-tag xcrack -s *.pdf -w words.txt
+
+# Follow every step of a tricky run (adds the per-node trace):
+xcrack --log-level debug -s nested.7z -w words.txt
+
+# Server: JSON audit trail to local syslog, tagged, no secrets:
+xcrackd -syslog -log-format json -gpu -addr :8080
+```
+
+A secrets-free trail (the default) is safe to forward to a shared log host; turn
+on `--audit-log-password` only where storing the cleartext password is itself
+authorized.
+
+---
+
+## 7. Debugging and troubleshooting
 
 ### Inspect the effective configuration
 
@@ -372,41 +498,11 @@ device.
 
 ### Logging and the audit trail
 
-Both `xcrack` and `xcrackd` write one structured, audit-grade log. It records
-what was processed and, for every successful recovery, a **"file cracked"** entry
-carrying the **filename, file type and time-to-crack** — so a run can be audited
-and followed end to end.
-
-| Flag | Meaning |
-|------|---------|
-| `--log-level debug\|info\|warn\|error` | verbosity. Crack successes are logged at **info** (shown by default); the per-node execution trace is at **debug**. |
-| `--log-format text\|json` | human-readable `key=value` (default) or one JSON object per line for a log pipeline. |
-| `--log-file PATH` | append the log + audit trail to a file instead of stderr. |
-| `--syslog` | send the log + audit trail to the system logger (Unix). |
-| `--syslog-address host:port` / `--syslog-network udp\|tcp` | ship to a remote syslog sink; omit both for the local socket. |
-| `--syslog-tag NAME` | syslog tag/ident (default: the program name). |
-| `--audit-log-password` | **also record the recovered password** in the crack entry. Off by default, so the trail never persists a cleartext secret unless you ask. |
-
-A crack entry looks like this (text; `--audit-log-password` adds `passwords=[…]`):
-
-```
-level=INFO msg="file cracked" file=invoice.zip type=zip encrypted=true \
-  cracked=true time_to_crack=4.2s cracked_entries="[invoice.zip!/secret.xlsx]"
-```
-
-Ship it to syslog and tail it as the audit record of a recovery run:
-
-```sh
-xcrack --syslog --syslog-tag xcrack --log-format json -s invoice.zip -w rockyou.txt
-# central host:
-xcrack --syslog --syslog-network udp --syslog-address logs.example.net:514 -s *.pdf -w words.txt
-```
-
-`xcrackd` takes the same flags and, in addition, tags every record with the
-client address and endpoint and emits a per-request "request served" summary
-(bytes, elapsed), so the server keeps a complete audit trail of who asked for
-what. These settings also live under `output:` in a config file (see
-[`config/README.md`](../config/README.md)).
+Logging has its own chapter: see [6. Logging and the audit
+trail](#6-logging-and-the-audit-trail) for the flags, config settings and the
+meaning of each log message. For a stuck run, `--log-level debug` adds the
+per-node `node scanned` trace so you can see exactly where the engine spends its
+time.
 
 ### Exit codes
 
