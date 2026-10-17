@@ -337,6 +337,19 @@ atomic plumbing as the Office sweep. The CPU re-checks every hit
 (`pdf.Handler.RC4KeyAttack`) in a pure-Go build or with no device; validated
 against the CPU reference on pocl (`PDFRC4KeySearcher`, `GPUSelfTest`).
 
+Finally, the **VBA project salted-SHA-1** verifier is accelerated as a per-
+password batch (not a key-search): `PasswordHash = SHA1(password‖salt)` with a
+4-byte salt is hashcat's `sha1($pass.$salt)` (mode 110). The `vba_sha1` kernel
+hashes a whole candidate batch at once; because the hash is a single un-iterated
+SHA-1, this is cheap per candidate, so the device's job is bulk throughput and
+the `Finish` closure trusts only a device *non-match* (a byte compare), re-hashing
+on the CPU (`vbaproject.Verify`) for an apparent hit — the device never decides
+correctness. It offloads through the live crack loop on the OpenCL server tier
+(`xcrackd --gpu`) via a new `AccelKDF.SaltedSHA1` seam, the same path the PBKDF2
+and Office-spin batches use, and falls back to the per-candidate CPU hash when no
+device is built/available. Validated against `crypto/sha1` on pocl
+(`SaltedSHA1Hasher`, `GPUSelfTest`).
+
 **Good candidates for additional kernels** (catalogued from a survey of the
 schemes):
 

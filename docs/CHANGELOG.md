@@ -15,6 +15,20 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU kernel: VBA project salted-SHA-1 batch.** The MS VBA project-protection
+  verifier — `PasswordHash = SHA1(password‖salt)` with a 4-byte salt, hashcat's
+  `sha1($pass.$salt)` (mode 110) — now offloads to an OpenCL device through the
+  live crack loop (`xcrackd --gpu`), the same path the PBKDF2/Office-spin batches
+  use. `kernel_vba_sha1.cl` bulk-hashes a whole candidate batch per dispatch; the
+  new `accel.SaltedSHA1Hasher` capability and an `AccelKDF.SaltedSHA1` seam drive
+  it (the VBA format now implements `xfileformats.Accelerable`). Because the hash
+  is cheap and un-iterated, the `Finish` closure trusts only a device non-match (a
+  byte compare) and re-hashes on the CPU (`vbaproject.Verify`) for an apparent hit,
+  so the device never decides correctness; it falls back to the per-candidate CPU
+  hash when no device is built/available. Validated on pocl against `crypto/sha1`
+  — `GPUSelfTest` gains a salted-SHA-1 case, plus a kernel cross-validation test
+  and a `-tags opencl` end-to-end engine test over a committed VBA fixture.
+  Default build stays pure-Go (ADR 0001); ships only with `-tags opencl`.
 - **GPU kernel: PDF 40-bit RC4 file-key search.** The second key-SEARCH OpenCL
   kernel: `pdf-keyattack --gpu` offloads the PDF Standard Security Handler's 2^40
   file-key sweep (V1/R2 and 40-bit R3/R4) to an OpenCL device. Because the file
