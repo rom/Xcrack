@@ -229,6 +229,21 @@ default location) persists every recovered password and tries the whole cache
 **first** on the next run — so a reused password is recovered instantly. It is a
 potfile; point it at a shared file across runs and reuse is automatic.
 
+**If the password is cached, why isn't a repeat run instant?** Because
+`--found-cache` is a *candidate-ordering* cache, not a result cache: it only puts
+the known password first in the stream, which skips the *wrong*-guess KDFs. Every
+run still pays, per file, the one **correct-password KDF** (these are deliberately
+slow — scrypt, Argon2, 100k-iteration PBKDF2, etc.; you can't derive the key
+without running it once), then decrypts, recursively decomposes, and — with
+`-o` — re-writes the whole extracted tree. That irreducible work is the floor
+(e.g. a scrypt-based `age` file alone is hundreds of MiB of memory-hard work). To
+make an actual **repeat extraction** near-instant, use **`--reuse-output`**: with
+`-o DIR` it records a per-source stamp (content hash + candidate set + recovered
+passwords) and on the next run skips any unchanged source entirely — no KDF, no
+decrypt, no re-write (a warm `--reuse-output -o DIR samples/*` run drops from
+~18s to ~0.02s). `--session FILE` similarly skips already-searched files but does
+not keep the `-o` output.
+
 **How do I make the likely guesses come first?** `--order markov` reorders a
 wordlist likeliest-first; `--markov` / `--markov-pos` *generate* best-first
 guesses (position-aware), with `--markov-threshold` capping the branching; the

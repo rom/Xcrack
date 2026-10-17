@@ -162,11 +162,14 @@ A sweep of the current feature set turned up these as the notable remaining gaps
 (basic/intermediate UX is otherwise essentially complete):
 
 **Search UX / interop (intermediate):**
-- ⬜ Rule *generation* (`--generate-rules`, hashcat `-g`) and random-rule search.
-- ⬜ `.hcstat2` Markov stats import/export (interop with hashcat's trained models).
-- ⬜ Association attack (hashcat `-a 9`): a specific hint bound 1:1 to a target.
-- ⬜ Wordlist utilities (dedupe/sort/split, set ops — hashcat-utils `rli`/`splitlen`).
-- ⬜ Outfile-format control / hashcat-style `hash:plain` potfile line format.
+- ✅ Rule *generation* (`--generate-rules N` / `--generate-rules-seed`, hashcat `-g`).
+- ✅ Command-line mask custom charsets (`-1..-4` / `--custom-charset1..4`, hashcat `-1..-4`).
+- ✅ Wordlist utilities (`xcrack wordlist`: `--dedupe`, `--sort`/`--sort-length`, `--min/max-length`, `--split N` — hashcat-utils `rli`/`splitlen` niche).
+- ✅ Outfile-format control (`--outfile-format` 1=target/2=plain/3=hex-plain).
+- ✅ Status heartbeat (`--status-timer N`).
+- ✅ **Output result cache** (`--reuse-output`): skip re-extracting an unchanged source whose `-o` output is already present — the near-instant repeat run.
+- ⬜ `.hcstat2` Markov stats import/export: deferred — the binary format has no in-container sample to validate against, and shipping an unverified parser would break the verify-first rule. Xcrack trains Markov/PCFG in-memory from the wordlist instead.
+- ⬜ Association attack (hashcat `-a 9`): a specific hint bound 1:1 to a target — niche in a file-content model (the broad `--hint`/`--context` cover the common case); revisit on demand.
 
 **Approaches / cryptanalysis (advanced):**
 - ⬜ **GPU kernels for the 40-bit key-space attacks** (Office 97/2000 MD5+RC4 and
