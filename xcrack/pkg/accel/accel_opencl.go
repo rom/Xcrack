@@ -693,7 +693,11 @@ func (a *clAccel) runOneOffice(ok officeKern, dev int, seeds [][]byte, spin int)
 const oldofficeChunk = 1 << 22
 
 // OldOfficeKeySearch sweeps the Office 97/2000 40-bit trunc keyspace
-// [start, start+count) on device 0, implementing OldOfficeKeySearcher. It is
+// [start, start+count), implementing OldOfficeKeySearcher. With more than one
+// backing device it splits the range into contiguous ascending sub-ranges, one
+// per device, and sweeps them concurrently (each device has its own queue,
+// kernel object, and buffers); the lowest-index hit wins, so the result is the
+// same as the single-device ascending sweep and matches the CPU reference. It is
 // byte-for-byte equivalent to officebinary.RC4KeyAttack; the caller re-checks a
 // hit on the CPU. Unsupported salt sizes return ErrUnsupported so the caller
 // falls back to the CPU sweep.
@@ -704,36 +708,102 @@ func (a *clAccel) OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, 
 	if count == 0 {
 		return nil, false, nil
 	}
-	dev := 0
+	ev := make([]byte, 32)
+	copy(ev, encVerifier)
+	copy(ev[16:], encVerifierHash)
+	end := start + count
+	if end < start { // overflow guard; callers bound to 2^40
+		end = ^uint64(0)
+	}
+	nd := len(a.queues)
+	if nd <= 1 {
+		idx, found, err := a.oldOfficeOne(0, salt, ev, start, end)
+		if err != nil || !found {
+			return nil, false, err
+		}
+		return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+	}
+
+	idxs := make([]uint64, nd)
+	founds := make([]bool, nd)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (end - start + uint64(nd) - 1) / uint64(nd)
+	for d := 0; d < nd; d++ {
+		lo := start + uint64(d)*chunk
+		if lo < start || lo >= end { // lo<start catches the overflow-guard tail
+			break
+		}
+		hi := lo + chunk
+		if hi < lo || hi > end {
+			hi = end
+		}
+		wg.Add(1)
+		go func(dev int, lo, hi uint64) {
+			defer wg.Done()
+			idx, found, err := a.oldOfficeOne(dev, salt, ev, lo, hi)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			if found {
+				idxs[dev], founds[dev] = idx, true
+			}
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, false, firstErr
+	}
+	// Devices sweep disjoint ascending sub-ranges, so the lowest-numbered device
+	// with a hit holds the lowest-index match (as the single-device sweep returns).
+	for d := 0; d < nd; d++ {
+		if founds[d] {
+			idx := idxs[d]
+			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// oldOfficeOne sweeps the trunc range [start, end) on a single device (its own
+// queue, kernel object, and buffers), returning the first (lowest-index) hit it
+// finds. The range is swept in oldofficeChunk-index enqueues so a very large
+// shard still progresses and a hit returns promptly. ev is
+// encVerifier(16) || encVerifierHash(16).
+func (a *clAccel) oldOfficeOne(dev int, salt, ev []byte, start, end uint64) (uint64, bool, error) {
+	if start >= end {
+		return 0, false, nil
+	}
 	kern := a.oldoffice[dev]
 	queue := a.queues[dev]
 
 	var errc C.cl_int
 	saltBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(salt)), unsafe.Pointer(&salt[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice salt): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(oldoffice salt): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(saltBuf)
-	ev := make([]byte, 32)
-	copy(ev, encVerifier)
-	copy(ev[16:], encVerifierHash)
 	evBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(32), unsafe.Pointer(&ev[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice ev): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(oldoffice ev): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(evBuf)
 	out := make([]uint32, 4) // [0]=found, [1]=idx low32, [2]=idx high
 	outBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_WRITE|C.CL_MEM_COPY_HOST_PTR), C.size_t(16), unsafe.Pointer(&out[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(oldoffice out): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(oldoffice out): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(outBuf)
 
 	cSaltLen := C.cl_uint(len(salt))
-	end := start + count
-	if end < start { // overflow guard; callers bound to 2^40
-		end = ^uint64(0)
-	}
 	for base := start; base < end; base += oldofficeChunk {
 		n := uint64(oldofficeChunk)
 		if base+n > end {
@@ -749,23 +819,26 @@ func (a *clAccel) OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, 
 		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
 		global := C.size_t(n)
 		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
-			return nil, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(oldoffice): %d", int(r))
+			return 0, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(oldoffice): %d", int(r))
 		}
 		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(16), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
-			return nil, false, fmt.Errorf("accel: clEnqueueReadBuffer(oldoffice): %d", int(r))
+			return 0, false, fmt.Errorf("accel: clEnqueueReadBuffer(oldoffice): %d", int(r))
 		}
 		if out[0] != 0 {
-			idx := uint64(out[1]) | uint64(out[2])<<32
-			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+			return uint64(out[1]) | uint64(out[2])<<32, true, nil
 		}
 	}
-	return nil, false, nil
+	return 0, false, nil
 }
 
-// PDFRC4KeySearch sweeps the PDF 40-bit RC4 file-key space [start, start+count)
-// on device 0, implementing PDFRC4KeySearcher. It is byte-for-byte equivalent to
-// pdf.Handler.RC4KeyAttack for the same params; the caller re-checks a hit on the
-// CPU. Unsupported shapes return ErrUnsupported so the caller falls back.
+// PDFRC4KeySearch sweeps the PDF 40-bit RC4 file-key space [start, start+count),
+// implementing PDFRC4KeySearcher. Like OldOfficeKeySearch it splits the range
+// into contiguous ascending sub-ranges across all backing devices (each with its
+// own queue, kernel object, and buffers) and returns the lowest-index hit, so the
+// result is the same as the single-device ascending sweep. It is byte-for-byte
+// equivalent to pdf.Handler.RC4KeyAttack for the same params; the caller
+// re-checks a hit on the CPU. Unsupported shapes return ErrUnsupported so the
+// caller falls back.
 func (a *clAccel) PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int, start, count uint64) ([]byte, bool, error) {
 	if len(input) == 0 || len(input) > 32 || rounds <= 0 || cmpLen <= 0 || cmpLen > len(u) || cmpLen > len(input) {
 		return nil, false, ErrUnsupported
@@ -773,35 +846,99 @@ func (a *clAccel) PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int
 	if count == 0 {
 		return nil, false, nil
 	}
-	dev := 0
+	end := start + count
+	if end < start {
+		end = ^uint64(0)
+	}
+	nd := len(a.queues)
+	if nd <= 1 {
+		idx, found, err := a.pdfKeyOne(0, input, rounds, u, cmpLen, start, end)
+		if err != nil || !found {
+			return nil, false, err
+		}
+		return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+	}
+
+	idxs := make([]uint64, nd)
+	founds := make([]bool, nd)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (end - start + uint64(nd) - 1) / uint64(nd)
+	for d := 0; d < nd; d++ {
+		lo := start + uint64(d)*chunk
+		if lo < start || lo >= end { // lo<start catches the overflow-guard tail
+			break
+		}
+		hi := lo + chunk
+		if hi < lo || hi > end {
+			hi = end
+		}
+		wg.Add(1)
+		go func(dev int, lo, hi uint64) {
+			defer wg.Done()
+			idx, found, err := a.pdfKeyOne(dev, input, rounds, u, cmpLen, lo, hi)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			if found {
+				idxs[dev], founds[dev] = idx, true
+			}
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, false, firstErr
+	}
+	// Lowest-numbered device with a hit holds the lowest-index match.
+	for d := 0; d < nd; d++ {
+		if founds[d] {
+			idx := idxs[d]
+			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+		}
+	}
+	return nil, false, nil
+}
+
+// pdfKeyOne sweeps the file-key range [start, end) on a single device (its own
+// queue, kernel object, and buffers), returning the first (lowest-index) hit it
+// finds. The range is swept in oldofficeChunk-index enqueues so a very large
+// shard still progresses and a hit returns promptly.
+func (a *clAccel) pdfKeyOne(dev int, input []byte, rounds int, u []byte, cmpLen int, start, end uint64) (uint64, bool, error) {
+	if start >= end {
+		return 0, false, nil
+	}
 	kern := a.pdfKey[dev]
 	queue := a.queues[dev]
 
 	var errc C.cl_int
 	inBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(input)), unsafe.Pointer(&input[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf input): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(pdf input): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(inBuf)
 	uBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(u)), unsafe.Pointer(&u[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf u): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(pdf u): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(uBuf)
 	out := make([]uint32, 4)
 	outBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_WRITE|C.CL_MEM_COPY_HOST_PTR), C.size_t(16), unsafe.Pointer(&out[0]), &errc)
 	if errc != C.CL_SUCCESS {
-		return nil, false, fmt.Errorf("accel: clCreateBuffer(pdf out): %d", int(errc))
+		return 0, false, fmt.Errorf("accel: clCreateBuffer(pdf out): %d", int(errc))
 	}
 	defer C.clReleaseMemObject(outBuf)
 
 	cBufLen := C.cl_uint(len(input))
 	cRounds := C.cl_uint(rounds)
 	cCmpLen := C.cl_uint(cmpLen)
-	end := start + count
-	if end < start {
-		end = ^uint64(0)
-	}
 	for base := start; base < end; base += oldofficeChunk {
 		n := uint64(oldofficeChunk)
 		if base+n > end {
@@ -819,17 +956,16 @@ func (a *clAccel) PDFRC4KeySearch(input []byte, rounds int, u []byte, cmpLen int
 		C.clSetKernelArg(kern, 7, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
 		global := C.size_t(n)
 		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
-			return nil, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(pdf): %d", int(r))
+			return 0, false, fmt.Errorf("accel: clEnqueueNDRangeKernel(pdf): %d", int(r))
 		}
 		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(16), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
-			return nil, false, fmt.Errorf("accel: clEnqueueReadBuffer(pdf): %d", int(r))
+			return 0, false, fmt.Errorf("accel: clEnqueueReadBuffer(pdf): %d", int(r))
 		}
 		if out[0] != 0 {
-			idx := uint64(out[1]) | uint64(out[2])<<32
-			return []byte{byte(idx), byte(idx >> 8), byte(idx >> 16), byte(idx >> 24), byte(idx >> 32)}, true, nil
+			return uint64(out[1]) | uint64(out[2])<<32, true, nil
 		}
 	}
-	return nil, false, nil
+	return 0, false, nil
 }
 
 // SaltedSHA1 computes SHA1(password || salt) for a batch of passwords on the
@@ -977,20 +1113,74 @@ func (a *clAccel) saltedSHA1One(dev int, passwords [][]byte, salt []byte) ([][]b
 	return res, nil
 }
 
-// PDFThunderChain computes rainbow-chain endpoints for the PDF R2 thunder table
-// on device 0, implementing PDFThunderChainer. n must be a power of two; the
-// reduction uses the mask n-1, which equals `% n` for the power-of-two key space,
-// so the endpoints are byte-identical to the Go walk. Chains are swept in chunks
-// to bound the output buffer.
+// PDFThunderChain computes rainbow-chain endpoints for the PDF R2 thunder table,
+// implementing PDFThunderChainer. n must be a power of two; the reduction uses
+// the mask n-1, which equals `% n` for the power-of-two key space, so the
+// endpoints are byte-identical to the Go walk. With more than one backing device
+// it splits the start-index range [startIdx, startIdx+count) into contiguous
+// pieces, one per device (each with its own queue and kernel object), that write
+// into disjoint, in-order regions of the output, so the concatenated result is
+// identical to the single-device walk. Chains are swept in chunks to bound the
+// output buffer.
 func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
 	if n == 0 || (n&(n-1)) != 0 || chainLen <= 0 || count == 0 {
 		return nil, ErrUnsupported
 	}
 	out := make([]uint64, count)
-	dev := 0
+	mask := n - 1
+	nd := len(a.queues)
+	if nd <= 1 {
+		if err := a.pdfThunderChainOne(0, mask, chainLen, seed, startIdx, out); err != nil {
+			return nil, err
+		}
+		return out, nil
+	}
+
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (count + uint64(nd) - 1) / uint64(nd)
+	for d := 0; d < nd; d++ {
+		lo := uint64(d) * chunk
+		if lo >= count {
+			break
+		}
+		hi := lo + chunk
+		if hi > count {
+			hi = count
+		}
+		wg.Add(1)
+		go func(dev int, lo, hi uint64) {
+			defer wg.Done()
+			if err := a.pdfThunderChainOne(dev, mask, chainLen, seed, startIdx+lo, out[lo:hi]); err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+			}
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return out, nil
+}
+
+// pdfThunderChainOne computes endpoints for the contiguous start-index range
+// [startIdx, startIdx+len(out)) on a single device (its own queue + kernel
+// object), filling out in order. Chains are swept in chunks to bound each
+// enqueue's output buffer.
+func (a *clAccel) pdfThunderChainOne(dev int, mask uint64, chainLen int, seed, startIdx uint64, out []uint64) error {
+	count := uint64(len(out))
+	if count == 0 {
+		return nil
+	}
 	kern := a.pdfChain[dev]
 	queue := a.queues[dev]
-	mask := n - 1
 	const chunk = uint64(1) << 20 // endpoints per enqueue (8 MiB out buffer)
 	var errc C.cl_int
 	cMask := C.cl_ulong(mask)
@@ -1003,7 +1193,7 @@ func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count 
 		}
 		outBuf := C.clCreateBuffer(a.ctx, C.CL_MEM_WRITE_ONLY, C.size_t(nn*8), nil, &errc)
 		if errc != C.CL_SUCCESS {
-			return nil, fmt.Errorf("accel: clCreateBuffer(thunderchain): %d", int(errc))
+			return fmt.Errorf("accel: clCreateBuffer(thunderchain): %d", int(errc))
 		}
 		cStart := C.cl_ulong(startIdx + base)
 		cN := C.cl_uint(nn)
@@ -1016,15 +1206,15 @@ func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count 
 		global := C.size_t(nn)
 		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
 			C.clReleaseMemObject(outBuf)
-			return nil, fmt.Errorf("accel: clEnqueueNDRangeKernel(thunderchain): %d", int(r))
+			return fmt.Errorf("accel: clEnqueueNDRangeKernel(thunderchain): %d", int(r))
 		}
 		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(nn*8), unsafe.Pointer(&out[base]), 0, nil, nil); r != C.CL_SUCCESS {
 			C.clReleaseMemObject(outBuf)
-			return nil, fmt.Errorf("accel: clEnqueueReadBuffer(thunderchain): %d", int(r))
+			return fmt.Errorf("accel: clEnqueueReadBuffer(thunderchain): %d", int(r))
 		}
 		C.clReleaseMemObject(outBuf)
 	}
-	return out, nil
+	return nil
 }
 
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
