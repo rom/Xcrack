@@ -56,7 +56,7 @@ func runOfficeKeyAttack(args []string) int {
 		return 1
 	}
 
-	lo, hi, serr := resolveRange(*shard, *start, *maxN)
+	lo, hi, serr := resolveRange(*shard, *start, *maxN, officebinary.MaxRC4Trunc)
 	if serr != nil {
 		fmt.Fprintf(os.Stderr, "xcrack office-keyattack: %v\n", serr)
 		return 2
@@ -106,19 +106,20 @@ func findMSORC4(reg *xfileformats.Registry, data []byte) *xcrypto.Challenge {
 }
 
 // resolveRange turns the --shard / --start / --max flags into a [lo, hi) index
-// window over the trunc keyspace.
-func resolveRange(shard string, start, maxN uint64) (lo, hi uint64, err error) {
-	lo, hi = 0, officebinary.MaxRC4Trunc
+// window over a keyspace of size max (shared by the Office trunc sweep and the
+// PDF file-key sweep, both 2^40).
+func resolveRange(shard string, start, maxN, max uint64) (lo, hi uint64, err error) {
+	lo, hi = 0, max
 	if shard != "" {
 		var i, n uint64
 		if _, e := fmt.Sscanf(shard, "%d/%d", &i, &n); e != nil || n == 0 || i >= n {
 			return 0, 0, fmt.Errorf("--shard: want i/N with 0<=i<N, got %q", shard)
 		}
-		per := officebinary.MaxRC4Trunc / n
+		per := max / n
 		lo = per * i
 		hi = lo + per
 		if i == n-1 {
-			hi = officebinary.MaxRC4Trunc // last shard mops up the remainder
+			hi = max // last shard mops up the remainder
 		}
 	}
 	if start > lo {

@@ -56,6 +56,19 @@ func newRC4Like(user, owner []byte, v, r int, cipher Cipher) (*Handler, []byte) 
 // NewRC4 builds an R3, 128-bit RC4 handler and returns it with the file key.
 func NewRC4(user, owner []byte) (*Handler, []byte) { return newRC4Like(user, owner, 2, 3, CipherRC4) }
 
+// NewRC4R2 builds a V1/R2, 40-bit RC4 handler (the classic Acrobat 3-4 scheme)
+// and returns it with the 5-byte file key. This is the key-attackable case.
+func NewRC4R2(user, owner []byte) (*Handler, []byte) {
+	h := &Handler{
+		V: 1, R: 2, Length: 5, P: -16,
+		ID: []byte("0123456789abcdef"), EncryptMetadata: true, Cipher: CipherRC4,
+	}
+	h.O = h.computeO(owner, user)
+	fk := h.fileKeyFromUser(user)
+	h.U = h.computeU(fk) // R2 stores the full 32-byte RC4(fileKey, pad)
+	return h, fk
+}
+
 // NewAESV2 builds an R4 AES-128 handler and returns it with the file key.
 func NewAESV2(user, owner []byte) (*Handler, []byte) {
 	return newRC4Like(user, owner, 4, 4, CipherAESV2)

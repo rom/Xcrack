@@ -19,6 +19,8 @@ tables further down.
 - ✅ **Crypto wallets — Ethereum keystore** (Web3 Secret Storage v3, `ethwallet`): scrypt / PBKDF2-HMAC-SHA256 → Keccak-256 MAC. See §5.
 - ✅ **KeePass KDBX3.1** (AES-KDF + AES-256-CBC stream-start-bytes), alongside KDBX4. See §5.
 - ✅ **Office 97/2000 40-bit RC4 key attack** ("Thunder Tables"): `xcrack office-keyattack FILE` sweeps the 2^40 trunc keyspace (shardable, parallel, resumable, allocation-free inner loop). See §4.
+- ✅ **PDF 40-bit RC4 file-key attack** (V1/R2 and 40-bit R3/R4): `xcrack pdf-keyattack FILE` sweeps the 2^40 file-key space against the `/U` verifier — password-independent, shardable, parallel, R2 allocation-free hot loop. Cross-validated against a real qpdf-produced 40-bit PDF. See docs/CRACKING.md §3.
+- ✅ **ZipCrypto cross-entry key reuse**: one recovery (known-plaintext or found password) unlocks the whole archive — `xcrack kp --decrypt … --zip ARCHIVE [--zip-out DIR]` seeds the shared entry-start state into every entry, each CRC-re-validated. See docs/CRACKING.md §3.
 - ✅ **VelvetSweatshop / empty-password** tried up front (read-only-recommended Excel, owner-only PDF) — zero-search recoveries. See docs/CRACKING.md.
 
 **GPU tier (opt-in, server-only)**
@@ -111,7 +113,8 @@ New reference docs: **docs/CRACKING.md** (per-format attack + verification short
 | ✅ | PRINCE, toggle/keyboard-walk | `candidates.Prince` / `ToggleCase` / `KeyboardWalk`; CLI `--prince` / `--toggle-case` / `--keyboard-walk` (config `search.prince` / `toggle_case` / `keyboard_walk`). |
 | ✅ | **Cost-aware recovery queue** | `--cost-queue` (config `search.cost_queue`): benchmark each input file's per-format verify rate and dispatch the fastest/weakest schemes first across a pile of files (the Elcomsoft recovery queue). |
 | ✅ | **Loopback** | `--loopback` (hashcat `--loopback`): re-mangle the cached/pot recovered passwords through the rule set, tried early — catches a reused password with a new suffix/case. |
-| ✅ | **Key-space attack (40-bit RC4)** | `xcrack office-keyattack` recovers the Office 97/2000 document key directly (see §5), bypassing the password entirely. |
+| ✅ | **Key-space attack (40-bit RC4)** | `xcrack office-keyattack` recovers the Office 97/2000 document key directly (see §5), and `xcrack pdf-keyattack` recovers a V1/R2 (or 40-bit R3/R4) PDF file key against the `/U` verifier — both bypass the password entirely. |
+| ✅ | **ZipCrypto cross-entry reuse** | `xcrack kp --decrypt … --zip ARCHIVE` seeds one recovered entry-start state into every entry of the archive (shared password ⇒ shared pre-header key), decrypting them all with no further search (`--zip-out DIR`); each entry CRC-re-validated. |
 | ✅ | **Position-aware Markov** | `--markov-pos` (2D Markov) and `--markov-threshold` (per-position branching cap), alongside `--markov` / `--order markov`. |
 
 ## 5. Application file formats

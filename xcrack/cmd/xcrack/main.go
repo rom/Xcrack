@@ -43,6 +43,8 @@ func run(args []string) int {
 			return runExportChallenge(args[1:])
 		case "office-keyattack":
 			return runOfficeKeyAttack(args[1:])
+		case "pdf-keyattack":
+			return runPDFKeyAttack(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -1047,6 +1049,8 @@ USAGE:
                                    for an external cracker (import with --resume-from)
   xcrack office-keyattack FILE     direct 40-bit key attack on Office 97/2000 RC4
                                    (recovers the key, not the password; --shard i/N)
+  xcrack pdf-keyattack FILE        direct 40-bit key attack on V1/R2 (and 40-bit
+                                   R3/R4) RC4 PDFs (recovers the key; --shard i/N)
   xcrack version
 
 COMMON FLAGS:

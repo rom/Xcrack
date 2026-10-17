@@ -15,6 +15,30 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **ZipCrypto cross-entry key reuse** — every entry in a ZipCrypto archive
+  shares one password-derived pre-header key state, so a single recovery unlocks
+  the whole archive. `xcrack kp --decrypt … --zip ARCHIVE [--zip-out DIR]` seeds
+  the recovered entry-start state (`zip.DecryptArchiveWithStart`) into every
+  other entry and decrypts them all with no further search; each entry is
+  independently CRC-re-validated and AES / non-ZipCrypto entries are skipped.
+- **PDF 40-bit RC4 file-key attack** — `xcrack pdf-keyattack FILE`
+  (`xcrypto/scheme/pdf.Handler.RC4KeyAttack`): the PDF file key is a single MD5
+  truncated to 5 bytes, independent of the password's length, so the 2^40
+  file-key space is swept directly against the `/U` verifier and recovered with
+  no password, from the public `/U`, `/ID` and revision alone. Covers V1/R2 and
+  40-bit R3/R4; the common R2 case runs an allocation-free inline-RC4 hot loop.
+  Shardable (`--shard i/N`), parallel (`--workers`); 128-bit RC4 and the AES
+  schemes are declined. Cross-validated against a real 40-bit PDF produced by
+  qpdf (`keyattack_test.go`).
+
+### Fixed
+- `resolveRange` (the `--shard`/`--start`/`--max` keyspace splitter) now takes
+  the keyspace size explicitly, shared cleanly between the Office trunc sweep and
+  the new PDF file-key sweep (both 2^40).
+
+## PR #18 — 2026-10-17 — Found-password cache, session/potfile, basic+intermediate features, GPU vendors, CRACKING.md
+
+### Added
 - **Found-password cache** — `--found-cache FILE` / `--remember` (default
   `$XDG_DATA_HOME/xcrack/found.txt`): a persistent potfile whose passwords lead
   the candidate stream, so a reused password is recovered instantly on the next
