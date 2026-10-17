@@ -10,6 +10,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -70,7 +71,11 @@ func main() {
 			for _, d := range acc.Devices() {
 				log.Printf("GPU tier: %s %s (%s, %d compute units)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
 			}
-			log.Printf("GPU tier: PBKDF2-HMAC-SHA1 kernel validated and active")
+			msg := fmt.Sprintf("GPU tier: PBKDF2-HMAC-SHA1/SHA256/SHA512 kernels validated and active across %d device(s)", len(acc.Devices()))
+			if bt, ok := acc.(accel.BatchTuner); ok {
+				msg += fmt.Sprintf("; autotuned batch %d", bt.OptimalBatch())
+			}
+			log.Print(msg)
 		}
 	}
 

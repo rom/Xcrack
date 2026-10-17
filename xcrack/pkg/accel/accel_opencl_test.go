@@ -112,6 +112,47 @@ func TestGPUBatchSHA256And512(t *testing.T) {
 	}
 }
 
+// TestAutotuneBatch checks the accelerator advertises a sane, positive batch
+// size via BatchTuner, and that a batch of that size still matches the
+// reference (exercising the per-device runOne path at the tuned width).
+func TestAutotuneBatch(t *testing.T) {
+	a, err := Detect()
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	defer a.Close()
+	bt, ok := a.(BatchTuner)
+	if !ok {
+		t.Fatal("OpenCL accelerator does not implement BatchTuner")
+	}
+	n := bt.OptimalBatch()
+	if n <= 0 || n > 1<<20 {
+		t.Fatalf("OptimalBatch() = %d; want a sane positive size", n)
+	}
+	t.Logf("autotuned batch = %d over %d device(s)", n, len(a.Devices()))
+
+	salt := []byte("batch-ref-salt16")
+	const iter, dk = 200, 32
+	pws := make([][]byte, n)
+	for i := range pws {
+		pws[i] = []byte{byte(i), byte(i >> 8), byte(i >> 16), 'z'}
+	}
+	got, err := a.PBKDF2SHA1(pws, salt, iter, dk)
+	if err != nil {
+		t.Fatalf("PBKDF2SHA1(tuned batch): %v", err)
+	}
+	if len(got) != n {
+		t.Fatalf("got %d results, want %d", len(got), n)
+	}
+	// Spot-check a sample of the batch against the reference.
+	for _, i := range []int{0, n / 3, n / 2, n - 1} {
+		want, _ := prim.PBKDF2(sha1.New, string(pws[i]), salt, iter, dk)
+		if !bytes.Equal(got[i], want) {
+			t.Fatalf("tuned-batch index %d mismatch", i)
+		}
+	}
+}
+
 func TestBuiltFlag(t *testing.T) {
 	if !Built() {
 		t.Error("Built() = false in an -tags opencl build")

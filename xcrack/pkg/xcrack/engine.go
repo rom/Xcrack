@@ -159,6 +159,12 @@ type Options struct {
 	// verifier, so it can never cause a false positive. nil (the default) keeps
 	// every search on the CPU.
 	Accelerator Accelerator
+
+	// AccelBatch overrides how many candidates are derived per accelerator
+	// dispatch. 0 (the default) uses the accelerator's autotuned size when it
+	// implements accel.BatchTuner, otherwise a built-in default. Ignored without
+	// an Accelerator.
+	AccelBatch int
 }
 
 // KnownPlaintext configures an opt-in known-plaintext key-recovery attack for

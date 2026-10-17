@@ -426,7 +426,8 @@ func (e *engine) crackAccel(ctx context.Context, path string, ak *xfileformats.A
 	reject := e.opts.FastReject
 	maxCand := e.opts.Limits.MaxCandidates
 
-	batch := make([][]byte, 0, accelBatch)
+	batchSize := e.accelBatchSize()
+	batch := make([][]byte, 0, batchSize)
 	var tried int64
 	// flush derives the pending batch on the accelerator and tests each key.
 	// hit is the winning password; fellBack signals the caller to use the CPU.
@@ -468,7 +469,7 @@ func (e *engine) crackAccel(ctx context.Context, path string, ak *xfileformats.A
 		}
 		tried++
 		batch = append(batch, append([]byte(nil), pw...)) // copy: source reuses its buffer
-		if len(batch) >= accelBatch {
+		if len(batch) >= batchSize {
 			if hit, found, fellBack := flush(); found || fellBack {
 				return hit, found, fellBack
 			}
@@ -743,6 +744,21 @@ func safeOpen(entry *xfileformats.Entry, pw []byte) (r io.Reader, err error) {
 func safeVerify(verify func([]byte) (bool, error), pw []byte) (ok bool, err error) {
 	defer guard(&err)
 	return verify(pw)
+}
+
+// accelBatchSize is how many candidates to derive per accelerator dispatch: an
+// explicit Options.AccelBatch wins; otherwise a BatchTuner accelerator's
+// autotuned size; otherwise the fixed default.
+func (e *engine) accelBatchSize() int {
+	if e.opts.AccelBatch > 0 {
+		return e.opts.AccelBatch
+	}
+	if bt, ok := e.opts.Accelerator.(accel.BatchTuner); ok {
+		if n := bt.OptimalBatch(); n > 0 {
+			return n
+		}
+	}
+	return accelBatch
 }
 
 // accelDerive runs the batch derivation on the accelerator, dispatching to the

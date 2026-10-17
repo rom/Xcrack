@@ -59,6 +59,16 @@ type Accelerator interface {
 	Close() error
 }
 
+// BatchTuner is an optional capability of an Accelerator that can recommend a
+// per-dispatch batch size tuned to its device(s) (count, compute units,
+// throughput). The engine type-asserts for it and sizes its offload batches
+// accordingly, falling back to a fixed default when an Accelerator does not
+// implement it.
+type BatchTuner interface {
+	// OptimalBatch returns the recommended number of candidates per batch (> 0).
+	OptimalBatch() int
+}
+
 // Built reports whether an OpenCL backend was compiled into this binary. It is
 // false for the default pure-Go build.
 func Built() bool { return built }
