@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/hex"
 	"flag"
 	"fmt"
 	"io/fs"
@@ -16,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/rom/xcrack/pkg/xcrack"
@@ -49,6 +51,8 @@ func run(args []string) int {
 			return runAccessRecover(args[1:])
 		case "vba-recover":
 			return runVBARecover(args[1:])
+		case "wordlist":
+			return runWordlist(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -170,10 +174,27 @@ func runCrack(args []string) int {
 	encodingF := fs_.String("encoding", "", "transcode each candidate to this encoding before testing: utf-8 (default), latin1, utf-16le, utf-16be")
 	var hcmaskFiles stringSlice
 	fs_.Var(&hcmaskFiles, "hcmask", "load masks from a hashcat .hcmask file (per-line masks with optional inline ?1..?4 charsets; repeatable)")
+	// Custom mask charsets ?1..?4 (hashcat -1..-4). Both the short (-1) and long
+	// (--custom-charset1) names set the same value; flags win over any ?1..?4
+	// defined in a --pattern file or config.
+	var cc1, cc2, cc3, cc4 string
+	fs_.StringVar(&cc1, "1", "", "define custom mask charset ?1 (e.g. -1 ?l?d), used by masks/--hcmask")
+	fs_.StringVar(&cc1, "custom-charset1", "", "alias for -1")
+	fs_.StringVar(&cc2, "2", "", "define custom mask charset ?2")
+	fs_.StringVar(&cc2, "custom-charset2", "", "alias for -2")
+	fs_.StringVar(&cc3, "3", "", "define custom mask charset ?3")
+	fs_.StringVar(&cc3, "custom-charset3", "", "alias for -3")
+	fs_.StringVar(&cc4, "4", "", "define custom mask charset ?4")
+	fs_.StringVar(&cc4, "custom-charset4", "", "alias for -4")
+	genRulesN := fs_.Int("generate-rules", 0, "generate N random mangling rules and add them to the rule pool (hashcat -g); reproducible via --generate-rules-seed")
+	genRulesSeed := fs_.Int64("generate-rules-seed", 0, "seed for --generate-rules (default 0; same seed => same rules)")
+	outfileFormat := fs_.String("outfile-format", "", "found-password line format for --results-file / --show: comma list of 1=target 2=plain 3=hex-plain (e.g. 1,2); default is the normal renderer")
+	statusTimer := fs_.Int("status-timer", 0, "print a progress status line every N seconds during the run (0=off)")
 	var resumeFrom stringSlice
 	fs_.Var(&resumeFrom, "resume-from", "import a RecoveredPassword JSON envelope (from an external cracker that solved an exported challenge) and try its password first (repeatable)")
 	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
 	sessionPath := fs_.String("session", "", "persist/resume a whole multi-file run to FILE: files already fully searched are skipped on re-run (batch-level complement to --checkpoint)")
+	reuseOutput := fs_.Bool("reuse-output", false, "with -o: skip a source whose decrypted output is already present and still valid (same content + candidate set), recorded per-output in .xcrack-stamp — makes a repeat extraction near-instant (unlike --found-cache, which still re-verifies and re-extracts)")
 
 	maxDepth := fs_.Int("max-depth", 0, "max nesting depth (0=default 32)")
 	maxTotal := fs_.Int64("max-total-bytes", 0, "cumulative decompressed byte budget")
@@ -264,8 +285,20 @@ func runCrack(args []string) int {
 		return 2
 	}
 
+	// --generate-rules N: fold N reproducible random rules into the rule pool.
+	var genRules []string
+	if *genRulesN > 0 {
+		genRules = pattern.GenerateRules(*genRulesN, *genRulesSeed)
+	}
+	// --custom-charset1..4 / -1..-4: collect the non-empty definitions.
+	flagCharsets := map[rune]string{}
+	for r, v := range map[rune]string{'1': cc1, '2': cc2, '3': cc3, '4': cc4} {
+		if v != "" {
+			flagCharsets[r] = v
+		}
+	}
 	// Build the pattern set from --pattern files and the config's patterns block.
-	patternSet, customCharsets, maskSpecs, err := buildPatternSet(patterns, cfg)
+	patternSet, customCharsets, maskSpecs, err := buildPatternSet(patterns, cfg, genRules, flagCharsets)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "xcrack: pattern: %v\n", err)
 		return 2
@@ -780,11 +813,40 @@ func runCrack(args []string) int {
 		}
 	}
 
+	// Output result cache: with -o and --reuse-output, skip any source whose
+	// extracted output is already present and up to date (same content hash and
+	// candidate set). Unlike --found-cache (which only reorders candidates and
+	// still re-verifies + re-extracts every run) this skips the per-file
+	// verification KDF, decrypt, decompose and the -o rewrite entirely.
+	reuseSig := candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok)
+	if *reuseOutput && *out != "" {
+		pending := files[:0:0]
+		for _, f := range files {
+			if pw, ok := readReuseStamp(*out, f, extractSuffixVal, reuseSig); ok {
+				if len(pw) > 0 {
+					fmt.Printf("%s  [reuse-output: already extracted] %s\n", f, strings.Join(pw, ", "))
+				} else {
+					fmt.Printf("%s  [reuse-output: already extracted, no password found]\n", f)
+				}
+				continue
+			}
+			pending = append(pending, f)
+		}
+		files = pending
+		if len(files) == 0 {
+			fmt.Fprintln(os.Stderr, "xcrack: --reuse-output: all sources already extracted and unchanged")
+			return 0
+		}
+	} else if *reuseOutput && *out == "" {
+		fmt.Fprintln(os.Stderr, "xcrack: --reuse-output needs -o/--out; ignoring")
+	}
+
 	ctx := context.Background()
 	pool := xcrack.NewPool(opts)
 	defer pool.Close()
 
 	results := make([]*xcrack.Result, len(files))
+	srcHash := make([]string, len(files))
 	errs := make([]error, len(files))
 	jobs := opts.FileConcurrency
 	if jobs < 1 {
@@ -836,6 +898,28 @@ func runCrack(args []string) int {
 		sort.SliceStable(dispatch, func(a, b int) bool { return sizes[dispatch[a]] < sizes[dispatch[b]] })
 	}
 
+	// --status-timer N: a lightweight heartbeat printing files-done/elapsed every
+	// N seconds, independent of --progress (which needs a known keyspace).
+	var doneCount int64
+	if *statusTimer > 0 {
+		stop := make(chan struct{})
+		start := time.Now()
+		go func() {
+			t := time.NewTicker(time.Duration(*statusTimer) * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-t.C:
+					fmt.Fprintf(os.Stderr, "xcrack status: %d/%d files done, %s elapsed\n",
+						atomic.LoadInt64(&doneCount), len(files), time.Since(start).Round(time.Second))
+				}
+			}
+		}()
+		defer close(stop)
+	}
+
 	var wg sync.WaitGroup
 	for _, i := range dispatch {
 		path := files[i]
@@ -844,6 +928,7 @@ func runCrack(args []string) int {
 		go func(i int, path string) {
 			defer wg.Done()
 			defer func() { <-sem }()
+			defer atomic.AddInt64(&doneCount, 1)
 			if prog != nil {
 				defer prog.fileDone()
 			}
@@ -851,6 +936,9 @@ func runCrack(args []string) int {
 			if err != nil {
 				errs[i] = err
 				return
+			}
+			if *reuseOutput && *out != "" {
+				srcHash[i] = sha256hex(data)
 			}
 			src := buildCandidates(path)
 			// Resumable single-target run: wrap the candidate source so progress is
@@ -905,7 +993,62 @@ func runCrack(args []string) int {
 		}
 	}
 
-	return render(files, results, errs, outFormat, *out, extractSuffixVal, resFile)
+	// --outfile-format: write found-password lines in the requested field format,
+	// taking over the --results-file destination (or stdout) from the JSON manifest.
+	if *outfileFormat != "" {
+		if err := writeOutfile(*outfileFormat, files, results, resFile); err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: --outfile-format: %v\n", err)
+			return 2
+		}
+		resFile = ""
+	}
+
+	rc := render(files, results, errs, outFormat, *out, extractSuffixVal, resFile)
+	// Record output stamps so a later --reuse-output run can skip these sources.
+	if *reuseOutput && *out != "" {
+		for i, r := range results {
+			if r == nil {
+				continue
+			}
+			writeReuseStamp(*out, files[i], extractSuffixVal, srcHash[i], reuseSig, r.Passwords())
+		}
+	}
+	return rc
+}
+
+// writeOutfile emits one line per recovered password in a hashcat-style field
+// format: a comma list of 1=target path, 2=plain, 3=hex-plain, joined by ':'.
+// Lines go to dest (truncated) when set, else stdout.
+func writeOutfile(spec string, files []string, results []*xcrack.Result, dest string) error {
+	fields := strings.Split(spec, ",")
+	var b strings.Builder
+	for i, r := range results {
+		if r == nil {
+			continue
+		}
+		for _, pw := range r.Passwords() {
+			parts := make([]string, 0, len(fields))
+			for _, f := range fields {
+				switch strings.TrimSpace(f) {
+				case "1":
+					parts = append(parts, files[i])
+				case "2":
+					parts = append(parts, pw)
+				case "3":
+					parts = append(parts, hex.EncodeToString([]byte(pw)))
+				default:
+					return fmt.Errorf("unknown field %q (use 1=target, 2=plain, 3=hex-plain)", f)
+				}
+			}
+			b.WriteString(strings.Join(parts, ":"))
+			b.WriteByte('\n')
+		}
+	}
+	if dest == "" {
+		fmt.Print(b.String())
+		return nil
+	}
+	return os.WriteFile(dest, []byte(b.String()), 0o600)
 }
 
 func render(files []string, results []*xcrack.Result, errs []error, outFormat, outDir, extractSuffix, resFile string) int {
@@ -1131,6 +1274,8 @@ USAGE:
   xcrack vba-recover FILE          recover a VBA project password from a .doc/.xls/
                                    .ppt, .docm/.xlsm/.pptm or vbaProject.bin (plaintext
                                    is read directly; a hash emits John/hashcat lines)
+  xcrack wordlist [opts] [FILE...] wordlist utilities: --dedupe, --sort[-length],
+                                   --min-length/--max-length, --split N (hashcat-utils)
   xcrack version
 
 COMMON FLAGS:
@@ -1231,7 +1376,7 @@ func buildHintRules(file string, cfg *fileConfig) (func(string) []string, error)
 	}, nil
 }
 
-func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]string, []string, error) {
+func buildPatternSet(files []string, cfg *fileConfig, extraRules []string, extraCharsets map[rune]string) (*pattern.Set, map[rune]string, []string, error) {
 	spec := pattern.Spec{CustomCharsets: map[rune]string{}}
 	for _, f := range files {
 		data, err := os.ReadFile(f)
@@ -1256,6 +1401,13 @@ func buildPatternSet(files []string, cfg *fileConfig) (*pattern.Set, map[rune]st
 				spec.CustomCharsets[rune(k[0])] = v
 			}
 		}
+	}
+	// Generated rules (--generate-rules) join the rule pool alongside any from
+	// --pattern files / config.
+	spec.Rules = append(spec.Rules, extraRules...)
+	// --custom-charset1..4 flags win over file/config ?1..?4 definitions.
+	for k, v := range extraCharsets {
+		spec.CustomCharsets[k] = v
 	}
 	set, err := pattern.Compile(spec)
 	return set, spec.CustomCharsets, spec.Masks, err
