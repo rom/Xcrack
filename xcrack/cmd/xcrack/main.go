@@ -1266,7 +1266,8 @@ USAGE:
   xcrack export-challenge [srcs]   emit the portable JSON challenge envelope(s)
                                    for an external cracker (import with --resume-from)
   xcrack office-keyattack FILE     direct 40-bit key attack on Office 97/2000 RC4
-                                   (recovers the key, not the password; --shard i/N)
+                                   (recovers the key, not the password; --shard i/N;
+                                   --gpu offloads the sweep on a -tags opencl build)
   xcrack pdf-keyattack FILE        direct 40-bit key attack on V1/R2 (and 40-bit
                                    R3/R4) RC4 PDFs (recovers the key; --shard i/N)
   xcrack access-recover FILE       recover a Jet (.mdb) database password from the

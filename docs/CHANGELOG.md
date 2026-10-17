@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU kernel: Office 97/2000 40-bit MD5+RC4 key search.** The first key-SEARCH
+  OpenCL kernel (distinct from the per-password PBKDF2/Office-spin batch kernels):
+  `office-keyattack --gpu` offloads the 2^40 trunc sweep (the Elcomsoft "Thunder
+  Tables" / hashcat thread-3665 attack) to an OpenCL device. `kernel_oldoffice_
+  md5rc4.cl` does MD5 + RC4 per trunc index on the device; the new
+  `accel.OldOfficeKeySearcher` capability drives it, with transparent CPU fallback
+  and an authoritative CPU re-check (`officebinary.VerifyRC4Trunc`) of any hit.
+  Validated on pocl against the CPU reference (`officebinary.RC4KeyAttack`) —
+  `GPUSelfTest` gains an oldoffice case, plus a kernel cross-validation test and a
+  `-tags opencl` end-to-end CLI test. Default build stays pure-Go (ADR 0001);
+  ships only with `-tags opencl`. PDF R2–R4 (same key-search shape) is a follow-up.
 - **CLI parity features (basic/intermediate gap review).**
   - `-1/-2/-3/-4` (`--custom-charset1..4`): command-line mask custom charsets
     `?1..?4` (hashcat `-1..-4`), used by `--hcmask`/`--pattern` masks.

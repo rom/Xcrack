@@ -313,15 +313,28 @@ verifies, and the seam derives one profile per candidate, so offloading could
 sweep the keyspace against the wrong profile and miss the real one — it stays on
 the CPU where both profiles are tried.
 
+The GPU also accelerates one **key-search** attack (a different kernel shape from
+the per-password batch above): the **Office 97/2000 2^40 MD5+RC4 trunc sweep**
+(`xcrack office-keyattack --gpu`). The `oldoffice_md5rc4` kernel reproduces the
+CPU verifier for every trunc index — `trunc2 = MD5(16×(trunc‖salt))[:5]`,
+`key = MD5(trunc2‖LE32(0))[:16]`, `RC4` over the 32-byte verifier, `MD5` check —
+one work-item per index, and publishes any hit via an atomic. The CPU re-checks
+the hit (`officebinary.VerifyRC4Trunc`), so the device never decides correctness;
+in a pure-Go build or with no device it falls back to the CPU sweep. The kernel
+is validated against the CPU reference `officebinary.RC4KeyAttack` on pocl
+(`OldOfficeKeySearcher`, `GPUSelfTest`).
+
 **Good candidates for additional kernels** (catalogued from a survey of the
 schemes):
 
 | Candidate | Benefits | Difficulty |
 |-----------|----------|------------|
 | **Office standard iterated hash** (SHA-1 ×50000) | Office 2007 | the spin kernel already exists (shared with agile); only the standard `Finish` wiring (the post-spin `H(cur‖0)` + 0x36/0x5c derive) remains |
-| **Office 97/2000 2^40 trunc sweep** (MD5 + RC4) | every 97/2000 doc; collapses the dominant attack cost | moderate; a different *key-search* kernel shape (not the per-password batch), so it needs its own interface |
 | **KeePass AES-KDF** (KDBX3 / KDBX4 AES) | KeePass AES-KDF files | moderate; needs an AES-256 core; the seed is shared across candidates |
-| **PDF R2–R4 MD5+RC4** | PDF dictionaries | low once MD5+RC4 cores exist; same key-search shape as the Office 97/2000 sweep |
+| **PDF R2–R4 MD5+RC4 key search** | PDF dictionaries | low — reuse the shipped `oldoffice_md5rc4` MD5+RC4 cores; same key-search shape as the Office 97/2000 sweep, different per-index derivation |
+
+(The **Office 97/2000 2^40 MD5+RC4 trunc sweep** has shipped — see the key-search
+paragraph above.)
 
 **Deliberately CPU-only / out of scope for a kernel:** Argon2 (KeePass/PuTTY) and
 scrypt (Ethereum/age/PBES2) are **memory-hard** — each work-item needs its whole
