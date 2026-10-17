@@ -15,6 +15,18 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Inspection / estimation modes** on the crack command (no cracking):
+  `--stdout` prints the assembled candidate stream (hashcat `--stdout`);
+  `--keyspace` prints the candidate keyspace size; `--benchmark`/`-b` measures
+  the per-file verify rate (candidates/sec); `--estimate` combines keyspace ×
+  rate into a time-to-crack. `--limit N` caps `--stdout`/`--keyspace`.
+- `--progress` now shows a true percent and a candidate-rate ETA for a single
+  target whose keyspace is known (e.g. a mask), falling back to the per-file
+  reporter otherwise.
+
+## PR #15 — 2026-10-17 — Distributed cracking, challenge/Markov/time-limit CLI, Swedish list, RAR5
+
+### Added
 - **Distributed cracking across many xcrackd servers** (`pkg/cluster`): xcrack
   orchestrates a fleet of workers over the HTTP API. *Collective* mode throws
   every server at one file on disjoint candidate batches (first hit wins, the
