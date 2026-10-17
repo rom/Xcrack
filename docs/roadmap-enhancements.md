@@ -138,9 +138,9 @@ Apple iWork (Pages/Numbers/Keynote), KeePass KDBX4 (.kdbx), Apple encrypted DMG
 | ✅ | **JKS (Java KeyStore)** | Store-password recovery via the trailing SHA-1 integrity digest; cross-checked against keytool. |
 | ✅ | **PKCS#12 (.p12/.pfx)** | Password recovery via the PFX MacData MAC (PKCS#12 KDF, RFC 7292 B.2 + HMAC); algorithm-independent of the bag encryption, cross-checked against OpenSSL (modern SHA-256/AES and legacy SHA-1/3DES). |
 | ✅ | **PuTTY `.ppk`** | v3 (Argon2id/i) and v2 (legacy SHA-1); passphrase verified by the Private-MAC after decrypting the private section; cross-checked against puttygen. |
-| ⬜ | BKS | Remaining Java key store. |
-| ⬜ | Disk images: ISO/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack, not always crypto). |
-| ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack. |
+| ⬜ | BKS, JCEKS | Remaining Java key stores (JKS/PKCS#12 already ship). BKS = Bouncy Castle keystore (PBKDF + HMAC integrity); JCEKS = Sun's extended store (stronger PBE). Recover the store password via the integrity MAC, like JKS. |
+| ⬜ | Disk images: ISO 9660/UDF, VHD(X), IMG | Dominant malware-delivery containers (unpack-and-recurse, not always crypto). **Parser + detection live in `xfileformats` (`formats/archive` or a new `formats/image`), never in the engine or CLI** — a new container is just a `Container`/`Encrypted` the recursion already drives. |
+| ⬜ | MSI, CAB, SFX, NSIS/Inno installers | Common lures; unpack-and-recurse. **Parsers live in `xfileformats`** (MSI is an OLE2/CFB compound file — reuses `internal/cfb`; CAB/NSIS/Inno need new bounded parsers). |
 | ✅ | **Microsoft Office family** (Access / Publisher / Visio / Project) | Encrypted **Publisher** (`.pub`), **Visio** (`.vsd`/`.vsdx`) and **Project** (`.mpp`) that use the standard Office encryption are **already decrypted by the shared `ooxml` path** — encrypted Office files of every application are the same CFB `EncryptionInfo`+`EncryptedPackage` (agile/standard) wrapper, so the engine recovers them content-first regardless of extension (regression-tested with a Visio-shaped package). **Access** (`.mdb` Jet, `.accdb` ACE) is a different, non-CFB container: the `access` format detects and names it (jet3/jet4/ace). **Jet (.mdb) password recovery is now implemented** — `xcrack access-recover` decodes it straight out of the header XOR obfuscation with no cracking, cross-validated against jackcess. Gaps: **ACE** (`.accdb`) recovery (an Office-style KDF with no shortcut — a password search, staged pending an oracle); legacy pre-2007 Publisher/Visio/Project binaries that use bespoke RC4-in-stream encryption (like `.doc/.xls/.ppt`) are not yet decoded (needs per-app stream layouts + an oracle). |
 | ⬜ | OneNote `.one`, Outlook `.msg` / PST / MBOX | Mail/notes carriers. |
 | ✅ | **SQLCipher** | Passphrase recovery via the page-1 HMAC (PBKDF2 → HMAC subkey → HMAC-SHA512/SHA1 over page 1), SQLCipher v4 and v3 profiles; cross-checked against the sqlcipher CLI. SQLCipher files have no cleartext magic, so they are not engine-autodetected; now reachable from the CLI via `xcrack --as sqlcipher FILE` (force-format), backed by the `xfileformats/formats/sqlcipher` wrapper over the scheme. |
@@ -150,8 +150,9 @@ Apple iWork (Pages/Numbers/Keynote), KeePass KDBX4 (.kdbx), Apple encrypted DMG
 | ✅ | **MS VBA project password** (MS-OVBA) | `xcrack vba-recover FILE` / `--as vbaproject` (`xcrypto/scheme/vbaproject`, `xfileformats/formats/vbaproject`): decodes the DPB field of the VBA `PROJECT` stream (MS-OVBA 2.4.3 reversible Data Encryption). A plaintext password is read with no cracking; a hashed one yields `SHA1(pw‖4-byte salt)` — a fast salted-SHA-1 crack (John `dynamic_24` / hashcat `-m 110 --hex-salt`). Works on legacy `.doc/.xls/.ppt`, standalone `vbaProject.bin`, and OOXML `.docm/.xlsm/.pptm`. Cross-validated against an independent MS-OVBA + hashlib reference (incl. NUL-byte key/hash cases); parsers fuzzed. The VBA source is never encrypted, so the password is the deliverable. |
 | ✅ | **Apple iWork** (Pages/Numbers/Keynote) | Passphrase recovery for the modern '13+ format (.pages/.numbers/.key ZIP archives). The `.iwpv2` verifier is PBKDF2-HMAC-SHA1 → AES-128-CBC → `sha256(plain[:32])==plain[32:64]`; reverse-engineered from Pages/Numbers/Keynote 14.5 files and cross-validated against the known passphrase. Only the passphrase is recovered (document body not reconstructed). |
 | ✅ | **ODF AES-256-GCM** | ODF 1.3's authenticated AES-256-GCM variant, alongside the existing AES-256-CBC (the GCM tag is the verifier; no false positives). Validated by round-trip (Go stdlib GCM) and the CBC path cross-validated against a real LibreOffice 24.2 document. |
-| ⬜ | Hangul HWP | Remaining document suite. |
-| 🔬 | Full-volume: BitLocker, VeraCrypt, LUKS, FileVault | Large, separate effort + threat review. |
+| ⬜ | Hangul HWP/HWPX, WordPerfect, Lotus 1-2-3 | Remaining document suites. HWP is an OLE2/CFB compound file (reuses `internal/cfb`); HWPX is a ZIP (reuses the zip path); WordPerfect and Lotus 1-2-3 use bespoke legacy obfuscation needing per-format decode + an oracle. Parsers in `xfileformats`. |
+| 🔬 | Full-volume: BitLocker, VeraCrypt/TrueCrypt, LUKS, FileVault2/APFS | Large, separate effort + threat review. The single biggest capability the commercial forensic suites (Passware, Elcomsoft) have and Xcrack lacks — volume parsing + the KDF per scheme; key-from-memory/recovery-key is the sibling item in the Gap review. Parsers in `xfileformats` (`formats/volume`). |
+| ⬜ | Apple images: `.sparseimage` / `.sparsebundle`; iOS/iTunes backup keybag | `.sparseimage`/`.sparsebundle` extend the shipped DMG v1/v2 handling; the iOS/iTunes backup keybag (Manifest.plist + `Manifest.db`) is a passphrase-gated keybag. Parsers in `xfileformats`. |
 | ✅ | **Codecs — zstd & lz4** | Single-stream compressors wired as containers (`xfileformats/formats/archive/codec.go`), so a file wrapped in a modern codec — most importantly `.tar.zst` / `.tar.lz4`, where the inner tar and any encrypted file in it were previously unreachable — is decompressed and recursed into. Pure-Go decoders already in the module (`klauspost/compress`, `pierrec/lz4`); bounded by `maxDecompressed` and the engine budgets. Round-trip + `.tar.zst` recursion tests. |
 | ⬜ | More codecs: brotli, LZH, ARJ, ACE, SecureZIP | Archive breadth (zstd/lz4 shipped above). |
 | ⬜ | More container parsers: cpio, ar, CAB, ISO 9660/UDF | New parsers (no pure-Go dep in tree yet); needed for installer/image carriers. |
@@ -180,8 +181,36 @@ A sweep of the current feature set turned up these as the notable remaining gaps
   loop on the OpenCL server tier (`xcrackd --gpu`), the same path WinZip-AES /
   DMG / ODF / RAR5 / Office-agile already use. All three reuse the shared
   MD5/RC4/SHA-1 cores and are validated against the CPU reference on pocl.
-- ⬜ **Precomputed TMTO / "Thunder Tables"** for the 2^40 sweeps (turns minutes
-  into sub-second) — large, needs a table store.
+- ⬜ **Precomputed TMTO / "Thunder Tables" / rainbow tables** for the 2^40 Office
+  97/2000 and PDF RC4 sweeps. Turns the ~week-of-CPU (or GPU-minutes) full sweep
+  into **sub-second, guaranteed** recovery — the capability Elcomsoft's "Thunder
+  Tables" give for 40-bit Word/Excel, and the one precompute gap vs. Ophcrack/
+  RainbowCrack. Large: needs a generated table store (time-memory trade-off; a
+  full 2^40 table is terabyte-class, so ship a chain/TMTO variant, not a flat
+  table) and a lookup path beside the shipped live sweep
+  (`office-keyattack`/`pdf-keyattack`, incl. `--gpu`, which stays the
+  no-precompute route). Validate a lookup hit against the live verifier.
+- ⬜ **Dual CPU+GPU parallel pipeline** (per-file race). On a host with both a CPU
+  and a GPU, run **two cracking pipelines for the same file at once** — the GPU
+  batch/key-search on one side and a CPU dictionary+rules pass on the other — and
+  have the **first side to find the password cancel the other for that file**,
+  then both advance to the next file. This beats today's sequence (promoted/hint/
+  context on CPU, *then* the GPU sweep) when the two streams are
+  non-overlapping: a short high-yield wordlist clears on the CPU in the time the
+  GPU spins up a 2^40 sweep, and neither side idles. Needs a per-file
+  cancellation token shared by both pipelines, de-dup so the CPU list and the GPU
+  candidate set don't retry the same guesses, and cost-aware assignment (send the
+  expensive-KDF keyspace to the GPU, the cheap high-yield lists to the CPU). The
+  authoritative CPU re-check already gates every GPU hit, so a race cannot cause
+  a false positive. **Open design question folded in from user feedback
+  (2026-10).**
+- ⬜ **Broaden the GPU tier toward hashcat-level in-process throughput**: on-device
+  rule mangling (rules evaluated on the GPU, not just host-generated candidates),
+  more algorithms wired to the existing kernels (Office 2007 "standard" `Finish`,
+  KeePass KDBX3 AES-KDF, SQLCipher-v4 PBKDF2-SHA512 once the v3/v4 profile is
+  disambiguated), and a GPU path for the general per-candidate verifier rather
+  than only the KDF. Today the GPU tier is server-only and covers a fixed kernel
+  set (see §4 of CRACKING.md).
 - 🔬 Neural candidate models (PassGAN / RNN), beyond the shipped Markov + PCFG.
 - 🔬 Native CUDA / ROCm back-ends (OpenCL already runs on both via the ICD).
 - (Staged cryptanalysis already catalogued in CRACKING.md §3: ZipCrypto Stay
@@ -197,6 +226,41 @@ A sweep of the current feature set turned up these as the notable remaining gaps
 - ⬜ **Java key stores**: BKS, JCEKS (JKS/PKCS#12 already ship).
 - ⬜ **Regional / legacy docs**: Hangul HWP/HWPX; WordPerfect; Lotus 1-2-3.
 - ⬜ **Apple**: `.sparseimage` / `.sparsebundle`, iOS/iTunes backup keybag (DMG v1/v2 already ship).
+- ⬜ **More codecs / containers**: brotli, LZH, ARJ, ACE, SecureZIP; cpio, ar (zstd/lz4 already ship). Decoders/parsers in `xfileformats/formats/archive`; prefer pure-Go, bounded by the engine budgets.
+
+### Competitor analysis (2026-10) — net-new capability gaps
+
+A comparison against the field (raw crackers **hashcat** / **John the Ripper
+Jumbo**; forensic suites **Passware Kit Forensic** / **Elcomsoft**; point tools
+**bkcrack** / **Ophcrack**) surfaced these capabilities Xcrack lacks that are
+**not** already a line item above. They are recorded here, not committed — Xcrack
+stays a file-parsing recovery engine, so some are deliberately out of scope.
+
+- ⬜ **Key-from-memory / recovery-key decryption** (Passware, Elcomsoft Forensic
+  Disk Decryptor): recover a volume/file key from a RAM image, `hiberfil.sys` /
+  pagefile, or an escrow/recovery key — often *instant* decryption with no
+  search. Sibling to the full-volume item; parsing + key extraction in
+  `xfileformats`.
+- ⬜ **Forensic GUI, case management & reporting**: both commercial suites ship a
+  GUI with evidence/case workflow, job queue and reports. Xcrack is CLI + the
+  `xcrackd` HTTP service + Prometheus; a reporting/case layer (or a thin web UI
+  over `xcrackd`) would close the operator-experience gap.
+- ⬜ **Managed distributed: cloud-burst + agent fleet UI**: Passware spreads work
+  across Windows/Linux/EC2/Azure via a Resource Manager; Hashtopolis/Fitcrack
+  give hashcat a web UI with chunking and agent management. Xcrack has the
+  `xcrackd` sharded cluster + `--cluster-session`; a web UI, auto-provisioning
+  and cloud-burst would bring it to parity.
+- ⬜ **hashcat "brain"-style shared reject**: a networked service that rejects
+  already-tried candidates across the whole fleet (beyond the current
+  `--cluster-session` cross-run dedup).
+- ⬜ **Programmable candidate generators** (JtR "external" mode) and the deferred
+  **`-a 9` association** / **`.hcstat2`** items (tracked above under Search UX).
+- **Deliberately out of scope** (different domain, not a file-at-rest): mobile /
+  cloud acquisition (iOS/Android backups, iCloud/Google, keychain); network-
+  captured secrets (WPA/WPA2 handshakes, NetNTLM, Kerberoast); general OS/network
+  hash types (NTLM/LM, etc.); FPGA/ASIC hardware. Xcrack bridges to hashcat/John
+  for raw-hash work via `hashline` / `export-challenge`. See the FAQ's
+  **Cracking limitations** and `CRACKING.md` for the rationale.
 
 ## Out of scope (non-goals)
 

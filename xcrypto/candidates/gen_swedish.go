@@ -1,9 +1,10 @@
 //go:build ignore
 
-// gen_swedish.go generates swedish.txt, the embedded Swedish-targeted wordlist
-// shipped with Xcrack (candidates.Swedish, CLI --swedish). Regenerate with:
+// gen_swedish.go generates dictionaries/swedish.txt, the embedded
+// Swedish-targeted wordlist shipped with Xcrack (candidates.Swedish, CLI
+// --swedish). Regenerate with:
 //
-//	cd xcrypto/candidates && go run gen_swedish.go > swedish.txt
+//	cd xcrypto/candidates && go run gen_swedish.go > dictionaries/swedish.txt
 //
 // The list follows the guidance in Elcomsoft's "A Word About Dictionaries" and
 // "How to Break 30%/70% of Passwords": a compact, language-specific dictionary

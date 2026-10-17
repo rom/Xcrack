@@ -5,9 +5,12 @@ Xcrack and its standalone formats library, **Xfileformats**.
 
 ## Using Xcrack
 
-- **[Usage](USAGE.md)** — how to build (`make`), run the CLI and the `xcrackd`
-  service, embed the library, and configure everything, with many examples.
-  Start here if you just want to run it.
+- **[User Manual](USERMANUAL.md)** — the task-oriented guide: introduction, how
+  to use the tool, GPU acceleration, distributed environments, advanced usage,
+  and debugging/troubleshooting. **Start here.**
+- **[Usage](USAGE.md)** — the exhaustive reference: how to build (`make`), run
+  the CLI and the `xcrackd` service, embed the library, and configure
+  everything, with many examples.
 - **[File formats & variants](FILEFORMATS.md)** — every format Xcrack
   recognizes, which variants of each, how each is detected and verified, and the
   oracle it is cross-validated against.
@@ -28,6 +31,13 @@ Xcrack and its standalone formats library, **Xfileformats**.
   candidate/attack methods Xcrack uses, with primary references and commentary.
 - **[Changelog](CHANGELOG.md)** — notable changes, grouped by the pull request
   that landed them.
+
+### Printable manuals (PDF)
+
+Run `make` in this `docs/` directory to build a combined **Xcrack-Manual.pdf**
+from the user manual plus the reference docs (`make check` reports whether
+`pandoc` and a PDF engine are installed; `make usermanual` / `make all-pdfs`
+build subsets). See [`Makefile`](Makefile).
 
 ## Reading order (design & architecture)
 
