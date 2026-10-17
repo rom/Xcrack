@@ -137,6 +137,24 @@ type OfficeHasher interface {
 	OfficeSpin(seeds [][]byte, spin int, algo string) ([][]byte, error)
 }
 
+// OldOfficeKeySearcher is an optional capability of an Accelerator that sweeps
+// the Office 97/2000 RC4 (MS-OFFCRYPTO 2.3.6) 40-bit trunc keyspace on the
+// device — a key-SEARCH kernel (not the per-password batch shape): the password
+// enters only as trunc = MD5(UTF16LE(pw))[:5], so the whole verifier is a
+// function of (trunc, salt) and there are just 2^40 of them. The engine/CLI
+// type-asserts for it and offloads the sweep, falling back to the CPU
+// (officebinary.RC4KeyAttack) when the accelerator lacks it or returns
+// ErrUnsupported. A hit is always re-checked on the CPU, so the device never
+// decides correctness on its own.
+type OldOfficeKeySearcher interface {
+	// OldOfficeKeySearch sweeps trunc indices [start, start+count) for the trunc
+	// satisfying the Office 97/2000 verifier, returning the 5-byte trunc
+	// (little-endian of the winning index) and found=true on success. salt is the
+	// EncryptionHeader salt; encVerifier and encVerifierHash are 16 bytes each. It
+	// is byte-for-byte equivalent to officebinary.RC4KeyAttack over the same range.
+	OldOfficeKeySearch(salt, encVerifier, encVerifierHash []byte, start, count uint64) (trunc []byte, found bool, err error)
+}
+
 // BatchTuner is an optional capability of an Accelerator that can recommend a
 // per-dispatch batch size tuned to its device(s) (count, compute units,
 // throughput). The engine type-asserts for it and sizes its offload batches
