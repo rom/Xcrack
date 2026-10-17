@@ -11,7 +11,7 @@ import (
 // `xcrack --swedish` works anywhere, like the built-in default list, with no
 // external file to locate.
 //
-//go:embed swedish.txt
+//go:embed dictionaries/swedish.txt
 var swedishRaw string
 
 var (
