@@ -338,6 +338,54 @@ func (rs *RuleSet) Apply(word []byte) [][]byte {
 	return out
 }
 
+// RuleDebug is the outcome of applying one rule to one word, for rule-file
+// debugging (hashcat's --debug-mode): the rule source, its transformed output,
+// and whether the rule kept or rejected the word.
+type RuleDebug struct {
+	Rule   string
+	Output []byte // valid only when Kept
+	Kept   bool
+}
+
+// ApplyDebug is Apply with per-rule accounting: one RuleDebug per rule, in
+// order, recording the transformed output or that the rule rejected the word.
+func (rs *RuleSet) ApplyDebug(word []byte) []RuleDebug {
+	out := make([]RuleDebug, 0, len(rs.rules))
+	for _, r := range rs.rules {
+		w := append([]byte(nil), word...)
+		if len(w) > maxRuleWordLen {
+			w = w[:maxRuleWordLen]
+		}
+		keep := true
+		for _, op := range r.ops {
+			var ok bool
+			w, ok = op(w)
+			if !ok {
+				keep = false
+				break
+			}
+			if len(w) > maxRuleWordLen {
+				w = w[:maxRuleWordLen]
+			}
+		}
+		rd := RuleDebug{Rule: r.src, Kept: keep}
+		if keep {
+			rd.Output = w
+		}
+		out = append(out, rd)
+	}
+	return out
+}
+
+// RuleLines returns the rule source lines in order.
+func (rs *RuleSet) RuleLines() []string {
+	out := make([]string, len(rs.rules))
+	for i, r := range rs.rules {
+		out[i] = r.src
+	}
+	return out
+}
+
 // WithRules wraps a base source so every base word is expanded into its
 // rule-mangled variants.
 func WithRules(base candidates.Source, rs *RuleSet) candidates.Source {

@@ -11,16 +11,16 @@ environment variables override the config (see `docs/USAGE.md` for the full
 field reference and precedence rules). Edit the wordlist paths to lists you
 actually have.
 
-Some capabilities are command-line modes rather than config keys, so they are
-not shown in these files: `--benchmark`/`-b`, `--keyspace`, `--estimate` and
-`--stdout` (inspect a run without cracking), `xcrack export-challenge` /
-`--resume-from` (offload a challenge and re-import the password), and the
-`--time-limit` anti-stuck budget. The newer candidate knobs *are* config keys
-and appear in the examples below: `candidates.swedish`, `candidates.breach`,
-`search.spray`, `search.order: markov`, `search.markov`, `search.adaptive`, and
-the whole `cluster:` block for distributed runs. `search.cost_queue` (the
-automatic weakest/fastest-attack-first recovery queue across many files, also
-the `--cost-queue` flag) is likewise a config key.
+Some capabilities are command-line modes or per-invocation state rather than
+config keys, so they are not shown in these files: the inspection modes
+(`--benchmark`/`-b`, `--keyspace`, `--estimate`, `--stdout`, `--debug-rules`,
+`--show`/`--left`), the offload bridge (`xcrack export-challenge` /
+`--resume-from`), the resume/cache files (`--checkpoint`, `--session`,
+`--found-cache`/`--remember`, `--potfile`, `--cluster-session`), and the
+candidate transforms (`--min-length`/`--max-length`, `--encoding`, `--loopback`,
+`--markov-threshold`, `--markov-pos`, `--increment`, `--combinator-*`,
+`--hybrid-*`). Everything else is a config key; the complete reference is at the
+end of this file.
 
 | File | For |
 |------|-----|
@@ -39,3 +39,90 @@ Try any of them against the bundled [`../samples`](../samples) (passphrase
 xcrack --config config/hint-and-context.yaml samples/apple.pages   # unlocked from the .iwph hint
 xcrack --config config/basic.yaml -w samples/wordlist.txt samples/zipcrypto.zip
 ```
+
+## Complete config-key reference
+
+Every key below is optional; omit a block to take its defaults. CLI flags and
+environment variables override the config.
+
+### `concurrency:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `workers` | int | concurrent candidate testers (0 = auto) |
+| `file_jobs` | int | files processed in parallel |
+| `max_procs` | int | ceiling on OS threads for the search |
+| `batch_size` | int | candidates per internal batch (channel amortization) |
+| `throttle` | int | CPU duty-cycle percent (1–100; lower = gentler) |
+
+### `limits:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `max_depth` | int | max container nesting depth (0 = default 32) |
+| `max_total_bytes` | int64 | cumulative decompressed-byte budget |
+| `max_nodes` | int | max extracted entries |
+| `max_entry_size` | int64 | max single-entry size |
+| `max_ratio` | int | max decompression ratio (zip-bomb guard) |
+| `max_candidates` | int64 | max candidates tested per encrypted node (0 = unlimited) |
+
+### `recursion:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `recurse` | bool | decompose containers (default true) |
+| `explode_documents` | bool | decompose documents into internal parts |
+
+### `search:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `promote_passwords` | bool | try ancestor-recovered passwords first (default true) |
+| `context_candidates` | bool | guesses from names + plaintext siblings (`--context`) |
+| `hint_candidates` | bool | guesses from an embedded password hint (`--hint`) |
+| `hint_rules` | []string | hashcat rules applied to hint words |
+| `hybrid_append` / `hybrid_prepend` | []string | masks combined with each wordlist word |
+| `toggle_case` / `prince` / `keyboard_walk` | bool | extra generators |
+| `spray` | bool | curated spray set (`--spray`) |
+| `spray_tokens` | []string | org/product/user tokens mangled into the spray set |
+| `adaptive` | bool | corpus-wide password reuse across files (`--adaptive`) |
+| `cost_queue` | bool | attack weakest/fastest files first (`--cost-queue`) |
+| `markov` | bool | Markov best-first generation (`--markov`) |
+| `order` | string | `markov` to reorder wordlists likeliest-first (`--order`) |
+| `shard` | string | `I/N` keyspace stride for this worker (`--shard`) |
+
+### `candidates:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `wordlists` | []string | wordlist files (gzip ok; `-` = stdin) |
+| `passwords` | []string | explicit candidate passwords (tried first) |
+| `breach` | []string | frequency-annotated leak corpora (tried ahead of wordlists) |
+| `breach_min_count` | int64 | drop breach entries seen fewer than N times |
+| `use_default_list` | bool | include the built-in common-password list (default true) |
+| `swedish` | bool | also try the built-in Swedish-targeted list |
+
+### `patterns:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `masks` | []string | hashcat masks (`?l?u?d?s?a?b`, `?1..?4`) |
+| `rules` | []string | hashcat mangling-rule lines |
+| `custom_charsets` | map | `"1".."4"` → charset string for `?1..?4` |
+| `hcmask` | []string | hashcat `.hcmask` files (per-line masks; `--hcmask`) |
+
+### `output:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `format` | string | `text` \| `json` \| `jsonl` |
+| `results_file` | string | append a JSON result manifest here |
+| `log_level` | string | `debug` \| `info` \| `warn` \| `error` |
+
+### `budget:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `per_file` | duration | give up on a file after this (e.g. `30m`); reported locked, not errored |
+| `total` | duration | whole-run deadline |
+
+### `cluster:` (distributed runs — see [`distributed.yaml`](distributed.yaml))
+| Key | Type | Meaning |
+|-----|------|---------|
+| `servers` | list of `{url, group}` | xcrackd endpoints to distribute across |
+| `mode` | string | `collective` (share one file) \| `partition` (groups take different files) |
+| `batch` | int | candidates shipped per server request |
+| `allow_defaults` | bool | let each server also try its own default list |
+| `per_request` | duration | per-request server deadline hint (e.g. `30s`) |

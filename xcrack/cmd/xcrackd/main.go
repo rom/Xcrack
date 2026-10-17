@@ -69,7 +69,11 @@ func main() {
 			gpuAcc = acc
 			defer acc.Close()
 			for _, d := range acc.Devices() {
-				log.Printf("GPU tier: %s %s (%s, %d compute units)", d.Vendor, d.Name, d.Type, d.ComputeUnits)
+				kind := d.Type
+				if d.UnifiedMem && d.Type == "GPU" {
+					kind = "GPU/APU"
+				}
+				log.Printf("GPU tier: [%s] %s %s (%s, %d compute units)", accel.VendorArch(d.Vendor), d.Vendor, d.Name, kind, d.ComputeUnits)
 			}
 			msg := fmt.Sprintf("GPU tier: PBKDF2-HMAC-SHA1/SHA256/SHA512 kernels validated and active across %d device(s)", len(acc.Devices()))
 			if bt, ok := acc.(accel.BatchTuner); ok {

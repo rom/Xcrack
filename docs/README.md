@@ -11,6 +11,11 @@ Xcrack and its standalone formats library, **Xfileformats**.
 - **[File formats & variants](FILEFORMATS.md)** — every format Xcrack
   recognizes, which variants of each, how each is detected and verified, and the
   oracle it is cross-validated against.
+- **[How Xcrack attacks each format](CRACKING.md)** — per-format KDF/cipher/
+  verifier, the attack brought to bear, the verification shortcuts and
+  cryptanalysis exploited (or staged), and what the GPU tier accelerates.
+- **[FAQ](FAQ.md)** — quick answers on formats, orchestration, methods, KDFs,
+  ciphers, shortcuts, candidate ordering, cryptanalysis, config and CLI options.
 - **[References](REFERENCES.md)** — the cryptography, cryptanalysis, and
   candidate/attack methods Xcrack uses, with primary references and commentary.
 - **[Changelog](CHANGELOG.md)** — notable changes, grouped by the pull request

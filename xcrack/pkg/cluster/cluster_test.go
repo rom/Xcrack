@@ -164,3 +164,59 @@ func TestNoServers(t *testing.T) {
 		t.Fatal("expected an error with no servers")
 	}
 }
+
+// TestCollectiveResumeSkips proves ResumeOffsets skips an already-tried prefix:
+// with the offset set past the password's position the fleet does NOT find it,
+// while the same job with no offset does. This is the cross-run dedup / resume
+// "brain".
+func TestCollectiveResumeSkips(t *testing.T) {
+	servers := startFleet(t, 3)
+	const pw = "Welcome1"
+	data := buildWinZipAES(t, []byte(pw), 3, "doc.bin", []byte("secret payload"))
+	mk := func() FileJob {
+		return FileJob{Path: "doc.zip", Data: data, Candidates: candidateList(pw, 200)}
+	}
+	// Password is injected at index 100; skipping 150 must miss it.
+	res := Run(context.Background(), servers, []FileJob{mk()},
+		Options{Mode: Collective, BatchSize: 8, ResumeOffsets: map[string]int64{"doc.zip": 150}})
+	if res[0].Err != nil {
+		t.Fatalf("err: %v", res[0].Err)
+	}
+	if res[0].Found {
+		t.Fatalf("resume offset 150 should have skipped the password at index 100, but found %q", res[0].Password)
+	}
+	// Control: no offset finds it, confirming the fixture is otherwise crackable.
+	ctl := Run(context.Background(), servers, []FileJob{mk()}, Options{Mode: Collective, BatchSize: 8})
+	if !ctl[0].Found || ctl[0].Password != pw {
+		t.Fatalf("control run should find %q, got found=%v pw=%q", pw, ctl[0].Found, ctl[0].Password)
+	}
+}
+
+// TestCollectiveResumeOffsetContiguous checks Progress.Tried (the safe resume
+// offset) never exceeds the keyspace and reaches it on a fully-exhausted no-hit
+// run, so persisting it cannot skip untried candidates.
+func TestCollectiveResumeOffsetContiguous(t *testing.T) {
+	servers := startFleet(t, 3)
+	data := buildWinZipAES(t, []byte("Welcome1"), 3, "doc.bin", []byte("secret payload"))
+	const keyspace = 120
+	job := FileJob{Path: "doc.zip", Data: data, Candidates: candidateList("not-present-anywhere", keyspace)}
+	var maxTried int64
+	res := Run(context.Background(), servers, []FileJob{job}, Options{
+		Mode: Collective, BatchSize: 8,
+		OnProgress: func(p Progress) {
+			if p.Tried > maxTried {
+				maxTried = p.Tried
+			}
+		},
+	})
+	if res[0].Found {
+		t.Fatal("unexpected hit")
+	}
+	// keyspace+1 because candidateList inserts the (absent) real word too.
+	if maxTried > keyspace+1 {
+		t.Errorf("Tried=%d exceeded keyspace=%d (would skip untried candidates on resume)", maxTried, keyspace+1)
+	}
+	if maxTried != keyspace+1 {
+		t.Errorf("exhausted run Tried=%d, want %d (full contiguous confirmation)", maxTried, keyspace+1)
+	}
+}

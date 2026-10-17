@@ -23,6 +23,8 @@ import (
 	"crypto/sha512"
 	"fmt"
 	"hash"
+	"os"
+	"strings"
 	"sync"
 	"time"
 	"unsafe"
@@ -88,8 +90,15 @@ func Detect() (Accelerator, error) {
 	plats := make([]C.cl_platform_id, int(nplat))
 	C.clGetPlatformIDs(nplat, &plats[0], nil)
 
-	var chosenPlat C.cl_platform_id
+	// Choose the best platform across all vendors. Each platform's devices are
+	// described and ranked (discrete GPU > integrated GPU/APU > accelerator >
+	// CPU); the platform with the highest-ranked device wins. This picks an AMD or
+	// NVIDIA discrete card over an integrated APU or the CPU fallback, regardless
+	// of platform order. XCRACK_GPU_DEVICE (a case-insensitive substring of the
+	// device name or vendor) forces a specific device/vendor when set.
+	filter := strings.ToLower(strings.TrimSpace(os.Getenv("XCRACK_GPU_DEVICE")))
 	var devs []C.cl_device_id
+	bestRank := -1 << 30
 	for _, p := range plats {
 		var ndev C.cl_uint
 		if C.clGetDeviceIDs(p, C.CL_DEVICE_TYPE_ALL, 0, nil, &ndev) != C.CL_SUCCESS || ndev == 0 {
@@ -97,17 +106,27 @@ func Detect() (Accelerator, error) {
 		}
 		d := make([]C.cl_device_id, int(ndev))
 		C.clGetDeviceIDs(p, C.CL_DEVICE_TYPE_ALL, ndev, &d[0], nil)
-		chosenPlat, devs = p, d
-		// Prefer a platform exposing a GPU.
-		var g C.cl_uint
-		if C.clGetDeviceIDs(p, C.CL_DEVICE_TYPE_GPU, 0, nil, &g) == C.CL_SUCCESS && g > 0 {
-			break
+		rank := -1 << 30
+		matched := filter == ""
+		for _, dev := range d {
+			desc := describeDevice(dev)
+			if r := DeviceRank(desc); r > rank {
+				rank = r
+			}
+			if filter != "" && (strings.Contains(strings.ToLower(desc.Name), filter) || strings.Contains(strings.ToLower(desc.Vendor), filter)) {
+				matched = true
+			}
+		}
+		if matched && rank > bestRank {
+			bestRank, devs = rank, d
 		}
 	}
 	if len(devs) == 0 {
+		if filter != "" {
+			return nil, fmt.Errorf("accel: no OpenCL device matches XCRACK_GPU_DEVICE=%q", filter)
+		}
 		return nil, fmt.Errorf("accel: no OpenCL devices")
 	}
-	_ = chosenPlat
 
 	var errc C.cl_int
 	ctx := C.clCreateContext(nil, C.cl_uint(len(devs)), &devs[0], nil, nil, &errc)
@@ -196,6 +215,8 @@ func describeDevice(d C.cl_device_id) Device {
 	C.clGetDeviceInfo(d, C.CL_DEVICE_TYPE, C.size_t(unsafe.Sizeof(dt)), unsafe.Pointer(&dt), nil)
 	var cu C.cl_uint
 	C.clGetDeviceInfo(d, C.CL_DEVICE_MAX_COMPUTE_UNITS, C.size_t(unsafe.Sizeof(cu)), unsafe.Pointer(&cu), nil)
+	var unified C.cl_bool
+	C.clGetDeviceInfo(d, C.CL_DEVICE_HOST_UNIFIED_MEMORY, C.size_t(unsafe.Sizeof(unified)), unsafe.Pointer(&unified), nil)
 	typ := "OTHER"
 	switch {
 	case dt&C.CL_DEVICE_TYPE_GPU != 0:
@@ -205,7 +226,7 @@ func describeDevice(d C.cl_device_id) Device {
 	case dt&C.CL_DEVICE_TYPE_ACCELERATOR != 0:
 		typ = "ACCELERATOR"
 	}
-	return Device{Name: name, Vendor: vendor, Type: typ, ComputeUnits: int(cu)}
+	return Device{Name: name, Vendor: vendor, Type: typ, ComputeUnits: int(cu), UnifiedMem: unified == C.CL_TRUE}
 }
 
 func devStr(d C.cl_device_id, param C.cl_device_info) string {

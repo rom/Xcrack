@@ -15,6 +15,49 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Found-password cache** — `--found-cache FILE` / `--remember` (default
+  `$XDG_DATA_HOME/xcrack/found.txt`): a persistent potfile whose passwords lead
+  the candidate stream, so a reused password is recovered instantly on the next
+  run. Priority passwords now lead the per-file stream, ahead of the generators.
+- **Full-run session resume** (`--session FILE`): a multi-file batch records each
+  file once fully searched (with any recovered passwords) and skips finished
+  files on re-run — the batch-level complement to `--checkpoint`.
+- **Potfile reporting** (`--show` / `--left`, hashcat): report which files the
+  found-password cache already solves, without cracking.
+- **Loopback** (`--loopback`): re-mangle the cached/pot recovered passwords
+  through the rules, tried early.
+- **Candidate length filter** (`--min-length` / `--max-length`) and **encoding**
+  (`--encoding utf-8|latin1|utf-16le|utf-16be`).
+- **.hcmask mask files** (`--hcmask`, config `patterns.hcmask`): per-line masks
+  with inline `?1..?4` charsets.
+- **Markov threshold / position-aware** — `--markov-threshold N` caps the
+  per-position branching; `--markov-pos` trains and generates from a 2D
+  (position-aware) Markov model.
+- **Rule-file debugging** (`--debug-rules`): per-rule kept/rejected counts and
+  sample transforms. Also fixed a `--pattern` DSL bug that silently dropped the
+  identity (`:`) rule.
+- **VelvetSweatshop / empty password** tried up front (read-only-recommended
+  Excel, owner-only PDF) — zero-search recoveries.
+- **Distributed resume / cross-run dedup** (`--cluster-session FILE`): resume a
+  fleet run without re-shipping candidates already confirmed tried
+  (`cluster.Options.ResumeOffsets`, a safe contiguous-completed offset).
+- **GPU vendor-aware autodetect**: the OpenCL tier ranks and selects the best
+  device across NVIDIA / AMD / Intel / Apple / APU (`accel.VendorArch`,
+  `DeviceRank`, `XCRACK_GPU_DEVICE`); AMD GPUs and Ryzen APUs run through the
+  OpenCL ICD. xcrackd logs the vendor family per device.
+- New reference docs: **docs/CRACKING.md** (per-format attacks, verification
+  shortcuts & cryptanalysis, GPU-kernel candidates) and **docs/FAQ.md**; a
+  complete config-key reference in **config/README.md**.
+
+### Performance
+- The Office 97/2000 2^40 RC4 key-attack inner loop is now allocation-free
+  (reused mixing buffer, stack RC4 state, value-array MD5): per-candidate heap
+  allocations drop from ~4 to zero, removing the GC pressure that dominated a
+  sustained sweep.
+
+## PR #16–#17 — 2026-10-17 — Inspection modes, crypto wallets, KDBX3, Office 40-bit key attack, GPU SHA-256/512, multi-GPU, cost queue
+
+### Added
 - **Ethereum keystore wallets** (Web3 Secret Storage v3, the `ethwallet`
   format): scrypt / PBKDF2-HMAC-SHA256 key derivation verified by the
   Keccak-256 MAC, detected on the keystore JSON markers. Cross-validated against

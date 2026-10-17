@@ -49,6 +49,10 @@ func (s *Set) Empty() bool { return len(s.masks) == 0 && s.rules == nil }
 // HasRules reports whether the set carries mangling rules.
 func (s *Set) HasRules() bool { return s.rules != nil }
 
+// Rules returns the compiled mangling rules, or nil when the set has none (for
+// rule-file debugging / accounting).
+func (s *Set) Rules() *RuleSet { return s.rules }
+
 // MaskSources returns one candidate source per mask.
 func (s *Set) MaskSources() []candidates.Source {
 	out := make([]candidates.Source, 0, len(s.masks))
@@ -121,14 +125,24 @@ func ParseText(data []byte) (Spec, error) {
 }
 
 func splitDirective(line string) (key, val string) {
-	for _, sep := range []string{":", " ", "\t"} {
-		if i := strings.Index(line, sep); i > 0 {
-			k := strings.TrimSpace(line[:i])
-			switch k {
-			case "mask", "rule", "charset1", "charset2", "charset3", "charset4":
-				return k, strings.TrimSpace(line[i+1:])
-			}
+	// Split at the EARLIEST separator (':', space, or tab), not by a fixed
+	// separator priority: otherwise a value that begins with ':' — e.g. the
+	// identity rule written "rule :" — would be mis-split at its own colon and
+	// lost. The first run of key chars up to the first separator must be a known
+	// directive name.
+	best := -1
+	for _, sep := range []byte{':', ' ', '\t'} {
+		if i := strings.IndexByte(line, sep); i > 0 && (best < 0 || i < best) {
+			best = i
 		}
+	}
+	if best < 0 {
+		return "", line
+	}
+	k := strings.TrimSpace(line[:best])
+	switch k {
+	case "mask", "rule", "charset1", "charset2", "charset3", "charset4":
+		return k, strings.TrimSpace(line[best+1:])
 	}
 	return "", line
 }

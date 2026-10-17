@@ -120,12 +120,28 @@ func RC4KeyAttack(ctx context.Context, salt, encVerifier, encVerifierHash []byte
 	if len(encVerifier) != 16 || len(encVerifierHash) != 16 || len(salt) == 0 {
 		return nil, false, nil
 	}
-	buf := append(append([]byte{}, encVerifier...), encVerifierHash...)
 	end := start + count
 	if end < start || end > MaxRC4Trunc { // clamp and guard overflow
 		end = MaxRC4Trunc
 	}
-	var t [5]byte
+
+	// Allocation-free inner loop: this runs up to 2^40 times, so every per-iteration
+	// heap allocation would be ruinous. The salt-mixing buffer (16×(trunc||salt))
+	// is built once and only its 5 trunc bytes per slot change each iteration; the
+	// RC4 state lives on the stack; MD5 returns value arrays. No constant-time
+	// compare is needed — this is a brute-force sweep, not a secret check.
+	saltLen := len(salt)
+	slot := 5 + saltLen
+	inter := make([]byte, 16*slot)
+	for s := 0; s < 16; s++ {
+		copy(inter[s*slot+5:], salt) // salt bytes are constant across iterations
+	}
+	var ev [32]byte
+	copy(ev[:16], encVerifier)
+	copy(ev[16:], encVerifierHash)
+	var dec [32]byte
+	var state [256]byte
+
 	for i := start; i < end; i++ {
 		if i&0xFFFFF == 0 && ctx != nil {
 			select {
@@ -134,15 +150,34 @@ func RC4KeyAttack(ctx context.Context, salt, encVerifier, encVerifierHash []byte
 			default:
 			}
 		}
-		t[0], t[1], t[2], t[3], t[4] = byte(i), byte(i>>8), byte(i>>16), byte(i>>24), byte(i>>32)
-		key := rc4KeyFromTrunc(t[:], salt, 0)
-		dec, e := prim.RC4(key, buf)
-		if e != nil {
-			return nil, false, e
+		t0, t1, t2, t3, t4 := byte(i), byte(i>>8), byte(i>>16), byte(i>>24), byte(i>>32)
+		for s := 0; s < 16; s++ {
+			b := s * slot
+			inter[b], inter[b+1], inter[b+2], inter[b+3], inter[b+4] = t0, t1, t2, t3, t4
 		}
-		sum := md5.Sum(dec[:16]) //nolint:gosec
-		if prim.ConstantTimeEqual(sum[:], dec[16:32]) {
-			return append([]byte(nil), t[:]...), true, nil
+		trunc2 := md5.Sum(inter) //nolint:gosec
+		var kb [9]byte
+		copy(kb[:5], trunc2[:5]) // kb[5:9] stays zero == LE32(block 0)
+		key := md5.Sum(kb[:])    //nolint:gosec // the 16-byte RC4 key
+
+		// RC4 keystream (KSA + PRGA) over the 32-byte verifier, in place, no alloc.
+		for k := 0; k < 256; k++ {
+			state[k] = byte(k)
+		}
+		j := 0
+		for k := 0; k < 256; k++ {
+			j = (j + int(state[k]) + int(key[k&15])) & 0xff
+			state[k], state[j] = state[j], state[k]
+		}
+		a, bb := 0, 0
+		for n := 0; n < 32; n++ {
+			a = (a + 1) & 0xff
+			bb = (bb + int(state[a])) & 0xff
+			state[a], state[bb] = state[bb], state[a]
+			dec[n] = ev[n] ^ state[(int(state[a])+int(state[bb]))&0xff]
+		}
+		if md5.Sum(dec[:16]) == *(*[16]byte)(dec[16:32]) { //nolint:gosec
+			return []byte{t0, t1, t2, t3, t4}, true, nil
 		}
 	}
 	return nil, false, nil

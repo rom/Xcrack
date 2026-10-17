@@ -59,6 +59,7 @@ type fileConfig struct {
 		Masks          []string          `yaml:"masks"`
 		Rules          []string          `yaml:"rules"`
 		CustomCharsets map[string]string `yaml:"custom_charsets"`
+		HCMask         []string          `yaml:"hcmask"` // hashcat .hcmask files (per-line masks)
 	} `yaml:"patterns"`
 	Output struct {
 		Format      string `yaml:"format"`
