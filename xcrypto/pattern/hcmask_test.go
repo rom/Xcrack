@@ -72,3 +72,34 @@ func TestLoadHCMask(t *testing.T) {
 		t.Error("expected error for a mask using an undefined custom charset")
 	}
 }
+
+// TestParseTextIdentityRule guards against a split bug where "rule :" (the
+// identity rule) was mis-split at its own colon and dropped. Both the
+// colon-after-key and space-before-value forms must preserve the rule value.
+func TestParseTextIdentityRule(t *testing.T) {
+	spec, err := ParseText([]byte("rule :\nrule $1\nrule: c\nmask ?d?d\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantRules := []string{":", "$1", "c"}
+	if len(spec.Rules) != len(wantRules) {
+		t.Fatalf("rules = %q, want %q", spec.Rules, wantRules)
+	}
+	for i, w := range wantRules {
+		if spec.Rules[i] != w {
+			t.Errorf("rule[%d] = %q, want %q", i, spec.Rules[i], w)
+		}
+	}
+	if len(spec.Masks) != 1 || spec.Masks[0] != "?d?d" {
+		t.Errorf("masks = %q, want [?d?d]", spec.Masks)
+	}
+	// The identity rule must compile and pass a word through unchanged.
+	set, err := Compile(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := set.Rules().ApplyDebug([]byte("cat"))
+	if len(got) == 0 || !got[0].Kept || string(got[0].Output) != "cat" {
+		t.Fatalf("identity rule did not pass %q through: %+v", "cat", got[0])
+	}
+}

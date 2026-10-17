@@ -143,6 +143,7 @@ func runCrack(args []string) int {
 	benchmarkF := fs_.Bool("benchmark", false, "don't crack: measure the per-second verify rate for each source file's format and exit")
 	fs_.BoolVar(benchmarkF, "b", false, "alias for --benchmark")
 	estimateF := fs_.Bool("estimate", false, "don't crack: report keyspace, measured rate and estimated time-to-exhaust for each source file and exit")
+	debugRulesF := fs_.Bool("debug-rules", false, "don't crack: apply the --pattern rules to the wordlist words and report per-rule hit/reject counts with sample transforms (hashcat --debug-mode)")
 	showF := fs_.Bool("show", false, "don't crack: report which source files are already solved by the found-password cache/potfile (hashcat --show), as file:password")
 	leftF := fs_.Bool("left", false, "don't crack: report which source files are NOT yet solved by the found-password cache/potfile (hashcat --left)")
 	limitF := fs_.Int64("limit", 0, "with --stdout/--keyspace, stop after this many candidates (0 = no cap)")
@@ -281,7 +282,7 @@ func runCrack(args []string) int {
 	// assemble sources. --stdout and --keyspace only inspect the candidate stream,
 	// so they do not require a source file; the other modes (crack, --benchmark,
 	// --estimate) do.
-	previewMode := *stdoutF || *keyspaceF
+	previewMode := *stdoutF || *keyspaceF || *debugRulesF
 	srcArgs := append([]string(sources), fs_.Args()...)
 	if len(srcArgs) == 0 && !previewMode {
 		fmt.Fprintln(os.Stderr, "xcrack: no sources given (use --source or positional paths)")
@@ -649,6 +650,8 @@ func runCrack(args []string) int {
 			reg = xcrack.DefaultRegistry()
 		}
 		return runShowLeft(files, reg, pot, *leftF)
+	case *debugRulesF:
+		return runDebugRules(patternSet.Rules(), allWordlists, useDefault, allPasswords)
 	}
 
 	// Distributed mode: when one or more --server endpoints (or a config cluster
