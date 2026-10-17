@@ -1361,7 +1361,13 @@ USAGE:
                                    (recovers the key, not the password; --shard i/N;
                                    --gpu offloads the sweep on a -tags opencl build)
   xcrack pdf-keyattack FILE        direct 40-bit key attack on V1/R2 (and 40-bit
-                                   R3/R4) RC4 PDFs (recovers the key; --shard i/N)
+                                   R3/R4) RC4 PDFs (recovers the key; --shard i/N;
+                                   --gpu offloads the sweep; --table inverts V1/R2
+                                   instantly via a precomputed thunder table)
+  xcrack thunder-gen --out FILE    precompute a "thunder table" (rainbow TMTO) that
+                                   inverts every V1/R2 PDF key for pdf-keyattack
+                                   --table (--bits/--chains/--tables size it; --gpu
+                                   offloads the build on a -tags opencl build)
   xcrack access-recover FILE       recover a Jet (.mdb) database password from the
                                    header, no cracking (ACE .accdb not shortcuttable)
   xcrack vba-recover FILE          recover a VBA project password from a .doc/.xls/
