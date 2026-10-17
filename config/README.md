@@ -53,6 +53,7 @@ environment variables override the config.
 | `max_procs` | int | ceiling on OS threads for the search |
 | `batch_size` | int | candidates per internal batch (channel amortization) |
 | `throttle` | int | CPU duty-cycle percent (1–100; lower = gentler) |
+| `dual_pipeline` | bool | race the CPU search and the `--gpu` sweep over one shared keyspace per file (first to find wins; needs `--gpu`) |
 
 ### `limits:`
 | Key | Type | Meaning |

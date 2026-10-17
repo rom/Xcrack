@@ -113,6 +113,8 @@ func runCrack(args []string) int {
 	maxDuration := fs_.Duration("max-duration", 0, "whole-run deadline")
 	batchSize := fs_.Int("batch-size", 0, "candidates per worker hand-off (0=auto)")
 	throttle := fs_.Int("throttle", 0, "approximate CPU duty cycle percent 1..99 (0=off)")
+	gpuF := fs_.Bool("gpu", false, "offload the shared PBKDF2 sweep of acceleration-capable targets (WinZip-AES, DMG, agile Office, ODF, ...) to an OpenCL device; requires a -tags opencl build on OpenCL hardware (the default build is pure-Go and falls back to the CPU)")
+	dualF := fs_.Bool("dual-pipeline", false, "dual CPU+GPU pipeline: race the CPU search and the --gpu sweep over one shared keyspace per file, first to find wins (needs --gpu)")
 
 	recurse := fs_.Bool("recurse", true, "decompose containers")
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
@@ -267,6 +269,7 @@ func runCrack(args []string) int {
 
 	opts.BatchSize = resolveInt(set["batch-size"], *batchSize, "", cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.BatchSize }), 0)
 	opts.ThrottlePercent = resolveInt(set["throttle"], *throttle, env("XCRACK_THROTTLE"), cfgInt(cfg, func(c *fileConfig) int { return c.Concurrency.Throttle }), 0)
+	opts.DualPipeline = *dualF || (cfg != nil && cfg.Concurrency.DualPipeline)
 	opts.Budget.PerFile = *timeout
 	opts.Budget.Total = *maxDuration
 	if cfg != nil {
@@ -781,6 +784,8 @@ func runCrack(args []string) int {
 			MaxProcs:       opts.MaxProcs,
 			BatchSize:      opts.BatchSize,
 			Throttle:       opts.ThrottlePercent,
+			GPU:            *gpuF,
+			DualPipeline:   opts.DualPipeline,
 			MaxDepth:       opts.Limits.MaxDepth,
 			MaxNodes:       opts.Limits.MaxNodes,
 			MaxTotalBytes:  opts.Limits.MaxTotalBytes,
@@ -896,6 +901,15 @@ func runCrack(args []string) int {
 
 	if !ensureLogger() {
 		return 2
+	}
+	// Optional OpenCL GPU tier for the live crack loop (opt-in, hardware-gated;
+	// the default pure-Go build has no backend and falls back to the CPU).
+	if *gpuF {
+		closeAcc := enableGPU(&opts, logger)
+		defer closeAcc()
+	}
+	if opts.DualPipeline && opts.Accelerator == nil {
+		logger.Warn("--dual-pipeline has no effect without an active --gpu tier; running the CPU search alone")
 	}
 	ctx := context.Background()
 	pool := xcrack.NewPool(opts)

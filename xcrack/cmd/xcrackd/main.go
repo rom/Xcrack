@@ -48,6 +48,7 @@ func run() int {
 		shutdownGrace = flag.Duration("shutdown-grace", 20*time.Second, "graceful shutdown grace period")
 		gpu           = flag.Bool("gpu", false, "enable the optional OpenCL GPU acceleration tier (requires a binary built with -tags opencl on a host with OpenCL hardware; the default build is pure-Go)")
 		gpuSelfTest   = flag.Bool("gpu-selftest", false, "validate the OpenCL PBKDF2 kernel against the CPU reference and exit (requires -tags opencl)")
+		dualPipeline  = flag.Bool("dual-pipeline", false, "dual CPU+GPU pipeline: race the CPU search and the GPU sweep over one shared keyspace per file, first to find wins (needs --gpu; the CPU no longer sits idle while the device works)")
 
 		logLevel      = flag.String("log-level", "info", "log level: debug|info|warn|error")
 		logFormat     = flag.String("log-format", "text", "log/audit output format: text|json")
@@ -122,11 +123,15 @@ func run() int {
 		}
 	}
 
+	if *dualPipeline && gpuAcc == nil {
+		logger.Warn("--dual-pipeline has no effect without an active GPU tier; running the CPU search alone")
+	}
 	pool := xcrack.NewPool(xcrack.Options{
 		Workers:         *workers,
 		MaxProcs:        *maxProcs,
 		FileConcurrency: *fileJobs,
 		Accelerator:     gpuAcc,
+		DualPipeline:    *dualPipeline,
 		Logger:          auditlog.Printf(logger),
 	})
 	defer pool.Close()

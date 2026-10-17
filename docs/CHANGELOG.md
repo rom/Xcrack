@@ -15,6 +15,24 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Dual CPU+GPU parallel pipeline (`--dual-pipeline`).** For an
+  acceleration-capable target, the CPU search and the GPU sweep now run
+  **concurrently over one shared, de-duplicated candidate stream** instead of the
+  CPU sitting idle while the device works: a new `sharedFeeder` serializes the
+  keyspace so each candidate is tested on exactly one lane, and the **first lane
+  to find the password cancels the other** (both then advance to the next file).
+  A password near the front of the stream is found by the CPU without waiting for
+  a device batch, while the device chews through the bulk — so the pipeline is a
+  speed change, never a result change (cross-validated against the sequential
+  path). The device's hits are still re-checked on the CPU, and if the device
+  cannot serve the parameters mid-race it re-verifies its pending batch on the CPU
+  (no candidate is lost) and hands the rest of the sweep to the CPU lane. Exposed
+  as `Options.DualPipeline`, `xcrack --dual-pipeline` (with a new `xcrack --gpu`
+  that attaches the OpenCL tier to the live crack loop, mirroring `xcrackd`), and
+  `xcrackd --dual-pipeline`. Opt-in; inert without an active GPU tier; default
+  build stays pure-Go (ADR 0001). Tested end to end with the pure-Go stub
+  accelerator (de-dup, hit parity, no-false-positive, and device-failure
+  fallback) under `-race`.
 - **Syslog + structured audit logging (CLI and `xcrackd`).** A new
   `pkg/auditlog` package builds one `log/slog`-backed logger for both tools with
   `--log-level`, `--log-format text|json`, an optional `--log-file`, and a

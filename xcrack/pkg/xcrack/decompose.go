@@ -389,6 +389,16 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 	// these parameters or errors; a hit is always re-checked by ak.Finish, so the
 	// device never decides correctness on its own.
 	if e.opts.Accelerator != nil && ak != nil {
+		// Dual pipeline: race the CPU search and the accelerator sweep over one
+		// shared, de-duplicated keyspace; first to find wins.
+		if e.opts.DualPipeline {
+			pw, found := e.crackDual(ctx, path, verify, ak, depth, acc, base)
+			if found {
+				e.found(path, pw)
+				return pw, true
+			}
+			return "", false // both lanes exhausted the keyspace
+		}
 		pw, found, fellBack := e.crackAccel(ctx, path, ak, depth, acc, base)
 		if found {
 			e.found(path, pw)
@@ -398,22 +408,12 @@ func (e *engine) searchTarget(ctx context.Context, path string, verify func([]by
 			return "", false // accelerator swept the whole space, no match
 		}
 	}
-	probe := func(pw []byte) (bool, error) {
-		if reject != nil && reject(path, pw) {
-			return false, nil // cheaply rejected: definitely not the password
-		}
-		return safeVerify(verify, pw)
-	}
-	pw, found, tried, err := e.cracker.Crack(ctx, probe, base)
-	acc.addCandidates(tried)
-	if e.opts.OnProgress != nil {
-		e.opts.OnProgress(Progress{Path: path, CandidatesTried: acc.candidatesTried(), Depth: depth})
-	}
-	if err != nil || !found {
+	pw, found := e.crackCPU(ctx, path, verify, depth, acc, base)
+	if !found {
 		return "", false
 	}
-	e.found(path, string(pw))
-	return string(pw), true
+	e.found(path, pw)
+	return pw, true
 }
 
 // accelBatch is how many candidate passwords are derived per accelerator

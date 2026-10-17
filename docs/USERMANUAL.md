@@ -137,8 +137,9 @@ full reference and many worked examples.
 
 ## 3. GPU acceleration
 
-The GPU tier is an **opt-in, server-only** exception to the pure-Go default: the
-`xcrack` CLI is always CPU-only. There are two ways to use a GPU.
+The GPU tier is an **opt-in** exception to the pure-Go default (ADR 0001): it
+exists only in a `-tags opencl` build, and a default build is CPU-only. There are
+two ways to use a GPU, and a way to run the CPU and GPU **at the same time**.
 
 ### A. The standalone 40-bit key-search sweeps (`xcrack …-keyattack --gpu`)
 
@@ -154,10 +155,10 @@ bin/xcrack pdf-keyattack   --gpu scanned.pdf
 Without a device (or in a default build) `--gpu` logs why and falls back to the
 CPU sweep. A hit is always re-checked on the CPU.
 
-### B. The server tier (`xcrackd --gpu`) for the live crack loop
+### B. The live crack loop on a GPU (`xcrackd --gpu`, or `xcrack --gpu`)
 
-`xcrackd` can offload the heavy per-candidate KDF of a normal password search to
-the GPU. Build and self-test it first:
+Both the server and the CLI can offload the heavy per-candidate KDF of a normal
+password search to the GPU. Build and self-test the server first:
 
 ```sh
 go build -tags opencl -o bin/xcrackd-gpu ./xcrack/cmd/xcrackd
@@ -166,7 +167,36 @@ bin/xcrackd-gpu -gpu -addr :8080        # hardware-gated; falls back to CPU if n
 ```
 
 Then point the CLI at it (see [Distributed environments](#4-distributed-environments)),
-or POST files to the HTTP endpoint.
+or POST files to the HTTP endpoint. The CLI can also drive a local device itself:
+
+```sh
+go build -tags opencl -o bin/xcrack ./xcrack/cmd/xcrack
+bin/xcrack --gpu -s vault.dmg -w rockyou.txt    # offload the live sweep to the GPU
+```
+
+`--gpu` is hardware-gated on both: with no device (or in a default build) it logs
+why and runs the unchanged CPU search.
+
+### C. Dual CPU+GPU pipeline (`--dual-pipeline`)
+
+By default the GPU sweeps the keyspace while the CPU waits. `--dual-pipeline`
+(on `xcrack` or `xcrackd`, with `--gpu`) instead runs **both at once over one
+shared candidate stream**: each candidate is handed to exactly one lane (no
+double work), and the **first lane to find the password cancels the other**, so
+both move on to the next file. The CPU clears the cheap, likely guesses at the
+front of the stream without waiting for a device batch, while the GPU grinds
+through the bulk — the two lanes cover the keyspace together.
+
+```sh
+bin/xcrack  --gpu --dual-pipeline -s vault.dmg -w rockyou.txt
+bin/xcrackd-gpu -gpu -dual-pipeline -addr :8080
+```
+
+It is a **speed** change, never a result change: the device's hits are always
+re-checked on the CPU, so it can't cause a false positive, and if the device
+can't serve a target mid-run the pipeline re-verifies the pending batch on the
+CPU and finishes on the CPU lane — no candidate is skipped. It is inert without
+an active `--gpu` tier.
 
 **What the GPU accelerates:** PBKDF2-HMAC-SHA1/256/512 (WinZip-AES, DMG, ODF,
 RAR5, SQLCipher-v4-class), the Office 2010+ agile/standard iterated-hash spin,

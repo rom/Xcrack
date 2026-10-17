@@ -170,6 +170,20 @@ type Options struct {
 	// implements accel.BatchTuner, otherwise a built-in default. Ignored without
 	// an Accelerator.
 	AccelBatch int
+
+	// DualPipeline enables the dual CPU+GPU parallel pipeline: for an
+	// acceleration-capable target, the CPU search and the accelerator sweep run
+	// concurrently over ONE shared, de-duplicated candidate stream, and the first
+	// to find a password cancels the other (both then advance to the next file).
+	// Without it (the default) the accelerator sweeps the keyspace and the CPU
+	// path runs only as a fallback — the CPU sits idle while the device works.
+	// With it, the CPU's cheap guesses and the device's bulk sweep progress at the
+	// same time, so a password near the front of the stream is found by the CPU
+	// without waiting for a device batch. It is ignored when no Accelerator is set
+	// or the target is not acceleration-capable. The device's hits are still
+	// re-checked on the CPU (via the format's verifier), so it can never cause a
+	// false positive.
+	DualPipeline bool
 }
 
 // KnownPlaintext configures an opt-in known-plaintext key-recovery attack for

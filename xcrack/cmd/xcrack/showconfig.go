@@ -17,6 +17,7 @@ type confView struct {
 	Sources []string
 
 	Workers, FileJobs, MaxProcs, BatchSize, Throttle int
+	GPU, DualPipeline                                bool
 
 	MaxDepth, MaxNodes                         int
 	MaxTotalBytes, MaxEntrySize, MaxCandidates int64
@@ -84,6 +85,8 @@ func (v confView) print(w io.Writer) {
 		kv("batch-size", fmt.Sprintf("%d", v.BatchSize))
 	}
 	kv("throttle", pctOr(v.Throttle))
+	kv("gpu", onOff(v.GPU))
+	kv("dual-pipeline", onOff(v.DualPipeline))
 
 	fmt.Fprintln(w, "limits:")
 	kv("max-depth", fmt.Sprintf("%d", v.MaxDepth))
