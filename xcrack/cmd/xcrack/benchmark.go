@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"os"
+	"sort"
 	"strconv"
 	"time"
 
@@ -13,6 +14,37 @@ import (
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xfileformats"
 )
+
+// costOrder ranks files weakest / fastest-attack-first for the automatic cost
+// queue: it probes each file and measures its per-format verify rate over a
+// short window, then returns dispatch indices sorted by rate descending (fast,
+// weak schemes — ZipCrypto, legacy Office, low-iteration KDFs — first; slow,
+// strong KDFs later; unencrypted or unsupported files last). All files share the
+// same candidate set, so the per-format rate is the differentiator and ranking
+// can use a short window. The order is stable among equal-rate files, preserving
+// argument order as a tie-break.
+func costOrder(files []string, reg *xfileformats.Registry, window time.Duration) []int {
+	rates := make([]float64, len(files))
+	for i, path := range files {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			rates[i] = -1 // unreadable: dispatch last
+			continue
+		}
+		_, verify, ok := firstTarget(reg, data)
+		if !ok {
+			rates[i] = -1 // not encrypted / unsupported: dispatch last
+			continue
+		}
+		rates[i] = measureRate(verify, window)
+	}
+	idx := make([]int, len(files))
+	for i := range idx {
+		idx[i] = i
+	}
+	sort.SliceStable(idx, func(a, b int) bool { return rates[idx[a]] > rates[idx[b]] })
+	return idx
+}
 
 // previewPath returns a representative path for the candidate-only modes
 // (--stdout/--keyspace): the first source if any, else "" (the candidate stream

@@ -18,7 +18,9 @@ not shown in these files: `--benchmark`/`-b`, `--keyspace`, `--estimate` and
 `--time-limit` anti-stuck budget. The newer candidate knobs *are* config keys
 and appear in the examples below: `candidates.swedish`, `candidates.breach`,
 `search.spray`, `search.order: markov`, `search.markov`, `search.adaptive`, and
-the whole `cluster:` block for distributed runs.
+the whole `cluster:` block for distributed runs. `search.cost_queue` (the
+automatic weakest/fastest-attack-first recovery queue across many files, also
+the `--cost-queue` flag) is likewise a config key.
 
 | File | For |
 |------|-----|
