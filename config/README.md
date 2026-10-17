@@ -111,6 +111,7 @@ environment variables override the config.
 | `format` | string | `text` \| `json` \| `jsonl` |
 | `results_file` | string | append a JSON result manifest here |
 | `log_level` | string | `debug` \| `info` \| `warn` \| `error` |
+| `extract_suffix` | string | per-source extracted-tree directory suffix under `--out` (default `.extracted`; single path segment, no `/` or `..`) |
 
 ### `budget:`
 | Key | Type | Meaning |

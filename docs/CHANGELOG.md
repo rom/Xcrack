@@ -12,7 +12,31 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 ## [Unreleased]
 
-_Nothing yet._
+Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
+
+### Added
+- **`--show-config`** — print the effective configuration (flags + env + config
+  file + defaults, merged, with precedence noted) and exit without cracking. It
+  shows counts for explicit passwords and the cache path, never secret values,
+  so it is safe to paste into a bug report.
+- **`--show-cache`** — list the passwords held in the found-password cache /
+  potfile and exit (needs `--found-cache`/`--remember`/`--potfile`). Distinct
+  from `--show`, which reports which *files* the cache solves.
+- **`--extract-suffix S`** (config `output.extract_suffix`) — change the
+  per-source extracted-tree directory suffix under `--out` (default
+  `.extracted`; `''` = the bare source name). Validated as a single path segment
+  (no `/` or `..`) so it can never redirect the write outside `--out`.
+
+### Docs
+- README: add the `docs/CRACKING.md` and `docs/FAQ.md` references to the
+  documentation index; correct the MS Access rows now that Jet `.mdb` recovery
+  ships (ACE `.accdb` recovery remains staged).
+- USAGE: a new **Use cases** section mapping nine end-to-end scenarios
+  (malware triage, DFIR batch, forgotten password, pentest, no-crack recoveries,
+  GPU offload, distributed, service, inspect-first) to commands; document
+  `--extract-suffix`, `--show-config`, `--show-cache`.
+- FAQ: new **Output & extracted files** and **Inspecting & troubleshooting**
+  categories, plus entries for the new flags, formats, logging and exit codes.
 
 ## PR #19 — 2026-10-17 — Staged cryptanalysis shortcuts: ZipCrypto cross-entry, PDF 40-bit RC4, Access Jet
 

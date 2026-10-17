@@ -20,6 +20,7 @@ engine**:
 ## Contents
 
 - [Building](#building)
+- [Use cases](#use-cases)
 - [CLI](#cli)
   - [Sources](#sources)
   - [Candidate passwords](#candidate-passwords)
@@ -62,6 +63,130 @@ Or directly:
 go build -o bin/xcrack  ./xcrack/cmd/xcrack
 go build -o bin/xcrackd ./xcrack/cmd/xcrackd
 ```
+
+---
+
+## Use cases
+
+Xcrack is one engine behind a library, a CLI, and a service, so the same
+recovery powers very different jobs. The scenarios below map each job to the
+commands and flags that fit it; the sections further down explain every flag in
+detail.
+
+### 1. Malware-analysis preprocessing (the primary role)
+
+A scanner (Impex) meets a password-protected or encrypted file and must see the
+real content to analyse it. Embed the library and hand it the candidates you
+already have (sender address, email body words, the lure's own filename), or
+call the CLI/service for one-off triage.
+
+```sh
+# Decrypt + recursively unpack a suspicious attachment, writing the tree to ./out.
+# --context seeds guesses from the file/entry names and any plaintext siblings
+# (phishing lures very often name their own password in the covering email/README).
+xcrack --context -p infected -p 2024 -w rockyou.txt -o ./out suspicious.zip
+```
+
+The engine unpacks nested layers on its own — an encrypted document inside an
+encrypted archive is found in one pass — and reports the password **and**
+content for every layer. Embedding is shown under
+[Embedding the library](#embedding-the-library).
+
+### 2. DFIR / incident response — bulk-triage a corpus
+
+You have thousands of files off a seized image and limited time. Triage
+weakest-first, cap the effort per file, and remember everything you crack so a
+reused password is instant on the next batch.
+
+```sh
+# Benchmark each file, attack the cheap/weak schemes first, give up on any one
+# file after 2 min, and persist finds to a shared cache.
+xcrack --cost-queue --time-limit 2m --remember -w rockyou.txt -o ./out ./evidence/**
+# Resume the whole batch later; already-searched files are skipped:
+xcrack --session case42.session --cost-queue --remember -w rockyou.txt ./evidence/**
+```
+
+### 3. Forgotten-password recovery (a single document)
+
+Your own `.docx`/`.pdf`/`.kdbx` with a password you half-remember. Start from a
+stem and let the rules mangle it, and estimate the time before committing.
+
+```sh
+xcrack --estimate -w base-words.txt --pattern leet.rule mydoc.docx   # how long?
+xcrack -w base-words.txt --pattern leet.rule --loopback mydoc.docx   # then crack
+```
+
+### 4. Authorized pentest / red-team
+
+Spray a curated set with org/product tokens, fold in a breach corpus, and apply
+your rule set — all frequency-ordered so the likely guesses go first.
+
+```sh
+xcrack --spray --spray-token Acme --spray-token Helpdesk \
+       --breach top-passwords.txt --breach-min-count 50 \
+       -w corp-words.txt --pattern best64.rule -o ./out export.7z
+```
+
+### 5. Recover *without* cracking (exploit a weakness first)
+
+Some formats don't need a search at all — try these before a brute force:
+
+```sh
+xcrack kp --plain known.bin --cipher entry.bin --decrypt secret.txt \
+          --zip archive.zip --zip-out ./out        # ZipCrypto: one recovery unlocks all entries
+xcrack office-keyattack legacy.doc                 # Office 97/2000: sweep the 40-bit key
+xcrack pdf-keyattack scanned.pdf                   # PDF V1/R2: sweep the 40-bit file key
+xcrack access-recover database.mdb                 # Access Jet: read the password out of the header
+```
+
+See [`CRACKING.md`](CRACKING.md) for which weakness applies to which format.
+
+### 6. Offload the heavy KDFs (GPU box / hashcat / John)
+
+Keep orchestration in Xcrack but run the expensive key derivation elsewhere.
+
+```sh
+xcrack hashline target.pdf > hashes.txt            # emit $pdf$/$office$/$zip2$/$dmg$ for hashcat/John
+xcrack export-challenge target.kdbx > challenge.json
+# ... solve it on the GPU box, then re-import the recovered password ...
+xcrack --resume-from solved.json -o ./out target.kdbx
+```
+
+The `xcrackd` service also has an opt-in in-process OpenCL tier (`--gpu`).
+
+### 7. Distributed cracking across a fleet
+
+Fan one keyspace out across a pile of `xcrackd` workers, or split manually with
+`--shard` on fully separate hosts.
+
+```sh
+xcrack --server http://w1:8080 --server http://w2:8080 --cluster-mode collective \
+       --cluster-session fleet.session -w rockyou.txt -o ./out big.7z
+```
+
+### 8. A backend service for a kiosk / appliance
+
+Run `xcrackd` and let a thin client POST files to decrypt.
+
+```sh
+xcrackd -addr :8080 -max-procs 16
+curl -s --data-binary @invoice.zip 'http://localhost:8080/v1/decrypt?password=infected'
+```
+
+### 9. Inspect before you commit (no cracking)
+
+Preview the plan, the keyspace, and the exact effective settings before a long
+run — and check what you already know.
+
+```sh
+xcrack --show-config -w rockyou.txt --pattern best64.rule target.zip  # effective settings
+xcrack --keyspace    -w rockyou.txt --pattern best64.rule             # how many candidates
+xcrack --stdout      -w rockyou.txt --pattern best64.rule | less      # the actual stream
+xcrack --show-cache  --remember                                       # what's in the found cache
+xcrack --show        --remember ./evidence/**                         # which files the cache already solves
+```
+
+---
 
 ---
 
@@ -248,9 +373,12 @@ deterministic (masks, wordlists, chains — not `stdin`).
 | ---- | ------- |
 | `--format text\|json\|jsonl` | result rendering (default `text`) |
 | `-o`, `--out DIR` | write the decrypted tree under `DIR/<name>.extracted/` + a `manifest.json` |
+| `--extract-suffix S` | change the per-source directory suffix (default `.extracted`; `''` = the bare source name). Must be a single path segment (no `/` or `..`) |
 | `--results-file FILE` | append a JSON manifest per input to `FILE` |
 | `--progress` | print live progress to stderr: files done/total, candidates, rate, elapsed, ETA |
 | `--log-level LEVEL` | `debug\|info\|warn\|error` structured logging to stderr (never logs secrets) |
+| `--show-config` | print the effective configuration (flags + env + config file + defaults, merged) and exit — no cracking |
+| `--show-cache` | list the passwords held in the found-password cache / potfile and exit (needs `--found-cache`/`--remember`/`--potfile`) |
 
 ```sh
 # Human-readable tree:
@@ -266,6 +394,13 @@ xcrack --format jsonl -p hunter2 archive.zip
 xcrack -p hunter2 -o ./out archive.zip
 #   -> ./out/archive.zip.extracted/...        (mirrors the tree)
 #   -> ./out/archive.zip.extracted/manifest.json
+
+# Change the per-source directory suffix (e.g. to integrate with another tool):
+xcrack -p hunter2 -o ./out --extract-suffix .unpacked archive.zip
+#   -> ./out/archive.zip.unpacked/...
+
+# Print the exact effective settings before committing to a long run:
+xcrack --show-config -w rockyou.txt --pattern best64.rule archive.zip
 ```
 
 Recovered passwords appear in the result and the manifest; they are **never**

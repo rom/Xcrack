@@ -27,7 +27,7 @@ many worked examples.
 | Family | Formats |
 | ------ | ------- |
 | **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
-| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** (`.mdb/.accdb`) detected |
+| **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** — Jet (`.mdb`) password recovered from the header with no cracking (`access-recover`), ACE (`.accdb`) detected |
 | **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC **and AES-256-GCM**); **Apple iWork** (Pages/Numbers/Keynote) |
 | **Disk images** | Apple **encrypted DMG** (v2 AES-128/256) read on-disk directly, plus v1/v2 via the `dmg2john` `$dmg$` line |
 | **Mail / passphrase** | MIME (`.eml`) attachments; **age** (scrypt); **symmetric OpenPGP** (`gpg -c`) |
@@ -123,8 +123,10 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 
 ## Documentation
 
-- **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples.
+- **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples and end-to-end use cases.
+- **[How Xcrack attacks each format](docs/CRACKING.md)** — per-format KDF/cipher/verifier, the attack used, and the verification shortcuts & cryptanalysis exploited (ZipCrypto key recovery, Office/PDF 40-bit key attacks, Access Jet header XOR).
 - **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
+- **[FAQ](docs/FAQ.md)** — quick answers on formats, orchestration, methods, KDFs, ciphers, shortcuts, candidate ordering, cryptanalysis, output, config and CLI options.
 - **[References](docs/REFERENCES.md)** — the KDFs, ciphers, cryptanalysis, and candidate/attack methods used, with primary references.
 - **[Changelog](docs/CHANGELOG.md)** — notable changes by pull request.
 - [Architecture](docs/architecture.md) — system context, containers, components, data flow.
@@ -157,9 +159,14 @@ the service tier and several Phase 3/4 engine features landed:
   every format call, and a GitHub Actions CI workflow (build · vet · gofmt ·
   `-race` · govulncheck · bounded fuzz).
 
+Non-brute-force recoveries also ship: ZipCrypto known-plaintext **and**
+cross-entry key recovery (`kp`), the Office 97/2000 and PDF V1/R2 **40-bit key
+attacks** (`office-keyattack` / `pdf-keyattack`), and the **MS Access Jet**
+header-XOR decode (`access-recover`) — see [`docs/CRACKING.md`](docs/CRACKING.md).
+
 **Staged** (implemented as test fixtures / oracles become available): MS Access
-password *recovery* (detection ships now) and legacy-Office macro/VBA
-auxiliary-stream decryption.
+**ACE** (`.accdb`) password *recovery* (detection ships now; Jet `.mdb` recovery
+already ships) and legacy-Office macro/VBA auxiliary-stream decryption.
 
 > **Legacy-Office scope.** RC4 CryptoAPI (Office XP/2003) is fully decrypted and
 > cross-validated for Word, Excel, and PowerPoint. Office 97/2000 RC4 and XOR
