@@ -13,3 +13,6 @@ func Detect() (Accelerator, error) { return nil, ErrNotBuilt }
 
 // GPUSelfTest is a no-op in a pure-Go build.
 func GPUSelfTest() error { return ErrNotBuilt }
+
+// GPUSelfTestWith is a no-op in a pure-Go build.
+func GPUSelfTestWith(Accelerator) error { return ErrNotBuilt }

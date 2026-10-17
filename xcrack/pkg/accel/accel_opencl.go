@@ -1083,12 +1083,26 @@ func (a *clAccel) autotuneBatch() int {
 // GPUSelfTest derives a few known PBKDF2 vectors for each HMAC variant on the
 // device and confirms they are byte-for-byte identical to the Go reference, so a
 // GPU result is never trusted before the kernel is proven correct on this host.
+// This is the standalone (--gpu-selftest) path: it opens a fresh accelerator,
+// validates it, and closes it. A caller that already holds an open accelerator
+// (the --gpu launch path) should use GPUSelfTestWith to avoid a second Detect
+// — a second context open, device probe and kernel compile — and to validate the
+// very context the engine will use.
 func GPUSelfTest() error {
 	a, err := Detect()
 	if err != nil {
 		return err
 	}
 	defer a.Close()
+	return GPUSelfTestWith(a)
+}
+
+// GPUSelfTestWith validates an already-open accelerator against the Go reference,
+// exactly as GPUSelfTest does, but without opening (and discarding) a second
+// OpenCL context. The --gpu launch path calls Detect once and passes that same
+// accelerator here, so the context proven correct is the one the engine then
+// uses and device/kernel init is paid only once.
+func GPUSelfTestWith(a Accelerator) error {
 	cases := []struct {
 		pw, salt string
 		iter, dk int
