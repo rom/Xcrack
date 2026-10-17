@@ -44,6 +44,7 @@ type fileConfig struct {
 		Adaptive      bool     `yaml:"adaptive"`       // corpus-wide adaptive promotion across files
 		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
 		Markov        bool     `yaml:"markov"`         // Markov best-first generated guesses
+		Order         string   `yaml:"order"`          // reorder wordlist candidates: "markov" | "none"
 	} `yaml:"search"`
 	Candidates struct {
 		Wordlists      []string `yaml:"wordlists"`
@@ -51,6 +52,7 @@ type fileConfig struct {
 		Breach         []string `yaml:"breach"`           // frequency-annotated breach corpora
 		BreachMinCount int64    `yaml:"breach_min_count"` // drop breach entries below this prevalence
 		UseDefaultList *bool    `yaml:"use_default_list"`
+		Swedish        bool     `yaml:"swedish"` // also try the built-in Swedish-targeted wordlist
 	} `yaml:"candidates"`
 	Patterns struct {
 		Masks          []string          `yaml:"masks"`
@@ -66,6 +68,19 @@ type fileConfig struct {
 		PerFile string `yaml:"per_file"`
 		Total   string `yaml:"total"`
 	} `yaml:"budget"`
+	Cluster struct {
+		Servers       []clusterServer `yaml:"servers"`        // xcrackd endpoints to distribute across
+		Mode          string          `yaml:"mode"`           // "collective" | "partition"
+		Batch         int             `yaml:"batch"`          // candidates shipped per server request
+		AllowDefaults bool            `yaml:"allow_defaults"` // let each server also use its own default list
+		PerRequest    string          `yaml:"per_request"`    // per-request server deadline hint (e.g. 30s)
+	} `yaml:"cluster"`
+}
+
+// clusterServer is one xcrackd endpoint in the config's cluster block.
+type clusterServer struct {
+	URL   string `yaml:"url"`
+	Group string `yaml:"group"`
 }
 
 func loadConfig(path string) (*fileConfig, error) {

@@ -5,6 +5,7 @@ import (
 
 	"github.com/nwaples/rardecode/v2"
 	"github.com/rom/xcrypto"
+	"github.com/rom/xcrypto/scheme/rar5"
 	"github.com/rom/xfileformats"
 )
 
@@ -24,10 +25,28 @@ func (rarFormat) Detect(p []byte) (float64, bool) {
 }
 
 func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, error) {
+	// RAR5 stores an 8-byte password-check value in its (unencrypted) crypt
+	// record, so a wrong password can be rejected after key derivation alone — no
+	// decrypt, no decompress. Parse it once; RAR uses one password for the whole
+	// archive, so the same fast verifier serves every encrypted entry. RAR4 and
+	// any parse failure fall back to the decrypt-and-check verifier below.
+	cryptParams, hasFast := parseRAR5Crypt(r, size)
+	fastVerify := func(pw []byte) (bool, error) { return rar5.Verify(string(pw), cryptParams), nil }
+
 	rr, err := rardecode.NewReader(section(r, size))
 	if err != nil {
-		// Encrypted headers (rar -hp) hide the listing; offer a gated entry.
-		return []*xfileformats.Entry{gatedEntry("rar-aes-header", rarHdrVerify(r, size), rarHdrTar(r, size))}, nil
+		// Encrypted headers (rar -hp) hide the listing; offer a gated entry. With a
+		// parsed RAR5 crypt header the gate uses the fast check value instead of a
+		// trial decryption of the hidden headers.
+		verify := rarHdrVerify(r, size)
+		if hasFast {
+			verify = fastVerify
+		}
+		e := gatedEntry("rar-aes-header", verify, rarHdrTar(r, size))
+		if hasFast {
+			e.Challenge = rar5Challenge(cryptParams)
+		}
+		return []*xfileformats.Entry{e}, nil
 	}
 	var entries []*xfileformats.Entry
 	for len(entries) < maxEntries {
@@ -46,8 +65,13 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 		e := &xfileformats.Entry{Path: name, Size: hdr.UnPackedSize}
 		if hdr.Encrypted {
 			e.Encrypted = true
-			e.Challenge = &xcrypto.Challenge{Scheme: "rar-aes", Cipher: xcrypto.CipherSpec{Algo: "aes-cbc"}}
-			e.Verify = func(pw []byte) (bool, error) { return rarVerify(r, size, fn, string(pw)) }
+			if hasFast {
+				e.Challenge = rar5Challenge(cryptParams)
+				e.Verify = fastVerify
+			} else {
+				e.Challenge = &xcrypto.Challenge{Scheme: "rar-aes", Cipher: xcrypto.CipherSpec{Algo: "aes-cbc"}}
+				e.Verify = func(pw []byte) (bool, error) { return rarVerify(r, size, fn, string(pw)) }
+			}
 			e.Open = func(pw []byte) (io.Reader, error) { return rarOpen(r, size, fn, string(pw)) }
 		} else {
 			e.Open = func([]byte) (io.Reader, error) { return rarOpen(r, size, fn, "") }

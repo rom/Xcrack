@@ -1,0 +1,42 @@
+# Distributed: fan a heavy search out across a fleet of xcrackd workers.
+#
+#   xcrack --config config/distributed.yaml secret.docx
+#
+# Each server must be running `xcrackd` (behind your own authn/TLS); point them
+# at a GPU build (`xcrackd -gpu`) for the real speed-up. The command line can
+# override or extend any of this (e.g. extra --server flags).
+
+candidates:
+  wordlists:
+    - /usr/share/wordlists/rockyou.txt   # edit to a list you have
+  use_default_list: true
+  swedish: true                          # also try the built-in Swedish list
+
+cluster:
+  # collective: every server attacks the SAME file on disjoint candidate
+  #   batches; the first to find the password wins and the rest are cancelled.
+  # partition:  servers are split into groups (by `group`) and each group takes
+  #   different files, cracked in parallel. Use groups when you have more
+  #   targets than any one is worth clustering on.
+  mode: collective
+  batch: 20000                           # candidates shipped per server request
+  allow_defaults: false                  # let each server also try its own default list
+  per_request: 60s                       # per-request server deadline hint
+  servers:
+    - url: http://gpu1.lan:8080
+    - url: http://gpu2.lan:8080
+    - url: http://gpu3.lan:8080
+    # For partition mode, label servers with a group so each group takes
+    # different files:
+    #   - { url: http://a.lan:8080, group: fast }
+    #   - { url: http://b.lan:8080, group: fast }
+    #   - { url: http://c.lan:8080, group: slow }
+
+search:
+  order: markov                          # try the likeliest wordlist words first
+
+budget:
+  per_file: 30m                          # give up on a file after 30m and move on
+
+output:
+  format: text

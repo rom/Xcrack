@@ -11,6 +11,10 @@ Xcrack and its standalone formats library, **Xfileformats**.
 - **[File formats & variants](FILEFORMATS.md)** — every format Xcrack
   recognizes, which variants of each, how each is detected and verified, and the
   oracle it is cross-validated against.
+- **[References](REFERENCES.md)** — the cryptography, cryptanalysis, and
+  candidate/attack methods Xcrack uses, with primary references and commentary.
+- **[Changelog](CHANGELOG.md)** — notable changes, grouped by the pull request
+  that landed them.
 
 ## Reading order (design & architecture)
 

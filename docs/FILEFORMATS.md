@@ -48,7 +48,7 @@ appears in challenges, JSON output, and the `identify` command.
 | **ZIP** 🔓📦🧩 | `PK\x03\x04` | `zipcrypto` (PKWARE legacy stream cipher); `winzip-aes-128` / `-192` / `-256` (AE-1 & AE-2) | ZipCrypto: bespoke 3×32-bit key schedule. WinZip: PBKDF2-HMAC-SHA1, 1000 iters | ZipCrypto stream; WinZip AES-CTR | ZipCrypto 1–2 check bytes; WinZip 2-byte password verifier + HMAC-SHA1 authentication | `zip`, `7z` |
 | **tar / gzip / bzip2 / xz** 📦 | respective magic | *none* — compression/containers only | — | — | — | Go stdlib |
 | **7-Zip** 📦🔓 | `37 7A BC AF 27 1C` | AES-256; **content-encrypted** and **header-encrypted** (`-mhe=on`) | SHA-256, iterated (`2^n` rounds) | AES-256-CBC | padding / stream check | `7z` |
-| **RAR** 📦🔓 | `Rar!\x1A\x07\x00` (RAR4) / `...\x01\x00` (RAR5) | RAR3 (AES-128) and RAR5 (AES-256); **content-** and **header-encrypted** (`-hp`) | RAR5: PBKDF2-HMAC-SHA256; RAR3: custom SHA-1 | AES-CBC | RAR5 password-check value / CRC | `rar`, `unrar` (tests skip if absent) |
+| **RAR** 📦🔓 | `Rar!\x1A\x07\x00` (RAR4) / `...\x01\x00` (RAR5) | RAR3 (AES-128) and RAR5 (AES-256); **content-** and **header-encrypted** (`-hp`) | RAR5: PBKDF2-HMAC-SHA256 (iteration count read from the header); RAR3: custom SHA-1 | AES-CBC | **RAR5**: the 8-byte header check value — a wrong password is rejected after key derivation alone, no decrypt (`xcrypto/scheme/rar5`); RAR4: decrypt + CRC32 | `rar`, `unrar` (tests skip if absent) |
 | **MIME `.eml`** 📦 | mail headers | *container* — decodes and extracts attachments (base64 / quoted-printable); encrypted attachments are handed to their own format | — | — | — | — |
 
 **ZipCrypto note.** ZipCrypto is cryptographically broken. Beyond password

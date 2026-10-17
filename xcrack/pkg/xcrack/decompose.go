@@ -28,8 +28,17 @@ func (e *engine) decompose(ctx context.Context, path string, src *source, depth 
 	n := &Node{Path: path}
 
 	if err := ctx.Err(); err != nil {
-		n.Status = StatusError
-		n.Err = err
+		// A deadline (the per-file --time-limit / --max-duration budget) is an
+		// expected "give up and move on", not a failure: report the node as locked
+		// (exit 1, siblings continue) rather than a hard error (exit 2). A plain
+		// cancellation is still surfaced as an error.
+		if errors.Is(err, context.DeadlineExceeded) {
+			n.WasEncrypted = true
+			n.Status = StatusLocked
+		} else {
+			n.Status = StatusError
+			n.Err = err
+		}
 		return n
 	}
 	if !acc.addNode() {

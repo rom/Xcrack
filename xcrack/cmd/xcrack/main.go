@@ -38,6 +38,8 @@ func run(args []string) int {
 			return runKP(args[1:])
 		case "hashline":
 			return runHashline(args[1:])
+		case "export-challenge":
+			return runExportChallenge(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -81,6 +83,7 @@ func runCrack(args []string) int {
 	fileJobs := fs_.Int("file-jobs", 0, "files processed concurrently (0=NumCPU)")
 	maxProcs := fs_.Int("max-procs", 0, "global ceiling on concurrent candidate testers (0=NumCPU)")
 	timeout := fs_.Duration("timeout", 0, "per-file time budget (e.g. 30s)")
+	fs_.DurationVar(timeout, "time-limit", 0, "give up on a file after this long with no success and move on (per-file; alias of --timeout)")
 	maxDuration := fs_.Duration("max-duration", 0, "whole-run deadline")
 	batchSize := fs_.Int("batch-size", 0, "candidates per worker hand-off (0=auto)")
 	throttle := fs_.Int("throttle", 0, "approximate CPU duty cycle percent 1..99 (0=off)")
@@ -89,6 +92,7 @@ func runCrack(args []string) int {
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
 	explode := fs_.Bool("explode-documents", false, "decompose documents into internal parts")
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
+	swedishF := fs_.Bool("swedish", false, "also try the built-in Swedish-targeted wordlist (common Swedish words/names/places + typical mutations)")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
 	hintF := fs_.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment), tried first")
@@ -97,6 +101,8 @@ func runCrack(args []string) int {
 	pcfgMax := fs_.Int("pcfg-max", 100000, "max PCFG guesses to generate (with --pcfg)")
 	markovF := fs_.Bool("markov", false, "train a Markov model on the candidate words and generate guesses best-first")
 	markovMax := fs_.Int("markov-max", 1_000_000, "max Markov guesses to generate (with --markov)")
+	orderF := fs_.String("order", "", "reorder the wordlist candidates before mangling: 'markov' tries the statistically likeliest words first (none=keep file order)")
+	orderMax := fs_.Int("order-max", 1_000_000, "max wordlist entries to buffer and reorder (with --order markov)")
 	incrementF := fs_.String("increment", "", "expand each mask over a token-length range MIN:MAX, shortest first (hashcat --increment)")
 	combLeft := fs_.String("combinator-left", "", "left wordlist for a combinator attack (each left word + each right word)")
 	combRight := fs_.String("combinator-right", "", "right wordlist for a combinator attack (requires --combinator-left)")
@@ -119,11 +125,20 @@ func runCrack(args []string) int {
 	fs_.Var(&breachLists, "breach", "frequency-annotated breach corpus FILE (count-prefixed or password:count; gzip ok; repeatable)")
 	breachMinF := fs_.Int64("breach-min-count", 0, "drop breach entries seen fewer than N times (0=keep all)")
 
+	var clusterServers stringSlice
+	fs_.Var(&clusterServers, "server", "distribute cracking to this xcrackd server URL (repeatable; URL or URL@GROUP for partition mode)")
+	clusterMode := fs_.String("cluster-mode", "", "server allocation: 'collective' (all servers share one file's keyspace) or 'partition' (server groups take different files)")
+	clusterBatch := fs_.Int("cluster-batch", 0, "candidates shipped per server request in distributed mode (0=20000)")
+	clusterDefaults := fs_.Bool("cluster-allow-defaults", false, "in distributed mode, let each server also try its own default list")
+	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
+
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	var passwordFiles stringSlice
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
 	passwordEnv := fs_.String("password-env", "", "read a candidate password from this environment variable")
 	potfilePath := fs_.String("potfile", "", "load recovered passwords from, and append new ones to, this file")
+	var resumeFrom stringSlice
+	fs_.Var(&resumeFrom, "resume-from", "import a RecoveredPassword JSON envelope (from an external cracker that solved an exported challenge) and try its password first (repeatable)")
 	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
 
 	maxDepth := fs_.Int("max-depth", 0, "max nesting depth (0=default 32)")
@@ -188,7 +203,7 @@ func runCrack(args []string) int {
 	opts.Budget.PerFile = *timeout
 	opts.Budget.Total = *maxDuration
 	if cfg != nil {
-		if d, err := parseDuration(cfg.Budget.PerFile); err == nil && !set["timeout"] && d > 0 {
+		if d, err := parseDuration(cfg.Budget.PerFile); err == nil && !set["timeout"] && !set["time-limit"] && d > 0 {
 			opts.Budget.PerFile = d
 		}
 		if d, err := parseDuration(cfg.Budget.Total); err == nil && !set["max-duration"] && d > 0 {
@@ -251,6 +266,7 @@ func runCrack(args []string) int {
 	if cfg != nil && cfg.Candidates.UseDefaultList != nil {
 		useDefault = *cfg.Candidates.UseDefaultList
 	}
+	useSwedish := *swedishF || (cfg != nil && cfg.Candidates.Swedish)
 	cfgPasswords, cfgWordlists, cfgBreach := []string(nil), []string(nil), []string(nil)
 	if cfg != nil {
 		cfgPasswords = cfg.Candidates.Passwords
@@ -275,6 +291,16 @@ func runCrack(args []string) int {
 	}
 	if v, ok := passwordFromEnv(*passwordEnv); ok {
 		priorityPW = append(priorityPW, v)
+	}
+	// Imported recovered-password envelopes (challenge export/import bridge): an
+	// external engine solved an exported challenge, so its password is tried first.
+	if len(resumeFrom) > 0 {
+		rpw, err := loadRecoveredPasswords(resumeFrom)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: --resume-from: %v\n", err)
+			return 2
+		}
+		priorityPW = append(priorityPW, rpw...)
 	}
 	allPasswords := append(append(append([]string{}, priorityPW...), passwords...), cfgPasswords...)
 	allWordlists := append(append([]string{}, wordlists...), cfgWordlists...)
@@ -319,6 +345,36 @@ func runCrack(args []string) int {
 			samples[i] = []byte(w)
 		}
 		markovModel = candidates.TrainMarkov(samples)
+	}
+	// Statistical ordering (`--order markov`): reorder the wordlist candidates so
+	// the likeliest words are tried first (per a Markov model trained on the
+	// candidate corpus). Distinct from `--markov`, which *generates* new guesses;
+	// this only reorders the dictionary words already supplied.
+	orderMode := strings.ToLower(firstNonEmpty(flagIf(set["order"], *orderF), cfgStr(cfg, func(c *fileConfig) string { return c.Search.Order })))
+	var orderModel *candidates.Markov
+	switch orderMode {
+	case "", "none":
+		// keep file order
+	case "markov":
+		words := collectTrainingWords(allPasswords, useDefault, allWordlists, 1<<20)
+		samples := make([][]byte, len(words))
+		for i, w := range words {
+			samples[i] = []byte(w)
+		}
+		orderModel = candidates.TrainMarkov(samples)
+	default:
+		fmt.Fprintf(os.Stderr, "xcrack: --order: unknown mode %q (supported: markov, none)\n", orderMode)
+		return 2
+	}
+	// reorder wraps a finite wordlist source so its head is the likeliest words
+	// (identity unless --order markov). Applied to natural wordlists before rule
+	// mangling, so mutations expand in probability order; NOT applied to breach
+	// corpora (already frequency-sorted) or to mask/generator keyspaces.
+	reorder := func(src candidates.Source) candidates.Source {
+		if orderModel == nil || src == nil {
+			return src
+		}
+		return candidates.ByScore(src, orderModel.Scorer(), *orderMax)
 	}
 
 	// Mask length incrementing (hashcat --increment): expand each configured mask
@@ -396,6 +452,12 @@ func runCrack(args []string) int {
 		if useDefault {
 			srcs = append(srcs, candidates.DefaultList())
 		}
+		// Swedish language pack: a curated, high-yield, already-mutated list, tried
+		// after the tiny default list but ahead of the bulk wordlists. Fed raw (its
+		// mutations are baked in), so the rule mangler is not applied to it.
+		if useSwedish {
+			srcs = append(srcs, candidates.Swedish())
+		}
 		// Spray: a compact, high-yield curated/token set, tried early (before the
 		// bulk wordlists). Years default to the current/previous calendar year.
 		if useSpray {
@@ -413,7 +475,7 @@ func runCrack(args []string) int {
 			if wl == "-" {
 				base = candidates.Stdin()
 			} else {
-				base = candidates.File(wl)
+				base = reorder(candidates.File(wl)) // statistical ordering (--order), stdin excluded (not re-iterable)
 			}
 			// Mangling rules expand each wordlist entry.
 			base = patternSet.ApplyRules(base)
@@ -474,6 +536,19 @@ func runCrack(args []string) int {
 		// A no-op when shardCount <= 1. Promoted/context/hint guesses live outside
 		// this base source, so every worker still tries them.
 		return candidates.Shard(candidates.Chain(srcs...), shardIndex, shardCount)
+	}
+
+	// Distributed mode: when one or more --server endpoints (or a config cluster
+	// block) are given, fan the search out to a fleet of xcrackd workers instead
+	// of cracking locally. The orchestrator pulls from the same buildCandidates
+	// source and ships batches, so every attack type works; promoted/context/hint
+	// reuse is per-server. --shard is for manual splitting and is not combined
+	// with this automatic distribution.
+	if servers, copts, distributed, derr := buildCluster(clusterServers, *clusterMode, *clusterBatch, *clusterDefaults, *clusterPerReq, cfg); derr != nil {
+		fmt.Fprintf(os.Stderr, "xcrack: %v\n", derr)
+		return 2
+	} else if distributed {
+		return runDistributed(files, servers, copts, buildCandidates, pot)
 	}
 
 	ctx := context.Background()
@@ -788,6 +863,8 @@ USAGE:
   xcrack kp --plain P --cipher C   ZipCrypto known-plaintext key recovery
                                    (no password; --bkcrack offloads the search)
   xcrack hashline [sources...]     emit $office$/$pdf$/... lines for hashcat/John
+  xcrack export-challenge [srcs]   emit the portable JSON challenge envelope(s)
+                                   for an external cracker (import with --resume-from)
   xcrack version
 
 COMMON FLAGS:
@@ -799,6 +876,9 @@ COMMON FLAGS:
       --format text|json|jsonl
       --workers N  --file-jobs N  --max-procs N
       --timeout D  --max-duration D  --batch-size N  --throttle PCT
+      --time-limit D             give up on a file after D with no success, move on (per-file)
+      --order markov             try the statistically likeliest wordlist words first
+      --resume-from FILE         import a recovered-password envelope and try it first
       --context                  derive guesses from names + plain siblings
       --hint                     derive guesses from an embedded password hint
       --hint-rules FILE          rule file applied to hint-derived words
@@ -811,13 +891,17 @@ COMMON FLAGS:
       --increment MIN:MAX        expand each mask over a token-length range, shortest first
       --combinator-left FILE --combinator-right FILE [--combinator-sep S]   combinator attack
       --as SCHEME                force a scheme for a magic-less file (e.g. sqlcipher)
-      --shard I/N                distributed cracking: test only shard I of N of the keyspace
+      --shard I/N                manual split: test only shard I of N of the keyspace
+      --server URL[@GROUP]       distribute to an xcrackd server (repeatable; many servers crack in parallel)
+      --cluster-mode MODE        collective (share one file) | partition (groups take different files)
+      --cluster-batch N  --cluster-allow-defaults  --cluster-per-request D
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --spray                    curated spray set (common + season/year), tried early
       --spray-token STR          org/product/user token mangled into the spray set (repeatable)
       --spray-year N             year used in spray patterns (repeatable; default current/previous)
       --breach FILE              frequency-annotated breach corpus (count-prefixed or pw:count; repeatable)
       --breach-min-count N       drop breach entries seen fewer than N times
+      --swedish                  also try the built-in Swedish-targeted wordlist
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list

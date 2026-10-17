@@ -16,12 +16,15 @@
 package api
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/rom/xcrack/pkg/xcrack"
@@ -120,41 +123,34 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 // handleIdentify detects the format and encryption shape without attempting any
 // password (no candidate source), so encrypted nodes come back "locked".
 func (s *Server) handleIdentify(w http.ResponseWriter, r *http.Request) {
-	s.process(w, r, nil)
+	data, _, ok := s.readRequest(w, r, false)
+	if !ok {
+		return
+	}
+	s.run(w, r, data, nil)
 }
 
 // handleDecrypt runs the full search with the request's candidates.
 func (s *Server) handleDecrypt(w http.ResponseWriter, r *http.Request) {
-	src, err := s.candidates(r)
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+	data, src, ok := s.readRequest(w, r, true)
+	if !ok {
 		return
 	}
-	s.process(w, r, src)
+	s.run(w, r, data, src)
 }
 
-func (s *Server) process(w http.ResponseWriter, r *http.Request, src xcrack.CandidateSource) {
-	if r.Method != http.MethodPost {
-		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
-		return
-	}
-	body := http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
-	data, err := io.ReadAll(body)
-	if err != nil {
-		var mbe *http.MaxBytesError
-		if errors.As(err, &mbe) {
-			writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the configured limit")
-			return
+// run processes already-read file data with an already-built candidate source.
+func (s *Server) run(w http.ResponseWriter, r *http.Request, data []byte, src xcrack.CandidateSource) {
+	timeout := s.cfg.RequestTimeout
+	// A client (e.g. the distributed orchestrator) may request a shorter
+	// per-request deadline so a slow stripe does not hold a server; never longer
+	// than the operator's configured bound.
+	if v := requestParam(r, "max-duration"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 && d < timeout {
+			timeout = d
 		}
-		writeError(w, http.StatusBadRequest, "could not read request body")
-		return
 	}
-	if len(data) == 0 {
-		writeError(w, http.StatusBadRequest, "empty request body")
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(r.Context(), s.cfg.RequestTimeout)
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
 
 	res, err := s.pool.Process(ctx, bytes.NewReader(data), int64(len(data)), src)
@@ -171,10 +167,81 @@ func (s *Server) process(w http.ResponseWriter, r *http.Request, src xcrack.Cand
 	writeJSON(w, http.StatusOK, xcrack.BuildReport(res))
 }
 
-// candidates builds the candidate source from the request query. It never reads
-// server-side files; candidates come only from the request (explicit passwords)
-// plus, when the operator enabled it, the embedded default list.
-func (s *Server) candidates(r *http.Request) (xcrack.CandidateSource, error) {
+// readRequest extracts the file to analyze and (when wantCandidates) the
+// candidate source. Two request shapes are accepted:
+//
+//   - application/octet-stream (default): the raw file is the body; candidates
+//     come from the query string (?password=, ?defaults=true, ?shard=I/N).
+//   - multipart/form-data: a "file" part carries the archive and an optional
+//     "wordlist" part carries newline-delimited candidates, so an orchestrator
+//     can ship a large keyspace stripe in one request. Form values password,
+//     defaults and shard behave as their query-string counterparts.
+//
+// It writes the error response and returns ok=false on any problem.
+func (s *Server) readRequest(w http.ResponseWriter, r *http.Request, wantCandidates bool) (data []byte, src xcrack.CandidateSource, ok bool) {
+	if r.Method != http.MethodPost {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return nil, nil, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxBodyBytes)
+
+	if strings.HasPrefix(r.Header.Get("Content-Type"), "multipart/form-data") {
+		if err := r.ParseMultipartForm(8 << 20); err != nil {
+			if tooLarge(err) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request exceeds the configured limit")
+				return nil, nil, false
+			}
+			writeError(w, http.StatusBadRequest, "could not parse multipart request")
+			return nil, nil, false
+		}
+		f, _, ferr := r.FormFile("file")
+		if ferr != nil {
+			writeError(w, http.StatusBadRequest, "multipart request missing a 'file' part")
+			return nil, nil, false
+		}
+		defer f.Close()
+		d, rerr := io.ReadAll(f)
+		if rerr != nil {
+			writeError(w, http.StatusBadRequest, "could not read the 'file' part")
+			return nil, nil, false
+		}
+		data = d
+		if wantCandidates {
+			src, ok = s.multipartCandidates(w, r)
+			if !ok {
+				return nil, nil, false
+			}
+		}
+	} else {
+		d, rerr := io.ReadAll(r.Body)
+		if rerr != nil {
+			if tooLarge(rerr) {
+				writeError(w, http.StatusRequestEntityTooLarge, "request body exceeds the configured limit")
+				return nil, nil, false
+			}
+			writeError(w, http.StatusBadRequest, "could not read request body")
+			return nil, nil, false
+		}
+		data = d
+		if wantCandidates {
+			s2, err := s.queryCandidates(r)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, err.Error())
+				return nil, nil, false
+			}
+			src = s2
+		}
+	}
+	if len(data) == 0 {
+		writeError(w, http.StatusBadRequest, "empty file")
+		return nil, nil, false
+	}
+	return data, src, true
+}
+
+// queryCandidates builds the candidate source from the query string (the
+// octet-stream request shape).
+func (s *Server) queryCandidates(r *http.Request) (xcrack.CandidateSource, error) {
 	q := r.URL.Query()
 	pws := q["password"]
 	if len(pws) > s.cfg.MaxPasswords {
@@ -184,17 +251,124 @@ func (s *Server) candidates(r *http.Request) (xcrack.CandidateSource, error) {
 	if len(pws) > 0 {
 		src = candidates.Explicit(pws...)
 	}
-	if q.Get("defaults") == "true" {
-		if !s.cfg.AllowDefaultList {
-			return nil, errors.New("the default wordlist is not enabled on this server")
+	src, err := s.appendDefaults(src, q.Get("defaults") == "true")
+	if err != nil {
+		return nil, err
+	}
+	return s.applyShard(src, q.Get("shard"))
+}
+
+// multipartCandidates builds the candidate source from a multipart request: the
+// explicit password form values plus the newline-delimited "wordlist" part.
+func (s *Server) multipartCandidates(w http.ResponseWriter, r *http.Request) (xcrack.CandidateSource, bool) {
+	var parts []candidates.Source
+	if pws := r.MultipartForm.Value["password"]; len(pws) > 0 {
+		if len(pws) > s.cfg.MaxPasswords {
+			writeError(w, http.StatusBadRequest, "too many password candidates")
+			return nil, false
 		}
-		if src == nil {
-			src = candidates.DefaultList()
-		} else {
-			src = candidates.Chain(src, candidates.DefaultList())
+		parts = append(parts, candidates.Explicit(pws...))
+	}
+	if fhs := r.MultipartForm.File["wordlist"]; len(fhs) > 0 {
+		wf, err := fhs[0].Open()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "could not read the 'wordlist' part")
+			return nil, false
+		}
+		defer wf.Close()
+		var words [][]byte
+		sc := bufio.NewScanner(wf)
+		sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
+		for sc.Scan() {
+			line := strings.TrimRight(sc.Text(), "\r")
+			words = append(words, []byte(line))
+		}
+		if err := sc.Err(); err != nil {
+			writeError(w, http.StatusBadRequest, "could not read the 'wordlist' part")
+			return nil, false
+		}
+		if len(words) > 0 {
+			parts = append(parts, candidates.Bytes(words...))
 		}
 	}
-	return src, nil
+	var src xcrack.CandidateSource
+	if len(parts) == 1 {
+		src = parts[0]
+	} else if len(parts) > 1 {
+		src = candidates.Chain(parts...)
+	}
+	src, err := s.appendDefaults(src, r.FormValue("defaults") == "true")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return nil, false
+	}
+	src, err = s.applyShard(src, r.FormValue("shard"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return nil, false
+	}
+	return src, true
+}
+
+// appendDefaults optionally appends the operator-gated embedded default list.
+func (s *Server) appendDefaults(src xcrack.CandidateSource, want bool) (xcrack.CandidateSource, error) {
+	if !want {
+		return src, nil
+	}
+	if !s.cfg.AllowDefaultList {
+		return nil, errors.New("the default wordlist is not enabled on this server")
+	}
+	if src == nil {
+		return candidates.DefaultList(), nil
+	}
+	return candidates.Chain(src, candidates.DefaultList()), nil
+}
+
+// applyShard restricts src to a 1/N stride of the keyspace when a well-formed
+// "I/N" shard spec is given, so several servers can split one keyspace.
+func (s *Server) applyShard(src xcrack.CandidateSource, spec string) (xcrack.CandidateSource, error) {
+	spec = strings.TrimSpace(spec)
+	if spec == "" || src == nil {
+		return src, nil
+	}
+	i, n, ok := parseShardSpec(spec)
+	if !ok {
+		return nil, errors.New("invalid shard spec (want I/N)")
+	}
+	return candidates.Shard(src, i, n), nil
+}
+
+// parseShardSpec parses "I/N" into a zero-based index and count.
+func parseShardSpec(spec string) (index, count int, ok bool) {
+	parts := strings.SplitN(spec, "/", 2)
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	i, ierr := strconv.Atoi(strings.TrimSpace(parts[0]))
+	n, nerr := strconv.Atoi(strings.TrimSpace(parts[1]))
+	if ierr != nil || nerr != nil || n < 1 || i < 0 || i >= n {
+		return 0, 0, false
+	}
+	return i, n, true
+}
+
+// requestParam returns a value from the query string or, for a parsed multipart
+// request, the form values.
+func requestParam(r *http.Request, name string) string {
+	if v := r.URL.Query().Get(name); v != "" {
+		return v
+	}
+	if r.MultipartForm != nil {
+		if vs := r.MultipartForm.Value[name]; len(vs) > 0 {
+			return vs[0]
+		}
+	}
+	return ""
+}
+
+func tooLarge(err error) bool {
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {

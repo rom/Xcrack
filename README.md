@@ -40,15 +40,20 @@ gold-standard decrypted legacy-Office documents.
 Recovery features: recursive decomposition of nested layers into a result tree
 (password **and** content reported per layer), password promotion across layers
 (and corpus-wide with `--adaptive`), a hashcat-compatible pattern engine (masks
-+ rules + hybrid wordlist±mask + mask-increment) and candidate generators
++ rules + hybrid wordlist±mask + mask-increment), candidate generators
 (combinator, PRINCE, toggle-case, keyboard-walk, Markov/PCFG, spray, breach
-corpora), keyspace **sharding** across machines (`--shard I/N`), two-axis
-globally-bounded concurrency, disk-streaming of large entries, resource budgets
-+ bomb defenses, and — to offload heavy cracking to an external GPU engine —
-challenge export/import plus `$office$`/`$pdf$`/`$zip2$`/`$dmg$` hash-line
-emitters (`xcrack hashline`) for hashcat / John the Ripper. The `xcrackd` server
-also has an optional, opt-in **built-in** OpenCL tier (`-tags opencl`, `--gpu`)
-that batches the PBKDF2-HMAC-SHA1 sweep of the live search onto the device.
+corpora), a built-in **Swedish** language list (`--swedish`) and Markov
+likeliest-first ordering (`--order markov`), keyspace **sharding** across
+machines (`--shard I/N`), a per-file `--time-limit` so a stuck file never
+blocks a batch, two-axis globally-bounded concurrency, disk-streaming of large
+entries, resource budgets + bomb defenses, and — to offload heavy cracking —
+challenge export/import (`xcrack export-challenge` / `--resume-from`) plus
+`$office$`/`$pdf$`/`$zip2$`/`$dmg$` hash-line emitters (`xcrack hashline`) for
+hashcat / John the Ripper. **Distributed cracking** (`--server`,
+`--cluster-mode collective|partition`) fans the search out across a fleet of
+`xcrackd` workers; each server also has an optional, opt-in **built-in** OpenCL
+tier (`-tags opencl`, `--gpu`) that batches the PBKDF2-HMAC-SHA1 sweep of the
+live search onto the device.
 
 ## Quick start
 
@@ -120,6 +125,8 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 
 - **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples.
 - **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
+- **[References](docs/REFERENCES.md)** — the KDFs, ciphers, cryptanalysis, and candidate/attack methods used, with primary references.
+- **[Changelog](docs/CHANGELOG.md)** — notable changes by pull request.
 - [Architecture](docs/architecture.md) — system context, containers, components, data flow.
 - [Design](docs/design.md) — public APIs, the recursion algorithm, the pattern engine, concurrency, error model.
 - [ASR](docs/asr.md) — quality attributes and constraints that shape the architecture.
