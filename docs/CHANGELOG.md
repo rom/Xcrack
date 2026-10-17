@@ -12,7 +12,9 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 ## [Unreleased]
 
-Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
+_Nothing yet._
+
+## PR #19 — 2026-10-17 — Staged cryptanalysis shortcuts: ZipCrypto cross-entry, PDF 40-bit RC4, Access Jet
 
 ### Added
 - **ZipCrypto cross-entry key reuse** — every entry in a ZipCrypto archive
