@@ -143,6 +143,8 @@ func runCrack(args []string) int {
 	benchmarkF := fs_.Bool("benchmark", false, "don't crack: measure the per-second verify rate for each source file's format and exit")
 	fs_.BoolVar(benchmarkF, "b", false, "alias for --benchmark")
 	estimateF := fs_.Bool("estimate", false, "don't crack: report keyspace, measured rate and estimated time-to-exhaust for each source file and exit")
+	showF := fs_.Bool("show", false, "don't crack: report which source files are already solved by the found-password cache/potfile (hashcat --show), as file:password")
+	leftF := fs_.Bool("left", false, "don't crack: report which source files are NOT yet solved by the found-password cache/potfile (hashcat --left)")
 	limitF := fs_.Int64("limit", 0, "with --stdout/--keyspace, stop after this many candidates (0 = no cap)")
 	var passwordFiles stringSlice
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
@@ -159,6 +161,7 @@ func runCrack(args []string) int {
 	var resumeFrom stringSlice
 	fs_.Var(&resumeFrom, "resume-from", "import a RecoveredPassword JSON envelope (from an external cracker that solved an exported challenge) and try its password first (repeatable)")
 	checkpointPath := fs_.String("checkpoint", "", "persist/resume search position for a single long run (single-target only)")
+	sessionPath := fs_.String("session", "", "persist/resume a whole multi-file run to FILE: files already fully searched are skipped on re-run (batch-level complement to --checkpoint)")
 
 	maxDepth := fs_.Int("max-depth", 0, "max nesting depth (0=default 32)")
 	maxTotal := fs_.Int64("max-total-bytes", 0, "cumulative decompressed byte budget")
@@ -640,6 +643,12 @@ func runCrack(args []string) int {
 			return runBenchmark(files, reg)
 		}
 		return runEstimate(files, reg, buildCandidates)
+	case *showF, *leftF:
+		reg := opts.Registry
+		if reg == nil {
+			reg = xcrack.DefaultRegistry()
+		}
+		return runShowLeft(files, reg, pot, *leftF)
 	}
 
 	// Distributed mode: when one or more --server endpoints (or a config cluster
@@ -653,6 +662,31 @@ func runCrack(args []string) int {
 		return 2
 	} else if distributed {
 		return runDistributed(files, servers, copts, buildCandidates, pot)
+	}
+
+	// Full-run session resume: skip files already fully searched in a prior run
+	// with the same candidate set, re-printing their recorded outcome.
+	var sess *session
+	if *sessionPath != "" {
+		sig := candidateSig(allPasswords, allWordlists, allBreach, useDefault, []string(patterns), useSpray, sprayTok)
+		sess = loadSession(*sessionPath, sig)
+		pending := files[:0:0]
+		for _, f := range files {
+			if pw, done := sess.get(f); done {
+				if len(pw) > 0 {
+					fmt.Printf("%s  [session: already solved] %s\n", f, strings.Join(pw, ", "))
+				} else {
+					fmt.Printf("%s  [session: already searched, no password found]\n", f)
+				}
+				continue
+			}
+			pending = append(pending, f)
+		}
+		files = pending
+		if len(files) == 0 {
+			fmt.Fprintln(os.Stderr, "xcrack: --session: all files already searched in this session")
+			return 0
+		}
 	}
 
 	ctx := context.Background()
@@ -757,6 +791,11 @@ func runCrack(args []string) int {
 			}
 			res.Root.Path = filepath.Base(path)
 			results[i] = res
+			// Batch-level session: this file's search ran to completion, so record it
+			// (with any recovered passwords) and never re-search it on resume.
+			if sess != nil {
+				sess.markDone(path, res.Passwords())
+			}
 			if prog != nil {
 				prog.addCandidates(res.Stats.CandidatesTried)
 			}
@@ -1021,7 +1060,12 @@ COMMON FLAGS:
       --prince                   also try PRINCE chains (concatenated wordlist words)
       --keyboard-walk            also try QWERTY keyboard-adjacency walks
       --markov                   generate best-first guesses from a Markov model (--markov-max N)
+      --markov-threshold N       cap --markov to the N likeliest next chars per position
       --increment MIN:MAX        expand each mask over a token-length range, shortest first
+      --hcmask FILE              load masks from a hashcat .hcmask file (repeatable)
+      --min-length N  --max-length N   skip candidates outside N characters
+      --encoding ENC             transcode candidates before testing: utf-8|latin1|utf-16le|utf-16be
+      --loopback                 re-mangle cached/pot recovered passwords through the rules
       --combinator-left FILE --combinator-right FILE [--combinator-sep S]   combinator attack
       --as SCHEME                force a scheme for a magic-less file (e.g. sqlcipher)
       --shard I/N                manual split: test only shard I of N of the keyspace
@@ -1040,6 +1084,11 @@ COMMON FLAGS:
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list
       --results-file FILE
+      --potfile FILE             load/append recovered passwords (tried first next time)
+      --found-cache FILE / --remember   persistent found-password cache (reused passwords found instantly)
+      --checkpoint FILE          resume one long single-file run where it stopped
+      --session FILE             resume a whole multi-file run: skip files already fully searched
+      --show / --left            report which files the found-password cache already solves (no cracking)
 
 Authorized use only: operate on files you own or are permitted to access.
 `)
