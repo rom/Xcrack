@@ -165,7 +165,9 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 - **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples and end-to-end use cases.
 - **[How Xcrack attacks each format](docs/CRACKING.md)** — per-format KDF/cipher/verifier, the attack used, and the verification shortcuts & cryptanalysis exploited (ZipCrypto key recovery, Office/PDF 40-bit key attacks, Access Jet header XOR).
 - **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
-- **[FAQ](docs/FAQ.md)** — quick answers on formats, orchestration, methods, KDFs, ciphers, shortcuts, candidate ordering, cryptanalysis, output, config and CLI options.
+- **[FAQ](docs/FAQ.md)** — quick answers on formats, orchestration, methods, KDFs, ciphers, shortcuts, candidate ordering, cryptanalysis, output, config and CLI options (topic-indexed).
+- **[Performance](docs/PERFORMANCE.md)** — per-format KDF cost, measured verify rates, attack-method effort, and CPU / distributed / GPU scaling.
+- **[Tests & validation](docs/TESTS.md)** — the test suite, the external oracles each scheme is cross-validated against, fuzzing, and the CI gate.
 - **[Terminology](docs/TERMINOLOGY.md)** — the glossary: engine concepts, KDFs, ciphers & modes, formats, attacks & shortcuts, and the abbreviations/TLAs used across the docs.
 - **[References](docs/REFERENCES.md)** — the KDFs, ciphers, cryptanalysis, and candidate/attack methods used, with primary references.
 - **[Changelog](docs/CHANGELOG.md)** — notable changes by pull request.

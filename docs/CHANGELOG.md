@@ -147,6 +147,16 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   the header-encrypted `hdr.7z`/`hdr.rar`).
 
 ### Docs
+- **New [`PERFORMANCE.md`](PERFORMANCE.md)** — per-format KDF cost model, measured
+  single-box CPU verify rates (`xcrack --benchmark` on a 4-core Xeon), attack-method
+  effort, the 40-bit key-sweep rate, and CPU / distributed / GPU scaling.
+- **New [`TESTS.md`](TESTS.md)** — the test suite: counts, the external oracles each
+  scheme is cross-validated against (with fixture locations), fuzzing, the
+  hostile-input/budget tests, the `-tags opencl` GPU suite, and exactly what CI runs.
+- **FAQ.md** gains a top-of-file topic index and new sections: terminology & basics,
+  files and file types, keys and key lengths, cracking limitations, performance and
+  cracking times, testing and validation, a documentation map, and kernel/core/
+  OpenCL/pocl answers in the GPU section. Linked from both doc indexes.
 - **Mermaid attack-pipeline diagram** added to README.md ("How it works") and
   docs/CRACKING.md §1 (replacing the ASCII sketch): detect → probe → candidate
   stream → fast-reject → verify → decrypt → re-detect, with the opt-in GPU tier
