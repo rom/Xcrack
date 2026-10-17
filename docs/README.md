@@ -15,7 +15,12 @@ Xcrack and its standalone formats library, **Xfileformats**.
   verifier, the attack brought to bear, the verification shortcuts and
   cryptanalysis exploited (or staged), and what the GPU tier accelerates.
 - **[FAQ](FAQ.md)** — quick answers on formats, orchestration, methods, KDFs,
-  ciphers, shortcuts, candidate ordering, cryptanalysis, config and CLI options.
+  ciphers, shortcuts, candidate ordering, cryptanalysis, config and CLI options
+  (starts with a topic index).
+- **[Performance](PERFORMANCE.md)** — per-format KDF cost, measured verify rates,
+  attack-method effort, and how it scales across CPU / distributed / GPU.
+- **[Tests & validation](TESTS.md)** — the test suite: categories, the external
+  oracles each scheme is cross-validated against, fuzzing, and the CI gate.
 - **[Terminology](TERMINOLOGY.md)** — the glossary: engine concepts, KDFs,
   ciphers & modes, formats, attacks & shortcuts, and the abbreviations/TLAs that
   recur across these docs.

@@ -9,6 +9,66 @@ Answers grouped by topic. See also [`USAGE.md`](USAGE.md) (worked examples),
 > Xcrack is a recovery / defensive tool. Use it only on files you own or are
 > explicitly authorized to access.
 
+## Index
+
+- [Terminology and basics](#terminology-and-basics)
+- [File formats](#file-formats)
+- [Files and file types](#files-and-file-types)
+- [Keys and key lengths](#keys-and-key-lengths)
+- [Attack orchestration](#attack-orchestration)
+- [Cracking alternatives (do I even need to brute force?)](#cracking-alternatives-do-i-even-need-to-brute-force)
+- [Cracking methods](#cracking-methods)
+- [Cracking limitations](#cracking-limitations)
+- [Performance and cracking times](#performance-and-cracking-times)
+- [KDFs (key-derivation functions)](#kdfs-key-derivation-functions)
+- [GPU acceleration](#gpu-acceleration)
+- [Ciphers and modes](#ciphers-and-modes)
+- [Verification shortcuts](#verification-shortcuts)
+- [Candidate generation and ordering](#candidate-generation-and-ordering)
+- [Cryptanalysis](#cryptanalysis)
+- [Configuration settings](#configuration-settings)
+- [Command-line options](#command-line-options)
+- [Output and extracted files](#output--extracted-files)
+- [Inspecting and troubleshooting](#inspecting--troubleshooting)
+- [Testing and validation](#testing-and-validation)
+- [Documentation map](#documentation-map)
+
+---
+
+## Terminology and basics
+
+**What does "crack" mean here — do you break the encryption?** No. Xcrack does
+not break AES, SHA-2 or any sound primitive. It *recovers the password* (by
+trying candidates against the format's own verifier) or, for a few legacy
+schemes with a real weakness, recovers the *key* directly (see
+[Cryptanalysis](#cryptanalysis)). Where the cipher is strong and the password is
+strong, the file stays locked — that is the design, not a bug.
+
+**Password vs. key vs. passphrase?** The **password** (or **passphrase**) is what
+a human types. A **key-derivation function (KDF)** stretches it into the
+symmetric **key** the cipher actually uses. Most schemes make you find the
+password; a few (ZipCrypto, 40-bit Office/PDF) let you find the key without ever
+learning the password. See [Keys and key lengths](#keys-and-key-lengths).
+
+**What is a "candidate"?** One password string to test. A run streams candidates
+from wordlists, rules, masks and generators, and each is checked against the
+file's verifier.
+
+**What is a "challenge"?** The small bundle of crypto material a format exposes
+after a cheap probe — salt, KDF parameters, a verifier block — so candidates can
+be tested without re-reading the whole file. It is also the unit Xcrack exports
+for offload (`export-challenge`).
+
+**What is "decomposition" / the result tree?** A file can nest (an encrypted
+PDF inside an encrypted ZIP inside a `.tar.gz`). Xcrack peels one layer at a
+time, producing a tree whose nodes are encryption layers, container layers, or
+**leaves** (real content). A password that unlocks an outer layer is **promoted**
+(tried first) on inner layers.
+
+**Where's the full glossary?** [`TERMINOLOGY.md`](TERMINOLOGY.md) — engine terms,
+KDFs, ciphers & modes, formats & containers, attacks & shortcuts, acceleration,
+and every abbreviation/TLA used across the docs.
+
 ---
 
 ## File formats
@@ -49,6 +109,80 @@ deliverable.
 decrypts and writes the tree out (`--out DIR`). For key/credential stores and
 wallets it is **verify-only**: the recovered passphrase is the deliverable; the
 private key / database body is not reconstructed.
+
+---
+
+## Files and file types
+
+**File, file type, file format, extension — what's the difference here?** Xcrack
+cares about the **format** (the on-disk structure and crypto), which it reads
+from the file's **content**, not its **extension**. A `.docx` renamed to `.bin`
+is still detected and cracked; a `.pdf` that is really a ZIP is treated as a ZIP.
+The extension is only a hint used for reporting.
+
+**What counts as a "container" vs. an "encryption layer" vs. a "leaf"?** A
+**container** holds other files and must be unpacked (ZIP, 7z, tar, an OLE2/CFB
+compound file). An **encryption layer** must be decrypted with a recovered
+key/password. A **leaf** is neither — real content handed back to you. One
+physical file is often several layers: `report.tar.gz` → gzip (container) → tar
+(container) → `secret.pdf` (encryption layer) → PDF body (leaf).
+
+**What is a "carrier"?** A file that embeds a protected sub-object Xcrack targets
+without the whole file being "the format" — e.g. a `.docm` whose `vbaProject.bin`
+part carries the VBA password, or an `.eml` whose MIME attachment is the real
+encrypted document. Xcrack reaches into the carrier automatically.
+
+**Which plain (non-encrypted) wrappers does it unpack to reach an inner file?**
+tar, gzip, bzip2, xz/lzma, **zstd**, **lz4**, and `.eml`/MIME. So `secret.zip`
+inside `backup.tar.zst` is found and cracked without a manual unpack step.
+
+**Why are documents treated as leaves by default?** A `.docx` is itself a ZIP of
+XML parts, but exploding it into those parts is rarely what you want, so by
+default a recognized document is a leaf. Opt into deeper explosion only when you
+need the inner parts (see [ADR 0007](adr/0007-documents-as-leaves.md)).
+
+**Is a huge or malformed file dangerous to point at?** No. Xcrack is built to
+eat hostile input: bounded reads, a global work budget (depth, bytes, node
+count, expansion ratio, time), content-hash cycle detection, and a `recover()`
+guard around every format parser. A decompression bomb or a parser crash becomes
+a per-node error, never a hang or a crash of the run. See
+[ADR 0004](adr/0004-hostile-input-safety-budgets.md) and
+[`TESTS.md`](TESTS.md).
+
+---
+
+## Keys and key lengths
+
+**Is the password the key?** No. The password is stretched by a
+[KDF](#kdfs-key-derivation-functions) into the cipher's key. A 6-character
+password and a 256-bit AES key coexist: the password is weak, the key space is
+huge, and the KDF is the bridge you pay for on every guess.
+
+**Why does key length decide whether a "key attack" is possible?** If the
+*effective* key is small enough to enumerate, you can skip the password entirely
+and sweep keys. Two shipped schemes have that weakness:
+
+- **Office 97/2000 RC4** and **PDF V1/R2 (and 40-bit R3/R4) RC4** derive a
+  **40-bit** key (`MD5(…)[:5]`). 2⁴⁰ ≈ 1.1 × 10¹² keys is a feasible sweep
+  (`office-keyattack`, `pdf-keyattack`), and it works regardless of how long or
+  random the password was.
+- **ZipCrypto** has three 32-bit internal keys recoverable from known plaintext
+  (Biham–Kocher), again with no password (`kp`).
+
+**Why can't you key-attack everything else?** Modern schemes use a **128- or
+256-bit** key with no shortcut — 2¹²⁸ is not enumerable by anyone — so the only
+route is to guess the password and run the KDF. AES-256, ChaCha20, and the
+AES-based PDF (AESV2/AESV3) handlers are all in this group.
+
+**What are "trunc" and "file key"?** Scheme-specific names for the small derived
+key the sweep targets: the Office 97/2000 **trunc** is `MD5(UTF16LE(pw))[:5]`;
+the PDF **file key** is `MD5(pad(pw)‖O‖P‖ID…)[:5]`. Both are 5 bytes = 40 bits.
+
+**Does a longer key always mean slower cracking?** No — key *length* bounds the
+key-attack route; per-guess *speed* is set by the **KDF cost**, not the key size.
+A 256-bit-key file with a cheap KDF (one MD5) is far faster per guess than a
+40-bit-key file would be if it used Argon2. See
+[Performance and cracking times](#performance-and-cracking-times).
 
 ---
 
@@ -117,6 +251,91 @@ candidate stream, `--keyspace` its size, `--benchmark` the per-file verify rate,
 
 ---
 
+## Cracking limitations
+
+**What can Xcrack *not* do?** It cannot break sound cryptography. If the cipher
+is strong (AES, ChaCha20) and the password is strong and not reused, not in any
+list, and not derivable from a rule or hint, the file stays locked — no tool
+recovers it. Xcrack maximizes the chance of a *weak or reused* password being
+found; it makes no dent in a genuinely strong one behind an expensive KDF.
+
+**What is explicitly out of scope?** Online / network attacks (it only reads
+local files), public-key PDF (needs the recipient's private key, not a
+password), breaking the primitives themselves, and anything requiring the
+cleartext you don't have. Memory-hard KDFs (Argon2, scrypt) are supported but
+deliberately slow and **not** GPU-accelerated (see
+[GPU acceleration](#gpu-acceleration)).
+
+**Which formats are verify-only (no body reconstruction)?** Key/credential
+stores and wallets — OpenSSH/PEM/PKCS#8 private keys, JKS, PKCS#12, PuTTY `.ppk`,
+SQLCipher, KeePass, Ethereum keystore, iWork. The recovered passphrase is the
+deliverable; Xcrack does not rebuild the private key or database body.
+
+**Are any formats "staged" (recognized but not yet fully cracked)?** Yes — the
+backlog in [`roadmap-enhancements.md`](roadmap-enhancements.md) tracks them with
+checkboxes. Recognition and a hash-line/offload path often ship before an
+in-engine cracker.
+
+**Does it guarantee a recovered password is *the* password?** It guarantees the
+candidate satisfies the format's authoritative verifier (a MAC/tag gives
+cryptographic certainty; a verifier block is astronomically unlikely to collide).
+In the rare unauthenticated case a second candidate could in principle also
+verify; Xcrack returns the first that does.
+
+---
+
+## Performance and cracking times
+
+**How fast is a crack?** It is set almost entirely by the **per-candidate KDF
+cost** of the target format, not by Xcrack. Cheap verifiers run tens of
+thousands of guesses per second; deliberately expensive KDFs run single digits.
+Representative **single-box, pure-Go CPU** rates measured on a 4-core Intel Xeon
+@ 2.10 GHz (`xcrack --benchmark`):
+
+| Format (sample) | candidates/sec | Why |
+|---|---:|---|
+| JKS keystore | ~510,000 | one SHA-1 per guess |
+| ZipCrypto | ~62,000 | broken stream cipher, trivial check |
+| traditional PEM (MD5 `EVP_BytesToKey`) | ~93,000 | one MD5 |
+| PKCS#12 | ~3,700 | modest PKCS#12 KDF |
+| PKCS#8 PBES2 PEM | ~2,000 | PBKDF2, low iters |
+| WinZip-AES-256 | ~1,050 | PBKDF2-HMAC-SHA1 ×1000 |
+| PDF AESV3 (R6) | ~370 | iterated SHA-2 (Algorithm 2.B) |
+| iWork | ~42 | PBKDF2 ×tens-of-thousands |
+| RAR5 | ~40 | PBKDF2-HMAC-SHA256 |
+| 7-Zip AES | ~30 | SHA-256 ×2¹⁹ |
+| PuTTY `.ppk` v3 | ~9 | Argon2 (memory-hard) |
+| OpenPGP (`gpg -c`) | ~6 | iterated S2K |
+| OpenSSH key | ~4 | bcrypt-pbkdf |
+| age (scrypt) | ~1 | scrypt (very memory-hard) |
+
+Full methodology, more formats, attack-method comparisons and GPU/offload
+figures are in [`PERFORMANCE.md`](PERFORMANCE.md). Your numbers scale with core
+count (the search is near-linear) and the file's actual iteration parameters.
+
+**How do I get the number for *my* file?** `xcrack --benchmark FILE` prints its
+verify rate, `--keyspace` the candidate count, and `--estimate` the
+time-to-exhaust and expected-time-to-hit — all without cracking anything:
+
+```
+$ xcrack --estimate -w list.txt secret.7z
+    rate      27 candidates/sec
+    keyspace  41
+    time      ~1.52s to exhaust, ~760ms expected to a hit
+```
+
+**A fast format with a big keyspace can still be hopeless.** At ~62k/s a
+ZipCrypto file is fast *per guess*, but an 8-char full-ASCII mask is ~6 × 10¹⁵
+candidates — millennia. Speed per guess and keyspace size both matter; use
+`--estimate` before committing to a mask.
+
+**What makes a repeat run fast?** The found-password cache orders the known
+password first (skipping wrong-guess KDFs), and `--reuse-output` skips an
+unchanged source entirely on re-extraction. See
+[Candidate generation and ordering](#candidate-generation-and-ordering).
+
+---
+
 ## KDFs (key-derivation functions)
 
 **Which KDFs are implemented?** PBKDF2 (HMAC-SHA1/256/512), scrypt, Argon2
@@ -150,6 +369,40 @@ authoritative verification all stay on the CPU in pure Go. The device never
 decides correctness: every GPU-derived key is re-checked by the format's normal
 verifier, so a faulty or mismatched backend can only slow a search, never cause
 a false positive or a wrong "found".
+
+**What is a "kernel"?** A small program that runs on the GPU, once per work-item
+(per candidate or per key index), many thousands at a time. Xcrack ships one
+kernel per accelerated primitive (e.g. `kernel_pbkdf2_sha1.cl`,
+`kernel_vba_sha1.cl`). Each `.cl` file is compiled on the device at startup and
+self-tested against the pure-Go reference before use.
+
+**What is a "core"?** Here, the reusable algorithm building-block a kernel is
+written around — the SHA-1, MD5 or RC4 transform. The three key-search kernels
+(Office 97/2000, PDF, VBA) deliberately **reuse the same MD5/RC4/SHA-1 cores**,
+so the crypto is written and validated once.
+
+**Key-search kernel vs. batch kernel?** A **batch** kernel derives one key per
+candidate password (PBKDF2, the Office spin, VBA salted-SHA-1) and the engine
+checks each. A **key-search** kernel sweeps a fixed key space (the 2⁴⁰ Office and
+PDF RC4 sweeps): one work-item per key index, comparing to the verifier on-device
+and publishing a hit via an atomic.
+
+**What is OpenCL?** The vendor-neutral standard Xcrack's kernels are written in
+(OpenCL C). The same `.cl` runs on NVIDIA, AMD (including Ryzen APUs), Intel and
+Apple GPUs through each vendor's driver (the OpenCL ICD) — no CUDA/ROCm-specific
+code. Building it needs an OpenCL SDK and cgo, which is why it is behind the
+`-tags opencl` build tag and off by default.
+
+**What is pocl?** "Portable Computing Language" — an OpenCL implementation that
+runs kernels on the **CPU**. Xcrack uses it as the always-available validation
+device: the self-test and cross-validation tests run the real kernels on pocl in
+environments with no GPU, so correctness is proven even without hardware.
+
+**Why is it cgo / server-only and not in the CLI?** cgo + an OpenCL runtime
+breaks the pure-Go, single-binary promise ([ADR 0001](adr/0001-pure-go-no-external-binaries.md)),
+so the GPU tier is a hardware-gated **server** exception (`xcrackd --gpu`) that a
+operator opts into. The `xcrack` CLI stays pure Go; for GPU power from the CLI,
+offload via `hashline`/`export-challenge` instead.
 
 **Which formats are accelerated today?**
 
@@ -380,3 +633,70 @@ None of these decrypt anything.
 **What do the exit codes mean?** `0` = at least one layer decrypted (or a
 clean inspection), `1` = nothing decrypted / still locked, `2` = a usage or I/O
 error. See [`USAGE.md`](USAGE.md#exit-codes).
+
+---
+
+## Testing and validation
+
+**How is Xcrack tested?** Across the three modules there are ~140 test files and
+~370 unit tests, ~30 fuzz targets, plus the `-tags opencl` GPU suite. Every
+cryptographic scheme is **cross-validated against an independent oracle** before
+it ships. Full detail — categories, oracles, the CI gate — is in
+[`TESTS.md`](TESTS.md).
+
+**What are the "oracles"?** Real third-party tools and libraries whose output a
+scheme must reproduce byte-for-byte: qpdf (PDF), msoffcrypto-tool (legacy
+Office), pykeepass + KeePassXC (KeePass), LibreOffice (ODF), Apple Pages/Numbers/
+Keynote (iWork), the `age` and GnuPG CLIs, `rar`/`7z` (header-encrypted
+archives), bkcrack (ZipCrypto known-plaintext), jackcess (Access Jet), the
+phc-winner-argon2 reference, and hashcat's canonical example hashes. Their
+fixtures are committed in-tree (indexed in [`gold/README.md`](../gold/README.md))
+so the cross-validation stays reproducible even if a source disappears.
+
+**What does the fuzzing cover?** Every hostile-input parser (PDF, CFB/OLE2, ZIP,
+7z/RAR, Office, ODF, key stores, the mask/rule compiler) and the whole recursive
+engine (`FuzzProcess`). CI replays the committed seed corpora and regression
+crashers deterministically on every run; a nightly job does timed exploratory
+fuzzing.
+
+**What stops a malicious file from hanging or crashing a run?** A global work
+budget (depth, total bytes, node count, expansion ratio, time), content-hash
+cycle detection, bounded readers, and a `recover()` guard around every format
+call — all exercised by dedicated bomb/fan-out/cycle tests. See
+[ADR 0004](adr/0004-hostile-input-safety-budgets.md).
+
+**Does CI build the GPU path?** No. CI runs build, `go vet`, a `gofmt` check,
+the `-race` test suite, a deterministic fuzz-corpus replay, and (non-blocking)
+`govulncheck` — all on the pure-Go default build. The `-tags opencl` kernels are
+validated separately on pocl (CPU OpenCL) and never built by CI, per
+[ADR 0001](adr/0001-pure-go-no-external-binaries.md). `make check` runs the same
+gate locally.
+
+---
+
+## Documentation map
+
+**Where do I start?** [`USAGE.md`](USAGE.md) — build, run the CLI and the
+`xcrackd` service, embed the library, and configure everything, with worked
+examples. The docs index is [`docs/README.md`](README.md).
+
+**Which doc answers what?**
+
+| Doc | Covers |
+|---|---|
+| [`USAGE.md`](USAGE.md) | commands, flags, config, library/service, end-to-end examples |
+| [`FILEFORMATS.md`](FILEFORMATS.md) | every supported format/variant, detection, verifier/KDF/cipher, its oracle |
+| [`CRACKING.md`](CRACKING.md) | how each format is attacked; verification shortcuts & cryptanalysis; what the GPU tier accelerates |
+| [`FAQ.md`](FAQ.md) | this file — quick answers by topic |
+| [`TERMINOLOGY.md`](TERMINOLOGY.md) | the glossary (engine, KDFs, ciphers, formats, attacks, acceleration, TLAs) |
+| [`PERFORMANCE.md`](PERFORMANCE.md) | per-format cost, measured rates, attack-method and platform guidance |
+| [`TESTS.md`](TESTS.md) | the test suite: categories, oracles, fuzzing, the CI gate |
+| [`REFERENCES.md`](REFERENCES.md) | the crypto, cryptanalysis and attack methods used, with primary sources |
+| [`CHANGELOG.md`](CHANGELOG.md) | notable changes, grouped by pull request |
+| [`roadmap.md`](roadmap.md) / [`roadmap-enhancements.md`](roadmap-enhancements.md) | phased plan and the checkbox backlog (features, approaches, formats) |
+| [`architecture.md`](architecture.md) / [`design.md`](design.md) / [`asr.md`](asr.md) | system views, APIs/algorithms, quality attributes |
+| [`threat-model.md`](threat-model.md) / [`adr/`](adr/) | trust boundaries; the significant decisions |
+
+**Is there a glossary for the jargon?** Yes — [`TERMINOLOGY.md`](TERMINOLOGY.md)
+defines every engine concept, KDF, cipher/mode, format, attack and abbreviation
+used across these docs.
