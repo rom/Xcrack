@@ -171,8 +171,10 @@ bypass or shrink the search:
   coverage, only chain endpoints stored), and `xcrack pdf-keyattack --table FILE`
   recovers the file key in **sub-second** instead of the ~week-of-CPU full sweep
   — the capability Elcomsoft markets as "Thunder Tables" for 40-bit Office. The
-  one-time generation cost is ≈ the sweep (`thunder-gen --dry-run` estimates it);
-  storage is the endpoints (tunable via chain length). Every lookup hit is
+  one-time generation cost is ≈ the sweep (`thunder-gen --dry-run` estimates it)
+  and `thunder-gen --gpu` offloads the chain walk to an OpenCL device (the
+  `pdf_thunderchain` kernel, byte-identical to the CPU walk — §4); storage is the
+  endpoints (tunable via chain length). Every lookup hit is
   re-checked against the real `/U` and `pdf.Handler.VerifyFileKey`, so a chain
   false-alarm is rejected and the table never yields a wrong key; a miss falls
   back to the live sweep. It does **not** apply to R3/R4 (whose `/U` hashes the
@@ -365,6 +367,15 @@ correctness. It offloads through the live crack loop on the OpenCL server tier
 and Office-spin batches use, and falls back to the per-candidate CPU hash when no
 device is built/available. Validated against `crypto/sha1` on pocl
 (`SaltedSHA1Hasher`, `GPUSelfTest`).
+
+The GPU also accelerates **thunder-table generation** — not a crack itself but
+the heavy one-time precompute behind the PDF V1/R2 TMTO (§3). `thunder-gen --gpu`
+runs the `pdf_thunderchain` kernel with one work-item per rainbow chain, each
+walking `chainLen` columns of `(RC4(k, pad)[:8] + seed + col) mod 2^bits`. It is
+byte-identical to the pure-Go walk (so a GPU-built table is inverted by the same
+CPU lookup — cross-validated GPU-vs-CPU byte-for-byte), via the
+`accel.PDFThunderChainer` capability and the `pdf.ChainComputer` seam, with a
+per-sub-table CPU fallback on any device error.
 
 **Good candidates for additional kernels** (catalogued from a survey of the
 schemes):

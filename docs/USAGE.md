@@ -1072,6 +1072,7 @@ sub-second.
 
 ```sh
 xcrack thunder-gen --out r2.table                  # build it (one-time; --dry-run prints the plan)
+xcrack thunder-gen --gpu --out r2.table            # offload the chain walk to an OpenCL device (-tags opencl; CPU fallback)
 xcrack thunder-gen --bits 24 --out trial.table     # a quick partial/trial table first
 xcrack pdf-keyattack --table r2.table scanned.pdf  # instant lookup; falls back to the sweep on a miss
 ```

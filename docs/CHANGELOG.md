@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU-accelerated Thunder-Table generation.** `xcrack thunder-gen --gpu`
+  offloads the rainbow-chain walk — the heavy one-time cost of building the PDF
+  V1/R2 TMTO — to an OpenCL device via the new `pdf_thunderchain` kernel (one
+  work-item per chain) and the `pdf.ChainComputer` seam / `accel.PDFThunderChainer`
+  capability. The GPU chain is **byte-identical** to the pure-Go walk (same R2
+  image, same column/seed reduction with the power-of-two mask), so a GPU-built
+  table is inverted by the same CPU lookup — cross-validated GPU-vs-CPU
+  byte-for-byte in `thundergen_opencl_test.go`, plus a `GPUSelfTest` chain case.
+  `GenerateTable` falls back to the CPU walk per sub-table on any device error,
+  so the offload never corrupts a table. Default build stays pure-Go (ADR 0001);
+  ships only with `-tags opencl`, and `--gpu` degrades to CPU when unavailable.
 - **Precomputed "Thunder Tables" (rainbow TMTO) for PDF V1/R2.** `xcrack
   thunder-gen` builds a rainbow time-memory trade-off and `xcrack pdf-keyattack
   --table FILE` inverts the R2 user-verifier `/U = RC4(fileKey, pad)` → 40-bit
