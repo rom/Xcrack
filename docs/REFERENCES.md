@@ -74,6 +74,15 @@ caller-supplied cheap pre-check.
   implementation, **bkcrack** by Kévin Falcoz
   (<https://github.com/kimci86/bkcrack>), re-validating whatever it returns.
   This is legitimate cryptanalysis of a weak-by-design cipher.
+- **ZipCrypto reduced known-plaintext & weak-RNG recovery (Stay).** Michael Stay,
+  *ZIP Attacks with Reduced Known-Plaintext* (FSE 2001). Two results: (1) the
+  Biham–Kocher plaintext requirement drops to ~2–3 bytes in many cases; (2) legacy
+  WinZip ≤ 8.0 / NetZip seeded the 12-byte header's "random" bytes with MSVC
+  `rand()` (a 31-bit seed), so archives with ≥ 5 encrypted entries fall with **no**
+  known plaintext ("guaranteed recovery"). Both are **documented, not built** — the
+  recovered keys (which Xcrack already obtains) suffice for decryption, and the
+  weak-RNG case is a narrow legacy tail with no obtainable oracle fixture here
+  (see [`CRACKING.md`](CRACKING.md) §3).
 
 ## 5. Candidate generation and ordering
 
@@ -164,6 +173,24 @@ and titles as published. What Xcrack took from each:
   XP/2003 default same, 2007 AES-128 + 50k SHA-1, 2010 100k SHA-1, 2013+ AES-256
   + 100k SHA-512 (slow — dictionary attacks only). **Confirms** Xcrack's
   per-version implementations and informs the queue strength ordering.
+- **Cracking Legacy ZIP Encryption: the Known-Plaintext Attack (and why it still
+  sometimes works)** (2026-07) —
+  <https://blog.elcomsoft.com/2026/07/cracking-legacy-zip-encryption-the-known-plaintext-attack-and-why-it-still-sometimes-works/>.
+  History of the ZipCrypto break: Biham–Kocher 1994 (known-plaintext, ~12 bytes)
+  and Stay 2001 (reduced to 2–3 bytes, plus the weak-RNG "guaranteed recovery"
+  against WinZip ≤ 8.0 / NetZip with ≥ 5 entries); also the WinZip AE-1/AE-2
+  verify-step downgrade. **Applied / confirmed:** the shipped Biham–Kocher
+  known-plaintext + cross-entry recovery (`xcrack kp`); the Stay results are
+  documented as staged in [`CRACKING.md`](CRACKING.md) §3, with reasons.
+- **The Long, Strange History of PDF Insecurity** (2026-07) —
+  <https://blog.elcomsoft.com/2026/07/the-long-strange-history-of-pdf-insecurity-and-the-arrest-that-made-it-personal/>.
+  PDF encryption's evolution: 40-bit RC4 (export-crippled, Thunder-Tables-instant),
+  128-bit RC4, then Acrobat 9's R5 256-bit AES whose **single unsalted SHA-256**
+  password check made guessing *faster* than the scheme it replaced, until ISO's
+  R6 iterated hash; and the owner/permission password never gating the key.
+  **Confirms** Xcrack's `pdf-keyattack` (40-bit), the empty-user-password owner
+  strip on every revision, and the cheap single-hash R5 verifier vs. iterated R6
+  (see [`CRACKING.md`](CRACKING.md) §3).
 
 ## 8. Format & standard specifications
 

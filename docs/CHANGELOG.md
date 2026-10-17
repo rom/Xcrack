@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Codecs: zstd & lz4 containers.** Two single-stream compressors are registered
+  as containers (`xfileformats/formats/archive/codec.go`), so a password-protected
+  file wrapped in a modern codec — most importantly `.tar.zst` / `.tar.lz4`, where
+  the inner tar and any encrypted file in it were previously unreachable — is
+  decompressed and recursed into like gzip/bzip2/xz. Pure-Go decoders already in
+  the module (`klauspost/compress/zstd`, `pierrec/lz4/v4`, now promoted to direct
+  requires), so the cgo-free default build is unaffected; output is bounded by
+  `maxDecompressed` and the engine budgets, and decode errors surface as
+  recovered-so-far / `ErrMalformed`, never a panic. zstd detection also covers
+  skippable frames. Tested by round-trip + a `.tar.zst` recursion test and an
+  end-to-end engine test that cracks a WinZip-AES entry inside a `.tar.zst`.
 - **GPU kernel: Office 2010+ agile iterated-hash spin.** A new OpenCL kernel
   (SHA-1/256/384/512) runs the ~100k-iteration spin that dominates every modern
   Office document's key derivation — the single biggest per-candidate cost for
@@ -76,6 +87,22 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   and AES included — the only feasible route there), and (c) documenting the Wu
   2005 RC4 keystream-reuse weakness and the pure-Go ZipCrypto password recovery
   as known-but-not-built, with reasons.
+- CRACKING.md §3 + REFERENCES.md: from two further Elcomsoft posts (legacy-ZIP
+  known-plaintext; the history of PDF insecurity) — document the **Stay 2001**
+  ZipCrypto results (reduced 2–3-byte known-plaintext, and the weak-RNG
+  "guaranteed recovery" against WinZip ≤ 8.0 / NetZip with ≥ 5 entries) as staged,
+  with reasons (recovered keys already suffice; no obtainable oracle for the
+  weak-RNG tail); and record that PDF **R5** (Acrobat 9 AESV3) verifies with a
+  **single SHA-256**, cheaper per guess than the iterated R6 — a property Xcrack's
+  R5 verifier already has (`hash2B` short-circuits for `R < 6`).
+- Roadmap: mark **Document explosion** (`--explode-documents`, ADR 0007) done, and
+  add zstd/lz4 to the archive-unpackers entry; `roadmap-enhancements.md` marks the
+  zstd/lz4 codecs shipped and splits out the remaining codecs / container parsers
+  (brotli, cpio, ar, CAB, ISO 9660/UDF).
+- Terminology moved out of `docs/README.md` into a new, extensively expanded
+  **docs/TERMINOLOGY.md** (engine concepts, KDFs & hashing, ciphers & modes,
+  formats & key stores, attacks & cryptanalysis shortcuts, acceleration, and an
+  abbreviations/TLA index), referenced from README.md and docs/README.md.
 
 ## PR #19 — 2026-10-17 — Staged cryptanalysis shortcuts: ZipCrypto cross-entry, PDF 40-bit RC4, Access Jet
 

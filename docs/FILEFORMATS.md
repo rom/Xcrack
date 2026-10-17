@@ -32,7 +32,7 @@ appears in challenges, JSON output, and the `identify` command.
 
 | Family | Formats | Caps |
 | ------ | ------- | ---- |
-| [Archives & mail](#archives--mail) | ZIP, tar, gzip, bzip2, xz, 7-Zip, RAR, MIME `.eml` | 📦 🔓 🧩 |
+| [Archives & mail](#archives--mail) | ZIP, tar, gzip, bzip2, xz, zstd, lz4, 7-Zip, RAR, MIME `.eml` | 📦 🔓 🧩 |
 | [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), Access detection | 🔓 📦 |
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
@@ -47,6 +47,7 @@ appears in challenges, JSON output, and the `identify` command.
 | ------ | ------ | -------------------- | --- | ------ | -------- | ------ |
 | **ZIP** 🔓📦🧩 | `PK\x03\x04` | `zipcrypto` (PKWARE legacy stream cipher); `winzip-aes-128` / `-192` / `-256` (AE-1 & AE-2) | ZipCrypto: bespoke 3×32-bit key schedule. WinZip: PBKDF2-HMAC-SHA1, 1000 iters | ZipCrypto stream; WinZip AES-CTR | ZipCrypto 1–2 check bytes; WinZip 2-byte password verifier + HMAC-SHA1 authentication | `zip`, `7z` |
 | **tar / gzip / bzip2 / xz** 📦 | respective magic | *none* — compression/containers only | — | — | — | Go stdlib |
+| **zstd / lz4** 📦 | `28 B5 2F FD` (zstd, + skippable frames) / `04 22 4D 18` (lz4 frame) | *none* — single-stream compressors, pure-Go decoders | — | — | — | `klauspost/compress`, `pierrec/lz4` round-trip |
 | **7-Zip** 📦🔓 | `37 7A BC AF 27 1C` | AES-256; **content-encrypted** and **header-encrypted** (`-mhe=on`) | SHA-256, iterated (`2^n` rounds) | AES-256-CBC | padding / stream check | `7z` |
 | **RAR** 📦🔓 | `Rar!\x1A\x07\x00` (RAR4) / `...\x01\x00` (RAR5) | RAR3 (AES-128) and RAR5 (AES-256); **content-** and **header-encrypted** (`-hp`) | RAR5: PBKDF2-HMAC-SHA256 (iteration count read from the header); RAR3: custom SHA-1 | AES-CBC | **RAR5**: the 8-byte header check value — a wrong password is rejected after key derivation alone, no decrypt (`xcrypto/scheme/rar5`); RAR4: decrypt + CRC32 | `rar`, `unrar` (tests skip if absent) |
 | **MIME `.eml`** 📦 | mail headers | *container* — decodes and extracts attachments (base64 / quoted-printable); encrypted attachments are handed to their own format | — | — | — | — |
@@ -208,8 +209,9 @@ affects correctness. The default build is pure-Go/CPU-only (ADR 0001 amendment).
 
 Tracked in [`roadmap-enhancements.md`](roadmap-enhancements.md): BKS key stores,
 disk images (ISO/UDF, VHD(X), DMG), installers (MSI/CAB/NSIS/Inno), OneNote /
-Outlook mail carriers, Hangul HWP, more codecs (zstd/lz4/brotli/…), and
-full-volume encryption (BitLocker, VeraCrypt, LUKS, FileVault).
+Outlook mail carriers, Hangul HWP, more codecs and container parsers (brotli,
+cpio, ar, CAB — zstd/lz4 now ship), and full-volume encryption (BitLocker,
+VeraCrypt, LUKS, FileVault).
 
 **Out of scope by design:** GPU cracking in the default build (the opt-in
 `xcrackd` OpenCL server tier above is the one sanctioned exception), any

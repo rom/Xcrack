@@ -26,7 +26,7 @@ many worked examples.
 
 | Family | Formats |
 | ------ | ------- |
-| **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
+| **Archives** | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **zstd**, **lz4**, **7z**, **RAR** — 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | **MS Office** | OOXML (`.docx/.xlsx/.pptx`, agile + standard); legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI, RC4 97-2000, XOR); **Office family** — encrypted Publisher/Visio/Project ride the shared OOXML path; **Access** — Jet (`.mdb`) password recovered from the header with no cracking (`access-recover`), ACE (`.accdb`) detected |
 | **Other docs** | PDF (RC4 / AESV2 / AESV3, user + owner); ODF / LibreOffice (AES-256-CBC **and AES-256-GCM**); **Apple iWork** (Pages/Numbers/Keynote) |
 | **Disk images** | Apple **encrypted DMG** (v2 AES-128/256) read on-disk directly, plus v1/v2 via the `dmg2john` `$dmg$` line |
@@ -36,6 +36,10 @@ many worked examples.
 Every scheme is cross-validated — against known-answer vectors, the real
 `zip` / `qpdf` / `7z` / `rar` / `age` / `gpg` CLIs, and byte-for-byte against
 gold-standard decrypted legacy-Office documents.
+
+> New to the vocabulary (KDF, verifier, ZipCrypto, AE-1/AE-2, KPA, TMTO, …)? The
+> **[glossary in `docs/TERMINOLOGY.md`](docs/TERMINOLOGY.md)** defines the engine
+> concepts, cryptographic terms, formats, attacks, and abbreviations used here.
 
 Recovery features: recursive decomposition of nested layers into a result tree
 (password **and** content reported per layer), password promotion across layers
@@ -127,6 +131,7 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 - **[How Xcrack attacks each format](docs/CRACKING.md)** — per-format KDF/cipher/verifier, the attack used, and the verification shortcuts & cryptanalysis exploited (ZipCrypto key recovery, Office/PDF 40-bit key attacks, Access Jet header XOR).
 - **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
 - **[FAQ](docs/FAQ.md)** — quick answers on formats, orchestration, methods, KDFs, ciphers, shortcuts, candidate ordering, cryptanalysis, output, config and CLI options.
+- **[Terminology](docs/TERMINOLOGY.md)** — the glossary: engine concepts, KDFs, ciphers & modes, formats, attacks & shortcuts, and the abbreviations/TLAs used across the docs.
 - **[References](docs/REFERENCES.md)** — the KDFs, ciphers, cryptanalysis, and candidate/attack methods used, with primary references.
 - **[Changelog](docs/CHANGELOG.md)** — notable changes by pull request.
 - [Architecture](docs/architecture.md) — system context, containers, components, data flow.

@@ -73,7 +73,7 @@ check · **attack** = the primary recovery path.
 
 | Format | KDF / cipher | Verifier | Attack & shortcuts |
 |--------|--------------|----------|--------------------|
-| **PDF** (RC4 V1–V2, AESV2, AESV3 R5/R6) | MD5 (R2–R4) / SHA-2 "2.B" (R6) | `/U` (user) and, via `/O`, the owner password | Dictionary/rules on user **and** owner password; **owner/permission-only PDFs open with the empty password**; **a direct 40-bit file-key attack** on V1/R2 (and 40-bit R3/R4) RC4 (`pdf-keyattack`) — see §3. |
+| **PDF** (RC4 V1–V2, AESV2, AESV3 R5/R6) | MD5 (R2–R4) / single SHA-256 (R5) / iterated SHA-2 "2.B" (R6) | `/U` (user) and, via `/O`, the owner password | Dictionary/rules on user **and** owner password; **owner/permission-only PDFs open with the empty password**; **a direct 40-bit file-key attack** on V1/R2 (and 40-bit R3/R4) RC4 (`pdf-keyattack`); R5's single-SHA-256 verifier is cheaper per guess than R6 — see §3. |
 | **ODF** | PBKDF2-HMAC-SHA1; AES-256-CBC or -GCM | SHA-256 1K checksum (CBC) / GCM tag | Dictionary/rules; PBKDF2 GPU-accelerable. |
 | **Apple iWork** | PBKDF2-HMAC-SHA1; AES-128 | `sha256(plain[:32]) == plain[32:64]` | Dictionary/rules; the embedded `.iwph` **hint** is tried first. |
 | **Encrypted DMG** (v1/v2) | PBKDF2-HMAC-SHA1; 3DES-unwrap + AES-CBC | double-padding (v1) / 8 NUL bytes (v2) | Dictionary/rules; PBKDF2 GPU-accelerable (high iteration — a prime target). |
@@ -139,6 +139,19 @@ bypass or shrink the search:
   (`--shard i/N`) and parallel (`--workers`). 128-bit RC4 and the AES schemes
   (AESV2/AESV3) have no such bottleneck and the command declines them. Validated
   against a real 40-bit PDF produced by qpdf (`keyattack_test.go`).
+- **PDF R5 (Acrobat 9 AESV3) single-round SHA-256 verifier.** Revision 5 — Adobe's
+  deprecated pre-ISO AES-256 extension (Acrobat 9, 2008) — checks the password
+  with a **single** SHA-256 of `password ‖ 8-byte validation salt` and no
+  iteration, whereas R6 (ISO 32000-2, Acrobat X+) runs the iterated Algorithm 2.B
+  (≥64 rounds of SHA-256/384/512 with an AES-CBC mix). Xcrack verifies R5 with
+  exactly that one hash per candidate (`hash2B` short-circuits for `R < 6`), so an
+  R5 dictionary runs at raw-hash speed — materially faster per guess than both R6
+  and even the older 128-bit RC4 (R3/R4). This is the weakness Elcomsoft flags:
+  Acrobat 9's "upgrade" to 256-bit AES actually made password guessing *faster*
+  than the scheme it replaced, until ISO restored a proper multi-round hash in R6.
+  There is no key-space shortcut (the key is a true 256-bit AES key, not a 40-bit
+  RC4 key), but the per-candidate cost is minimal; R6 Xcrack implements separately
+  and validates 300/300 against qpdf.
 - **MS Access (Jet) header XOR.** Jet3/Jet4 store the database password
   XOR-obfuscated with fixed, public material — the header page is masked with a
   fixed 128-byte mask, and (Jet4 only) the password field is additionally masked
@@ -166,6 +179,27 @@ bypass or shrink the search:
 
 ### Known, real, and staged (documented, not yet implemented)
 
+- **ZipCrypto weak-RNG "guaranteed recovery" (Stay 2001).** Legacy **WinZip ≤ 8.0**
+  and **NetZip** generated the 12-byte encryption header that precedes every
+  ZipCrypto entry with the Microsoft Visual C++ `rand()` PRNG, seeded from a value
+  only **31 bits** wide. That tiny seed space can be swept directly, so when an
+  archive holds **≥ 5 encrypted entries** the shared key state is recoverable with
+  **no known plaintext at all** — a decryption that is "guaranteed" regardless of
+  the password's length or complexity (Michael Stay, *ZIP Attacks with Reduced
+  Known-Plaintext*, FSE 2001; productized in Elcomsoft AAPR as "guaranteed WinZip
+  recovery"). It stays documented, not built: it applies only to a narrow tail of
+  long-obsolete archivers, and the verify-first rule forbids shipping it without an
+  oracle — no genuine WinZip ≤ 8.0 / NetZip archive is obtainable in this build
+  environment to cross-validate the seed-recovery against. The common path (any
+  ZipCrypto archive, any producer) is the already-shipped Biham–Kocher
+  known-plaintext recovery with cross-entry reuse.
+- **ZipCrypto reduced known-plaintext (Stay 2001).** The same paper cuts the
+  Biham–Kocher plaintext requirement from ~12 bytes down to as little as **2–3
+  bytes** in many cases. Xcrack does not implement the reduction because it buys
+  little here: decryption needs the recovered *keys*, not the password, and ~12
+  bytes of *compressed* plaintext (a known inner file, or a shared archive member)
+  is nearly always available whenever any known plaintext is — so the full
+  Biham–Kocher path (`xcrack kp`) already succeeds. Documented for completeness.
 - **ZipCrypto password recovery from the recovered keys, in pure Go.** Once the
   Biham–Kocher attack has the three internal keys (which Xcrack already does),
   the original password can be recovered in ~n^(L−6) instead of n^L — the last
