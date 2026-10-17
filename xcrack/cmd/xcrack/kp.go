@@ -6,11 +6,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/rom/xcrypto/scheme/zipcrypto"
+	"github.com/rom/xfileformats/formats/zip"
 )
 
 // runKP implements `xcrack kp`: ZipCrypto known-plaintext key recovery. Given
@@ -30,6 +32,8 @@ func runKP(args []string) int {
 	keepHeaderF := fs_.Bool("keep-header", false, "keep the 12-byte encryption header in --decrypt output (default: drop it)")
 	recoverPwF := fs_.String("recover-password", "", "recover the password via bkcrack as MAXLEN:CHARSET, e.g. 8:?l?d (requires --bkcrack and --decrypt)")
 	outF := fs_.String("out", "", "where --decrypt writes its plaintext (default: stdout)")
+	zipF := fs_.String("zip", "", "after recovery, decrypt EVERY ZipCrypto entry of this archive with the shared key state (cross-entry reuse; requires --decrypt to establish the entry-start state)")
+	zipOutF := fs_.String("zip-out", "", "directory to write the --zip decrypted entries into (default: just list them)")
 	fs_.Usage = func() {
 		fmt.Fprint(os.Stderr, `xcrack kp -- ZipCrypto known-plaintext key recovery (Biham-Kocher)
 
@@ -119,6 +123,14 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 	k0, k1, k2 := keys.Words()
 	fmt.Printf("%08x %08x %08x\n", k0, k1, k2)
 
+	var (
+		entryStart zipcrypto.Keys
+		haveStart  bool
+	)
+	if *zipF != "" && *decryptF == "" {
+		fmt.Fprintln(os.Stderr, "xcrack kp: --zip requires --decrypt (the known-plaintext entry) to establish the archive-wide key state")
+		return 2
+	}
 	if *decryptF != "" {
 		entry, err := os.ReadFile(*decryptF)
 		if err != nil {
@@ -140,7 +152,8 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 		// ciphertext (header + any earlier data) to the entry start, then decrypt
 		// the whole entry forward.
 		start, _ := keys.RollBack(entry[:abs])
-		entryStart := start // state before the entry = NewKeys(password); copy before Decrypt mutates start
+		entryStart = start // state before the entry = NewKeys(password); copy before Decrypt mutates start
+		haveStart = true
 		full := append([]byte(nil), entry...)
 		start.Decrypt(full)
 		out := full
@@ -159,7 +172,76 @@ The in-process attack is compute-heavy -- prefer --bkcrack when available.
 			}
 		}
 	}
+
+	if *zipF != "" {
+		if !haveStart {
+			fmt.Fprintln(os.Stderr, "xcrack kp: --zip: could not establish the entry-start key state")
+			return 2
+		}
+		if code := decryptArchive(*zipF, entryStart, *zipOutF); code != 0 {
+			return code
+		}
+	}
 	return 0
+}
+
+// decryptArchive decrypts every traditional-ZipCrypto entry of the archive with
+// the shared entry-start key state (cross-entry key reuse): after one
+// known-plaintext recovery, the rest of the archive opens with no further
+// search. Each entry is CRC-checked, so a wrong state recovers nothing. If
+// outDir is set, each recovered entry is written there; otherwise they are only
+// listed.
+func decryptArchive(archivePath string, start zipcrypto.Keys, outDir string) int {
+	data, err := os.ReadFile(archivePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack kp: %v\n", err)
+		return 2
+	}
+	results, err := zip.DecryptArchiveWithStart(bytes.NewReader(data), int64(len(data)), start)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack kp: --zip: %v\n", err)
+		return 2
+	}
+	if outDir != "" {
+		if err := os.MkdirAll(outDir, 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack kp: --zip-out: %v\n", err)
+			return 2
+		}
+	}
+	n := 0
+	for _, r := range results {
+		if !r.OK {
+			continue
+		}
+		n++
+		if outDir == "" {
+			fmt.Printf("decrypted: %s (%d bytes)\n", r.Name, len(r.Plaintext))
+			continue
+		}
+		dst := filepath.Join(outDir, filepath.FromSlash(r.Name))
+		if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack kp: --zip-out: %v\n", err)
+			return 2
+		}
+		if err := os.WriteFile(dst, r.Plaintext, 0o600); err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack kp: --zip-out: %v\n", err)
+			return 2
+		}
+		fmt.Printf("decrypted: %s -> %s (%d bytes)\n", r.Name, dst, len(r.Plaintext))
+	}
+	if n == 0 {
+		fmt.Fprintln(os.Stderr, "xcrack kp: --zip: the recovered key state decrypted no entries (not a ZipCrypto archive, or a different password)")
+		return 1
+	}
+	fmt.Fprintf(os.Stderr, "xcrack kp: --zip: decrypted %d ZipCrypto entr%s from one recovery\n", n, plural(n))
+	return 0
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return "y"
+	}
+	return "ies"
 }
 
 // recoverPassword runs bkcrack's password search from the entry-start key state

@@ -406,6 +406,65 @@ func unsupportedEntry(zf *stdzip.File, name string, cause error) *xfileformats.E
 	}
 }
 
+// ArchivePlain is the decryption result for one traditional-ZipCrypto entry
+// under a shared key state.
+type ArchivePlain struct {
+	Name      string
+	Plaintext []byte
+	OK        bool // the CRC matched — the shared key state is correct for this entry
+}
+
+// DecryptArchiveWithStart decrypts every traditional (PKWARE) ZipCrypto entry in
+// an archive using one shared pre-entry key state `start`. Because ZipCrypto
+// re-derives that state (NewKeys(password)) from the same password for every
+// entry, `start` is identical across the whole archive: recover it once — from a
+// single entry by password or Biham–Kocher known-plaintext — and the rest of the
+// archive decrypts with no further search ("cross-entry key reuse"). Each entry's
+// CRC-32 is re-checked, so a wrong `start` yields OK=false, never a false
+// positive. AES and unencrypted entries are skipped (OK=false, no plaintext).
+func DecryptArchiveWithStart(r io.ReaderAt, size int64, start zipcrypto.Keys) ([]ArchivePlain, error) {
+	zr, err := stdzip.NewReader(r, size)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", xfileformats.ErrMalformed, err)
+	}
+	if len(zr.File) > maxEntries {
+		return nil, xfileformats.ErrLimitExceeded
+	}
+	var out []ArchivePlain
+	for _, zf := range zr.File {
+		if strings.HasSuffix(zf.Name, "/") {
+			continue
+		}
+		name := sanitizePath(zf.Name)
+		if name == "" {
+			continue
+		}
+		res := ArchivePlain{Name: name}
+		// Only traditional ZipCrypto (encrypted, not AES, store/deflate).
+		if zf.Flags&0x1 == 0 || zf.Method == methodAES ||
+			(zf.Method != methodStore && zf.Method != methodDeflate) {
+			out = append(out, res)
+			continue
+		}
+		raw, rerr := readRawBytes(zf, maxEntryRaw)
+		if rerr != nil || len(raw) < zipcrypto.HeaderLen {
+			out = append(out, res)
+			continue
+		}
+		k := start // value copy; Decrypt mutates the key state and the buffer
+		full := append([]byte(nil), raw...)
+		k.Decrypt(full)
+		plain, derr := decompress(full[zipcrypto.HeaderLen:], zf.Method)
+		if derr != nil || crc32.ChecksumIEEE(plain) != zf.CRC32 {
+			out = append(out, res) // wrong state or not ZipCrypto under this key
+			continue
+		}
+		res.Plaintext, res.OK = plain, true
+		out = append(out, res)
+	}
+	return out, nil
+}
+
 func readRawBytes(zf *stdzip.File, limit int64) ([]byte, error) {
 	rc, err := zf.OpenRaw()
 	if err != nil {
