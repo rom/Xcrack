@@ -20,7 +20,10 @@
 // they stay on the CPU pending dedicated kernels.
 package accel
 
-import "errors"
+import (
+	"errors"
+	"strings"
+)
 
 // ErrNotBuilt is returned by Detect in a default (pure-Go) build: no OpenCL
 // backend was compiled in.
@@ -37,6 +40,56 @@ type Device struct {
 	Vendor       string
 	Type         string // "GPU", "CPU", "ACCELERATOR", or "OTHER"
 	ComputeUnits int
+	UnifiedMem   bool // host-unified memory => an integrated GPU / APU (e.g. Ryzen AI Max)
+}
+
+// VendorArch classifies a device's vendor family from its CL_DEVICE_VENDOR
+// string, so the tier can report and select across NVIDIA, AMD (including Ryzen
+// APUs), Intel and Apple uniformly. The OpenCL C kernels are vendor-neutral and
+// run on any conformant driver (NVIDIA CUDA OpenCL, AMD ROCm/Mesa, Intel, Apple,
+// pocl), so this drives selection and logging, not kernel choice.
+func VendorArch(vendor string) string {
+	v := strings.ToLower(vendor)
+	switch {
+	case strings.Contains(v, "nvidia"):
+		return "NVIDIA"
+	case strings.Contains(v, "advanced micro") || strings.Contains(v, "amd") || strings.Contains(v, "radeon"):
+		return "AMD"
+	case strings.Contains(v, "intel"):
+		return "Intel"
+	case strings.Contains(v, "apple"):
+		return "Apple"
+	case strings.Contains(v, "mesa") || strings.Contains(v, "rusticl") || strings.Contains(v, "clover"):
+		return "Mesa"
+	case strings.Contains(v, "pocl"):
+		return "pocl"
+	default:
+		return "Other"
+	}
+}
+
+// DeviceRank scores a device for automatic selection (higher = preferred): a
+// discrete GPU beats an integrated GPU/APU, which beats a dedicated
+// accelerator, which beats a CPU; compute units break ties. It lets Detect pick
+// the best available device across vendors (an AMD discrete card over its own
+// APU, a GPU over the CPU fallback) rather than just the first platform.
+func DeviceRank(d Device) int {
+	base := 0
+	switch d.Type {
+	case "GPU":
+		if d.UnifiedMem {
+			base = 3000 // integrated GPU / APU
+		} else {
+			base = 4000 // discrete GPU
+		}
+	case "ACCELERATOR":
+		base = 2000
+	case "CPU":
+		base = 100
+	default:
+		base = 10
+	}
+	return base + d.ComputeUnits
 }
 
 // Accelerator is a ready OpenCL context over one or more devices. It is created
