@@ -229,9 +229,67 @@ those.
 | remember & reuse found passwords | `--found-cache FILE` / `--remember`, `--loopback` |
 | resume | `--checkpoint FILE` (one file), `--session FILE` (batch) |
 | triage many files | `--cost-queue`, `--fast-triage` config, `--time-limit D` |
-| inspect without cracking | `--stdout`, `--keyspace`, `--benchmark`, `--estimate`, `--debug-rules`, `--show`/`--left` |
+| inspect without cracking | `--stdout`, `--keyspace`, `--benchmark`, `--estimate`, `--debug-rules`, `--show`/`--left`, `--show-config`, `--show-cache` |
 | restrict candidates | `--min-length`/`--max-length`, `--encoding` |
+| output & extraction | `--out DIR`, `--extract-suffix S`, `--format`, `--results-file FILE` |
 | distribute | `--shard I/N`, `--server URL`, `--cluster-session FILE` |
 | key-level attacks | `xcrack kp …` (incl. `kp --zip`), `xcrack office-keyattack FILE`, `xcrack pdf-keyattack FILE`, `xcrack access-recover FILE` |
 
 Full worked examples are in [`USAGE.md`](USAGE.md).
+
+---
+
+## Output & extracted files
+
+**Where do decrypted files go?** With `--out DIR`, each source's recovered tree
+is written under `DIR/<source-name>.extracted/` (mirroring the nested layers),
+alongside a `manifest.json` describing the tree, the recovered passwords, and
+stats. Without `--out`, Xcrack reports to stdout and writes nothing.
+
+**Can I change the `.extracted` suffix?** Yes — `--extract-suffix S` sets it
+(e.g. `--extract-suffix .unpacked` → `DIR/archive.zip.unpacked/`), and `''`
+gives the bare source name. It must be a single path segment (no `/` or `..`),
+so it can never redirect the write outside `--out`. The config-file equivalent
+is `output.extract_suffix`.
+
+**What are the output formats?** `--format text` (a human-readable tree, the
+default), `json` (one document per input: tree + passwords + stats), or `jsonl`
+(one JSON object per node, stream-friendly). `--results-file FILE` also appends
+a JSON manifest per input.
+
+**Are recovered passwords ever written to logs?** No. They appear only in the
+result output and the manifest; the structured log (`--log-level`) never emits a
+password or plaintext.
+
+---
+
+## Inspecting & troubleshooting
+
+**How do I see the settings that are actually in effect?** `--show-config`
+prints the configuration after merging flags, environment, the config file and
+defaults (precedence: flags > env > config > defaults), then exits without
+cracking. It shows counts for explicit passwords and the cache path, never the
+secret values, so it is safe to paste into a bug report.
+
+**How do I see which passwords are cached?** `--show-cache` lists the passwords
+held in the found-password cache / potfile (point it at the cache with
+`--found-cache FILE`, `--remember`, or `--potfile FILE`). This differs from
+`--show`, which instead reports which *files* the cache already solves.
+
+**How do I preview an attack without running it?** `--stdout` prints the
+candidate stream, `--keyspace` its size, `--benchmark` the per-file verify rate,
+`--estimate` the time-to-exhaust, and `--debug-rules` per-rule hit/reject stats.
+None of these decrypt anything.
+
+**It says "not encrypted or unsupported" — now what?** Confirm the format with
+`xcrack identify FILE`. For a magic-less format (e.g. SQLCipher) force it with
+`--as sqlcipher`. For an `.accdb` (Access ACE) run a password search; for a Jet
+`.mdb` use `xcrack access-recover`.
+
+**A run seems stuck.** The KDF may simply be expensive (see *KDFs* above). Use
+`--estimate` to see the expected time, `--progress` for a live rate/ETA, and
+`--time-limit D` so a single hard file never blocks a batch.
+
+**What do the exit codes mean?** `0` = at least one layer decrypted (or a
+clean inspection), `1` = nothing decrypted / still locked, `2` = a usage or I/O
+error. See [`USAGE.md`](USAGE.md#exit-codes).

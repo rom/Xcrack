@@ -62,9 +62,10 @@ type fileConfig struct {
 		HCMask         []string          `yaml:"hcmask"` // hashcat .hcmask files (per-line masks)
 	} `yaml:"patterns"`
 	Output struct {
-		Format      string `yaml:"format"`
-		ResultsFile string `yaml:"results_file"`
-		LogLevel    string `yaml:"log_level"`
+		Format        string `yaml:"format"`
+		ResultsFile   string `yaml:"results_file"`
+		LogLevel      string `yaml:"log_level"`
+		ExtractSuffix string `yaml:"extract_suffix"` // suffix for each source's extracted-tree dir under --out (default ".extracted")
 	} `yaml:"output"`
 	Budget struct {
 		PerFile string `yaml:"per_file"`

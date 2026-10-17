@@ -79,6 +79,7 @@ func runCrack(args []string) int {
 
 	out := fs_.String("out", "", "write decrypted tree to this directory")
 	fs_.StringVar(out, "o", "", "alias for --out")
+	extractSuffix := fs_.String("extract-suffix", ".extracted", "suffix for each source's extracted-tree directory under --out (e.g. '.out', or '' for the bare source name)")
 	configPath := fs_.String("config", "", "YAML config file")
 	fs_.StringVar(configPath, "c", "", "alias for --config")
 
@@ -152,6 +153,8 @@ func runCrack(args []string) int {
 	debugRulesF := fs_.Bool("debug-rules", false, "don't crack: apply the --pattern rules to the wordlist words and report per-rule hit/reject counts with sample transforms (hashcat --debug-mode)")
 	showF := fs_.Bool("show", false, "don't crack: report which source files are already solved by the found-password cache/potfile (hashcat --show), as file:password")
 	leftF := fs_.Bool("left", false, "don't crack: report which source files are NOT yet solved by the found-password cache/potfile (hashcat --left)")
+	showConfigF := fs_.Bool("show-config", false, "don't crack: print the effective configuration (flags + env + config file + defaults, merged) and exit")
+	showCacheF := fs_.Bool("show-cache", false, "don't crack: list the passwords held in the found-password cache/potfile and exit (needs --found-cache/--remember/--potfile)")
 	limitF := fs_.Int64("limit", 0, "with --stdout/--keyspace, stop after this many candidates (0 = no cap)")
 	var passwordFiles stringSlice
 	fs_.Var(&passwordFiles, "password-file", "read candidate passwords (one per line) from FILE (repeatable)")
@@ -245,6 +248,20 @@ func runCrack(args []string) int {
 	logLvl := firstNonEmpty(flagIf(set["log-level"], *logLevel), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogLevel }), "info")
 	opts.Logger = newLogger(logLvl)
 
+	// Extracted-tree directory suffix: an explicit flag wins (even "" for none),
+	// else the config, else ".extracted". It must stay a single path segment so it
+	// cannot redirect the write outside --out.
+	extractSuffixVal := ".extracted"
+	if set["extract-suffix"] {
+		extractSuffixVal = *extractSuffix
+	} else if cfg != nil && cfg.Output.ExtractSuffix != "" {
+		extractSuffixVal = cfg.Output.ExtractSuffix
+	}
+	if strings.ContainsAny(extractSuffixVal, `/\`) || strings.Contains(extractSuffixVal, "..") {
+		fmt.Fprintln(os.Stderr, "xcrack: --extract-suffix must not contain a path separator or '..'")
+		return 2
+	}
+
 	// Build the pattern set from --pattern files and the config's patterns block.
 	patternSet, customCharsets, maskSpecs, err := buildPatternSet(patterns, cfg)
 	if err != nil {
@@ -288,7 +305,7 @@ func runCrack(args []string) int {
 	// assemble sources. --stdout and --keyspace only inspect the candidate stream,
 	// so they do not require a source file; the other modes (crack, --benchmark,
 	// --estimate) do.
-	previewMode := *stdoutF || *keyspaceF || *debugRulesF
+	previewMode := *stdoutF || *keyspaceF || *debugRulesF || *showConfigF || *showCacheF
 	srcArgs := append([]string(sources), fs_.Args()...)
 	if len(srcArgs) == 0 && !previewMode {
 		fmt.Fprintln(os.Stderr, "xcrack: no sources given (use --source or positional paths)")
@@ -667,6 +684,60 @@ func runCrack(args []string) int {
 		return runShowLeft(files, reg, pot, *leftF)
 	case *debugRulesF:
 		return runDebugRules(patternSet.Rules(), allWordlists, useDefault, allPasswords)
+	case *showCacheF:
+		return runShowCache(potPath, pot)
+	case *showConfigF:
+		ruleCount := 0
+		if r := patternSet.Rules(); r != nil {
+			ruleCount = r.Len()
+		}
+		return runShowConfig(confView{
+			Sources:        files,
+			Workers:        opts.Workers,
+			FileJobs:       opts.FileConcurrency,
+			MaxProcs:       opts.MaxProcs,
+			BatchSize:      opts.BatchSize,
+			Throttle:       opts.ThrottlePercent,
+			MaxDepth:       opts.Limits.MaxDepth,
+			MaxNodes:       opts.Limits.MaxNodes,
+			MaxTotalBytes:  opts.Limits.MaxTotalBytes,
+			MaxEntrySize:   opts.Limits.MaxEntrySize,
+			MaxCandidates:  opts.Limits.MaxCandidates,
+			Recurse:        !opts.NoRecurse,
+			Explode:        opts.ExplodeDocuments,
+			Promote:        !opts.NoPromote,
+			FindAll:        opts.FindAll,
+			Adaptive:       opts.CorpusPromotion,
+			Context:        opts.ContextCandidates,
+			Hint:           opts.HintCandidates,
+			UseDefaultList: useDefault,
+			Swedish:        useSwedish,
+			Wordlists:      allWordlists,
+			Breach:         allBreach,
+			PasswordCount:  len(allPasswords),
+			Spray:          useSpray,
+			CostQueue:      *costQueueF || (cfg != nil && cfg.Search.CostQueue),
+			Markov:         *markovF || *markovPosF || (cfg != nil && cfg.Search.Markov),
+			Order:          firstNonEmpty(flagIf(set["order"], *orderF), cfgStr(cfg, func(c *fileConfig) string { return c.Search.Order }), ""),
+			Shard:          shardSpec,
+			Encoding:       *encodingF,
+			MinLen:         *minLenF,
+			MaxLen:         *maxLenF,
+			FoundCache:     potPath,
+			Loopback:       *loopbackF,
+			Masks:          maskSpecs,
+			RuleCount:      ruleCount,
+			HCMask:         allHCMask,
+			Format:         outFormat,
+			ResultsFile:    resFile,
+			LogLevel:       logLvl,
+			OutDir:         *out,
+			ExtractSuffix:  extractSuffixVal,
+			PerFile:        opts.Budget.PerFile,
+			Total:          opts.Budget.Total,
+			Servers:        []string(clusterServers),
+			ClusterMode:    *clusterMode,
+		})
 	}
 
 	// Distributed mode: when one or more --server endpoints (or a config cluster
@@ -832,10 +903,10 @@ func runCrack(args []string) int {
 		}
 	}
 
-	return render(files, results, errs, outFormat, *out, resFile)
+	return render(files, results, errs, outFormat, *out, extractSuffixVal, resFile)
 }
 
-func render(files []string, results []*xcrack.Result, errs []error, outFormat, outDir, resFile string) int {
+func render(files []string, results []*xcrack.Result, errs []error, outFormat, outDir, extractSuffix, resFile string) int {
 	exit := 0
 	anyDecrypted, anyLocked := false, false
 	for i, path := range files {
@@ -864,7 +935,7 @@ func render(files []string, results []*xcrack.Result, errs []error, outFormat, o
 			}
 		})
 		if outDir != "" {
-			dst := filepath.Join(outDir, filepath.Base(path)+".extracted")
+			dst := filepath.Join(outDir, filepath.Base(path)+extractSuffix)
 			if err := writeTree(dst, res); err != nil {
 				fmt.Fprintf(os.Stderr, "xcrack: write %s: %v\n", dst, err)
 				exit = maxInt(exit, 2)
@@ -1060,6 +1131,7 @@ USAGE:
 COMMON FLAGS:
   -s, --source PATH         source file/dir/glob (repeatable)
   -o, --out DIR             write decrypted tree to DIR
+      --extract-suffix S    suffix for each source's extracted-tree dir under --out (default .extracted)
   -w, --wordlist FILE       wordlist (repeatable; - = stdin; gzip ok)
   -p, --password STR        explicit candidate (repeatable)
   -c, --config FILE         YAML config
@@ -1112,6 +1184,8 @@ COMMON FLAGS:
       --checkpoint FILE          resume one long single-file run where it stopped
       --session FILE             resume a whole multi-file run: skip files already fully searched
       --show / --left            report which files the found-password cache already solves (no cracking)
+      --show-cache               list the passwords held in the found-password cache/potfile (no cracking)
+      --show-config              print the effective configuration (flags+env+config+defaults) and exit
 
 Authorized use only: operate on files you own or are permitted to access.
 `)
