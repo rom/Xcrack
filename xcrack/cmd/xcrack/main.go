@@ -92,6 +92,7 @@ func runCrack(args []string) int {
 	noRecurse := fs_.Bool("no-recurse", false, "disable container decomposition")
 	explode := fs_.Bool("explode-documents", false, "decompose documents into internal parts")
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
+	swedishF := fs_.Bool("swedish", false, "also try the built-in Swedish-targeted wordlist (common Swedish words/names/places + typical mutations)")
 	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
 	hintF := fs_.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment), tried first")
@@ -258,6 +259,7 @@ func runCrack(args []string) int {
 	if cfg != nil && cfg.Candidates.UseDefaultList != nil {
 		useDefault = *cfg.Candidates.UseDefaultList
 	}
+	useSwedish := *swedishF || (cfg != nil && cfg.Candidates.Swedish)
 	cfgPasswords, cfgWordlists, cfgBreach := []string(nil), []string(nil), []string(nil)
 	if cfg != nil {
 		cfgPasswords = cfg.Candidates.Passwords
@@ -442,6 +444,12 @@ func runCrack(args []string) int {
 		}
 		if useDefault {
 			srcs = append(srcs, candidates.DefaultList())
+		}
+		// Swedish language pack: a curated, high-yield, already-mutated list, tried
+		// after the tiny default list but ahead of the bulk wordlists. Fed raw (its
+		// mutations are baked in), so the rule mangler is not applied to it.
+		if useSwedish {
+			srcs = append(srcs, candidates.Swedish())
 		}
 		// Spray: a compact, high-yield curated/token set, tried early (before the
 		// bulk wordlists). Years default to the current/previous calendar year.
@@ -870,6 +878,7 @@ COMMON FLAGS:
       --spray-year N             year used in spray patterns (repeatable; default current/previous)
       --breach FILE              frequency-annotated breach corpus (count-prefixed or pw:count; repeatable)
       --breach-min-count N       drop breach entries seen fewer than N times
+      --swedish                  also try the built-in Swedish-targeted wordlist
       --recurse / --no-recurse   --explode-documents
       --max-depth N  --max-total-bytes N  --max-nodes N
       --no-default-list

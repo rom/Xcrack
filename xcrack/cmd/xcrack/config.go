@@ -52,6 +52,7 @@ type fileConfig struct {
 		Breach         []string `yaml:"breach"`           // frequency-annotated breach corpora
 		BreachMinCount int64    `yaml:"breach_min_count"` // drop breach entries below this prevalence
 		UseDefaultList *bool    `yaml:"use_default_list"`
+		Swedish        bool     `yaml:"swedish"` // also try the built-in Swedish-targeted wordlist
 	} `yaml:"candidates"`
 	Patterns struct {
 		Masks          []string          `yaml:"masks"`
