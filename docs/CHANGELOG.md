@@ -15,6 +15,31 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **GPU kernel: Office 2010+ agile iterated-hash spin.** A new OpenCL kernel
+  (SHA-1/256/384/512) runs the ~100k-iteration spin that dominates every modern
+  Office document's key derivation — the single biggest per-candidate cost for
+  encrypted OOXML. It is not a PBKDF2: the CPU does the one variable-length first
+  hash `H(salt‖UTF16LE(pw))` and the device runs the fixed-size loop
+  `cur = H(LE32(i)‖cur)` (a new optional `accel.OfficeHasher` capability and
+  `AccelKDF.Office` seam; ooxml exposes it via `AccelKDF`, with `Finish` running
+  the authoritative agile verifier on the device-derived digest). Byte-for-byte
+  self-tested against `prim.OfficeAgileHash` for all four hashes at startup and
+  validated end-to-end through the engine against pocl (`TestOpenCLOfficeAgileLive`)
+  and with a pure-Go stub in the default build (`TestAccelOfficeAgile`). The spin
+  kernel is shared with Office 2007 "standard"; only that scheme's post-spin
+  `Finish` wiring remains.
+- **GPU acceleration for ODF and RAR5.** The opt-in OpenCL tier already shipped
+  PBKDF2-HMAC-SHA1/256/512 kernels but only WinZip-AES and encrypted DMG were
+  wired to them. Now **ODF** offloads its PBKDF2-HMAC-SHA1 content-key spin (via
+  a new `AccelKDF.PreHash` field that applies ODF's SHA-256/SHA-1 start-key hash
+  to each candidate on the CPU before the kernel), and **RAR5** offloads its
+  PBKDF2-HMAC-SHA256 password-check derivation (the 8-byte check value is a fold
+  of `PBKDF2-HMAC-SHA256(pw, salt, 2^Lg2Count+32, 32)`). Both validated against
+  pocl end-to-end through the engine, with the CPU verifier re-checking every
+  hit. SQLCipher is deliberately left on the CPU (its v3/v4 profile is unknown
+  before a password verifies, and the seam derives one profile per candidate).
+  New scheme helpers: `odf.VerifyWithKey`/`DecryptCompressedWithKey`/
+  `AccelStartHash`, `rar5.PswCheckFromDK`/`VerifyDK`/`AccelIterations`.
 - **`--show-config`** — print the effective configuration (flags + env + config
   file + defaults, merged, with precedence noted) and exit without cracking. It
   shows counts for explicit passwords and the cache path, never secret values,
@@ -37,6 +62,20 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   `--extract-suffix`, `--show-config`, `--show-cache`.
 - FAQ: new **Output & extracted files** and **Inspecting & troubleshooting**
   categories, plus entries for the new flags, formats, logging and exit codes.
+- FAQ: new **GPU acceleration** category — what the device does vs. the CPU, the
+  accelerated-formats table, why a scheme stays on the CPU (memory-hard /
+  ambiguous profile / no kernel yet), multi-device selection, and the
+  no-false-positive guarantee.
+- CRACKING.md §3: record a fresh cryptanalysis survey of every supported format.
+  Net outcome — the formats are already well covered; the notable additions are
+  (a) a precise refutation of the common claim that Office **XP/2003 CryptoAPI**
+  40-bit RC4 is key-attackable (each block key derives from the 160-bit
+  `SHA1(salt‖pw)`, so recovering the 40-bit verifier key decrypts only block 0,
+  not the document), (b) making explicit that the empty-**user**-password key
+  derivation already decrypts owner-only PDFs of *every* revision (128-bit RC4
+  and AES included — the only feasible route there), and (c) documenting the Wu
+  2005 RC4 keystream-reuse weakness and the pure-Go ZipCrypto password recovery
+  as known-but-not-built, with reasons.
 
 ## PR #19 — 2026-10-17 — Staged cryptanalysis shortcuts: ZipCrypto cross-entry, PDF 40-bit RC4, Access Jet
 

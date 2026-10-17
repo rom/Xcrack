@@ -80,6 +80,35 @@ func PswCheckValue(password string, salt []byte, lg2Count uint) []byte {
 	return pc
 }
 
+// AccelIterations is the total PBKDF2-HMAC-SHA256 iteration count an accelerator
+// must run to reach the +32 password-check snapshot: 2^Lg2Count + 32. Because
+// the derivation is a single PBKDF2 block (DKLen 32) XOR-accumulated, that
+// snapshot equals the standard PBKDF2-HMAC-SHA256(password, salt, 2^Lg2Count+32,
+// 32) output, which is what the batch kernel computes.
+func (p Params) AccelIterations() int { return p.Iterations() + 32 }
+
+// PswCheckFromDK folds a 32-byte PBKDF2-HMAC-SHA256(password, salt,
+// AccelIterations, 32) output to the 8-byte RAR5 password-check value. The DK
+// is exactly WinRAR's +32 accumulator snapshot, so this is the same fold
+// PswCheckValue applies — letting an accelerator derive the key once.
+func PswCheckFromDK(dk []byte) []byte {
+	pc := make([]byte, PswCheckLen)
+	for i := 0; i < len(dk); i++ {
+		pc[i%PswCheckLen] ^= dk[i]
+	}
+	return pc
+}
+
+// VerifyDK reports whether the 32-byte accelerator-derived key matches p's
+// stored check value, in constant time. It is the Finish step for the GPU
+// offload path; it returns false when p carries no check value.
+func VerifyDK(dk []byte, p Params) bool {
+	if len(p.PswCheck) != PswCheckLen || len(dk) == 0 {
+		return false
+	}
+	return subtle.ConstantTimeCompare(PswCheckFromDK(dk), p.PswCheck) == 1
+}
+
 // Verify reports whether password matches the archive described by p. It derives
 // the check value and compares it in constant time. It returns false (not an
 // error) when the params carry no check value, since then no fast verification

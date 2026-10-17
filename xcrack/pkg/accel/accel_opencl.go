@@ -45,6 +45,15 @@ var kernelSrcSHA256 string
 //go:embed kernel_pbkdf2_sha512.cl
 var kernelSrcSHA512 string
 
+//go:embed kernel_office_sha1.cl
+var officeSrcSHA1 string
+
+//go:embed kernel_office_sha256.cl
+var officeSrcSHA256 string
+
+//go:embed kernel_office_sha512.cl
+var officeSrcSHA512 string
+
 // Host-side limits that keep each kernel single-block per PRF message. SHA-1 and
 // SHA-256 use a 64-byte block (salt||INT fits when saltlen+4 <= 55); SHA-512
 // uses a 128-byte block (saltlen+4 <= 111). A request outside these falls back
@@ -68,14 +77,23 @@ type prf struct {
 	newHash func() hash.Hash
 }
 
+// officeKern is one Office-spin variant: a kernel object per device (parallel to
+// clAccel.queues) and the digest length that seeds/outputs carry.
+type officeKern struct {
+	kernels []C.cl_kernel
+	digest  int
+}
+
 type clAccel struct {
-	devices      []Device
-	ctx          C.cl_context
-	queues       []C.cl_command_queue // one per backing device
-	sha1         prf
-	sha256       prf
-	sha512       prf
-	optimalBatch int // autotuned per-dispatch batch size (BatchTuner)
+	devices        []Device
+	ctx            C.cl_context
+	queues         []C.cl_command_queue // one per backing device
+	sha1           prf
+	sha256         prf
+	sha512         prf
+	office         map[string]officeKern // Office iterated-hash spin, by algo
+	officePrograms []C.cl_program        // released in Close
+	optimalBatch   int                   // autotuned per-dispatch batch size (BatchTuner)
 }
 
 // Detect enumerates OpenCL devices, builds the PBKDF2 kernel, and returns a
@@ -162,6 +180,28 @@ func Detect() (Accelerator, error) {
 		}
 		*s.p = prf{program: prog, kernels: kerns, block: s.block, digest: s.digest, saltMax: s.saltMax, newHash: s.nh}
 	}
+	// Office agile/standard iterated-hash spin kernels (optional capability). The
+	// sha512 source exposes both the sha512 and sha384 entry points.
+	a.office = map[string]officeKern{}
+	officeSpecs := []struct {
+		src, name, algo string
+		digest          int
+	}{
+		{officeSrcSHA1, "office_spin_sha1", "sha1", 20},
+		{officeSrcSHA256, "office_spin_sha256", "sha256", 32},
+		{officeSrcSHA512, "office_spin_sha512", "sha512", 64},
+		{officeSrcSHA512, "office_spin_sha384", "sha384", 48},
+	}
+	for _, s := range officeSpecs {
+		prog, kerns, berr := buildKernels(ctx, devs, s.src, s.name)
+		if berr != nil {
+			a.Close()
+			return nil, berr
+		}
+		a.officePrograms = append(a.officePrograms, prog)
+		a.office[s.algo] = officeKern{kernels: kerns, digest: s.digest}
+	}
+
 	for _, d := range devs {
 		a.devices = append(a.devices, describeDevice(d))
 	}
@@ -254,6 +294,18 @@ func (a *clAccel) Close() error {
 		}
 		if p.program != nil {
 			C.clReleaseProgram(p.program)
+		}
+	}
+	for _, ok := range a.office {
+		for _, k := range ok.kernels {
+			if k != nil {
+				C.clReleaseKernel(k)
+			}
+		}
+	}
+	for _, p := range a.officePrograms {
+		if p != nil {
+			C.clReleaseProgram(p)
 		}
 	}
 	for _, q := range a.queues {
@@ -429,6 +481,114 @@ func (a *clAccel) runOne(p prf, dev int, passwords [][]byte, salt []byte, iter, 
 	return res, nil
 }
 
+// OfficeSpin runs the Office agile/standard iterated-hash spin for a batch of
+// digest-length seeds (cur0 = H(salt||UTF16LE(pw))), returning the final digest
+// per seed. algo is "sha1"|"sha256"|"sha384"|"sha512". An unknown algo, a
+// non-positive spin, or a seed of the wrong length returns ErrUnsupported so the
+// caller falls back to the CPU. It implements the OfficeHasher capability, and
+// splits a batch across devices like run.
+func (a *clAccel) OfficeSpin(seeds [][]byte, spin int, algo string) ([][]byte, error) {
+	ok, found := a.office[algo]
+	if !found || spin <= 0 {
+		return nil, ErrUnsupported
+	}
+	n := len(seeds)
+	if n == 0 {
+		return nil, nil
+	}
+	for _, s := range seeds {
+		if len(s) != ok.digest {
+			return nil, ErrUnsupported
+		}
+	}
+	nd := len(a.queues)
+	if nd <= 1 {
+		return a.runOneOffice(ok, 0, seeds, spin)
+	}
+	res := make([][]byte, n)
+	var (
+		wg       sync.WaitGroup
+		mu       sync.Mutex
+		firstErr error
+	)
+	chunk := (n + nd - 1) / nd
+	for d := 0; d < nd; d++ {
+		lo := d * chunk
+		if lo >= n {
+			break
+		}
+		hi := lo + chunk
+		if hi > n {
+			hi = n
+		}
+		wg.Add(1)
+		go func(dev, lo, hi int) {
+			defer wg.Done()
+			part, err := a.runOneOffice(ok, dev, seeds[lo:hi], spin)
+			if err != nil {
+				mu.Lock()
+				if firstErr == nil {
+					firstErr = err
+				}
+				mu.Unlock()
+				return
+			}
+			copy(res[lo:hi], part)
+		}(d, lo, hi)
+	}
+	wg.Wait()
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return res, nil
+}
+
+// runOneOffice spins a sub-batch on one device (its own queue + kernel object).
+func (a *clAccel) runOneOffice(ok officeKern, dev int, seeds [][]byte, spin int) ([][]byte, error) {
+	n := len(seeds)
+	if n == 0 {
+		return nil, nil
+	}
+	dlen := ok.digest
+	in := make([]byte, n*dlen)
+	for i, s := range seeds {
+		copy(in[i*dlen:], s)
+	}
+	out := make([]byte, n*dlen)
+
+	var errc C.cl_int
+	seedsBuf := C.clCreateBuffer(a.ctx, C.cl_mem_flags(C.CL_MEM_READ_ONLY|C.CL_MEM_COPY_HOST_PTR), C.size_t(len(in)), unsafe.Pointer(&in[0]), &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clCreateBuffer(office seeds): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(seedsBuf)
+	outBuf := C.clCreateBuffer(a.ctx, C.CL_MEM_WRITE_ONLY, C.size_t(len(out)), nil, &errc)
+	if errc != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clCreateBuffer(office out): %d", int(errc))
+	}
+	defer C.clReleaseMemObject(outBuf)
+
+	kern := ok.kernels[dev]
+	queue := a.queues[dev]
+	cSpin := C.cl_uint(spin)
+	C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(seedsBuf)), unsafe.Pointer(&seedsBuf))
+	C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cSpin)), unsafe.Pointer(&cSpin))
+	C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
+
+	global := C.size_t(n)
+	if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clEnqueueNDRangeKernel(office): %d", int(r))
+	}
+	if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(len(out)), unsafe.Pointer(&out[0]), 0, nil, nil); r != C.CL_SUCCESS {
+		return nil, fmt.Errorf("accel: clEnqueueReadBuffer(office): %d", int(r))
+	}
+	res := make([][]byte, n)
+	for i := 0; i < n; i++ {
+		res[i] = append([]byte(nil), out[i*dlen:(i+1)*dlen]...)
+	}
+	return res, nil
+}
+
 // OptimalBatch reports the autotuned per-dispatch batch size (BatchTuner). It is
 // measured once at Detect; see autotuneBatch.
 func (a *clAccel) OptimalBatch() int { return a.optimalBatch }
@@ -525,6 +685,39 @@ func GPUSelfTest() error {
 			if len(got) != 1 || !bytes.Equal(got[0], want) {
 				return fmt.Errorf("GPU self-test %s MISMATCH for pw=%q iter=%d dk=%d:\n gpu %x\n cpu %x",
 					v.name, c.pw, c.iter, c.dk, got[0], want)
+			}
+		}
+	}
+
+	// Office agile/standard iterated-hash spin: the device output must equal
+	// prim.OfficeAgileHash for every variant and a few spin counts. The CPU does
+	// the first hash (cur0 = H(salt||UTF16LE(pw))); the device does the spin.
+	oh, ok := a.(OfficeHasher)
+	if !ok {
+		return fmt.Errorf("GPU self-test: accelerator does not implement OfficeHasher")
+	}
+	officeVariants := []struct {
+		algo string
+		nh   func() hash.Hash
+	}{
+		{"sha1", sha1.New}, {"sha256", sha256.New}, {"sha384", sha512.New384}, {"sha512", sha512.New},
+	}
+	osalt := []byte("office-salt-16by")
+	opw := prim.UTF16LE([]byte("Pa55w0rd! spin"))
+	for _, v := range officeVariants {
+		for _, spin := range []int{1, 2, 50, 1000} {
+			h := v.nh()
+			h.Write(osalt)
+			h.Write(opw)
+			seed := h.Sum(nil)
+			got, err := oh.OfficeSpin([][]byte{seed}, spin, v.algo)
+			if err != nil {
+				return fmt.Errorf("GPU self-test office %s (spin %d): %w", v.algo, spin, err)
+			}
+			want := prim.OfficeAgileHash(v.nh, osalt, opw, spin)
+			if len(got) != 1 || !bytes.Equal(got[0], want) {
+				return fmt.Errorf("GPU self-test office %s MISMATCH (spin %d):\n gpu %x\n cpu %x",
+					v.algo, spin, got[0], want)
 			}
 		}
 	}

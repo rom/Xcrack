@@ -108,6 +108,34 @@ func (f *Format) Verify(ch *xcrypto.Challenge, password []byte) (bool, []byte, e
 	return true, secret, nil
 }
 
+// AccelKDF exposes the agile iterated-hash spin — the dominant cost of every
+// Office 2010+ document — so the engine can offload it to an OfficeHasher-capable
+// accelerator. The spin is a function of the password, salt and spin count
+// alone; the engine computes the first hash H(salt||UTF16LE(pw)) per candidate
+// on the CPU and offloads the loop. Finish re-runs the authoritative agile
+// verifier on the device-derived Hfinal, so a GPU result can never cause a false
+// positive. Only agile OOXML is offered — the standard (2007) scheme and any
+// unknown hash return ok=false and stay on the CPU. This makes ooxml.Format an
+// xfileformats.Accelerable.
+func (f *Format) AccelKDF(ch *xcrypto.Challenge) (xfileformats.AccelKDF, bool) {
+	info, err := infoFromChallenge(ch)
+	if err != nil {
+		return xfileformats.AccelKDF{}, false
+	}
+	salt, algo, spin, ok := info.AccelAgile()
+	if !ok {
+		return xfileformats.AccelKDF{}, false
+	}
+	return xfileformats.AccelKDF{
+		Salt:   salt,
+		Office: &xfileformats.OfficeKDF{Algo: algo, Spin: spin},
+		Finish: func(hfinal, _ []byte) bool {
+			ok, _ := info.VerifyAgileHfinal(hfinal)
+			return ok
+		},
+	}, true
+}
+
 // Decrypt implements xfileformats.Encrypted: it decrypts the EncryptedPackage
 // stream with the secret key and returns the inner OOXML (ZIP) bytes.
 func (f *Format) Decrypt(r io.ReaderAt, size int64, ch *xcrypto.Challenge, key []byte) (io.Reader, error) {

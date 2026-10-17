@@ -27,6 +27,8 @@ tables further down.
 **GPU tier (opt-in, server-only)**
 - ✅ **PBKDF2-HMAC-SHA256 and -SHA512 kernels** (RAR5-class, SQLCipher-v4-class) beyond SHA-1; PRF-selectable `AccelKDF` seam.
 - ✅ **Multi-device + batch autotune**; **vendor-aware autodetect** (NVIDIA / AMD / Intel / Apple / APU) with best-device selection and `XCRACK_GPU_DEVICE`.
+- ✅ **More formats wired to the kernels**: ODF (PBKDF2-SHA-1 + `AccelKDF.PreHash` start-key hash) and RAR5 (PBKDF2-SHA-256 password-check fold). SQLCipher deliberately CPU-only (v3/v4 profile unknown pre-crack).
+- ✅ **Office agile iterated-hash spin kernel** (SHA-1/256/384/512) — the ~100k-iteration loop that dominates every Office 2010+ document; a dedicated non-PBKDF2 kernel via the `accel.OfficeHasher` capability / `AccelKDF.Office` seam (CPU does the first hash, device does the spin, `Finish` runs the authoritative verifier). Office 2007 "standard" shares the kernel; only its `Finish` wiring remains.
 
 **Candidate pipeline & orchestration**
 - ✅ **Automatic cost-aware recovery queue** (`--cost-queue`): benchmark each file, attack weakest/fastest first.

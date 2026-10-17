@@ -115,9 +115,59 @@ RFC 7292 KDF, and EVP_BytesToKey.
 to see the rate, and the found-password cache / hints / key attacks to avoid the
 search entirely.
 
-**Which KDFs get GPU acceleration?** PBKDF2-HMAC-SHA1/256/512 today. Memory-hard
-KDFs (Argon2, scrypt) and bcrypt stay on the CPU by design. See
-[`CRACKING.md`](CRACKING.md) §4.
+**Which KDFs get GPU acceleration?** PBKDF2-HMAC-SHA1/256/512 and the Office
+agile/standard iterated-hash spin (SHA-1/256/384/512). Memory-hard KDFs (Argon2,
+scrypt) and bcrypt stay on the CPU by design. See the **GPU acceleration**
+section below and [`CRACKING.md`](CRACKING.md) §4.
+
+---
+
+## GPU acceleration
+
+**Is it on by default?** No. The default build is pure-Go and CPU-only; the GPU
+tier is a server-only, opt-in exception. Build `xcrackd` with `-tags opencl`
+(needs an OpenCL SDK + runtime and cgo) and run it with `--gpu`. The `xcrack`
+CLI and the default `xcrackd` never touch a GPU, and CI never builds the path.
+
+**What does the GPU actually do?** Only the one heavy, embarrassingly-parallel
+step — the key derivation — in bulk batches. Format parsing, recursion, and the
+authoritative verification all stay on the CPU in pure Go. The device never
+decides correctness: every GPU-derived key is re-checked by the format's normal
+verifier, so a faulty or mismatched backend can only slow a search, never cause
+a false positive or a wrong "found".
+
+**Which formats are accelerated today?**
+
+| Kernel | Formats |
+|--------|---------|
+| PBKDF2-HMAC-SHA1 | WinZip-AES, encrypted DMG, **ODF** |
+| PBKDF2-HMAC-SHA256 | **RAR5** (the 8-byte password-check derivation) |
+| PBKDF2-HMAC-SHA512 | PBKDF2-SHA512 schemes |
+| **Office iterated-hash spin** (SHA-1/256/384/512) | **Office 2010+ agile OOXML** (`.docx/.xlsx/.pptx`) — the ~100k-iteration spin that dominates every modern Office document |
+
+ODF's start-key hash and Office's first hash are done per-candidate on the CPU;
+the device runs the expensive loop. RAR5's check value is derived directly by
+the SHA-256 kernel.
+
+**Why isn't *my* format accelerated?** Three reasons a scheme stays on the CPU:
+it's **memory-hard or GPU-hostile** (Argon2 — KeePass KDBX4 / PuTTY v3; scrypt —
+Ethereum / age / PBES2; bcrypt — OpenSSH), it has an **ambiguous profile**
+(SQLCipher v3 vs v4 can't be told apart before a password verifies, and the
+offload derives one profile per candidate), or **no kernel exists yet** (Office
+97/2000 and PDF 40-bit MD5+RC4 key-search, Office 2007 "standard" `Finish`,
+KeePass AES-KDF — catalogued in [`CRACKING.md`](CRACKING.md) §4).
+
+**Multiple GPUs / which device?** The tier enumerates every OpenCL device, ranks
+them (discrete GPU > integrated GPU/APU > accelerator > CPU) across NVIDIA / AMD
+/ Intel / Apple / Mesa / pocl, and splits each batch across the available
+devices concurrently, with a startup batch-size autotune. `XCRACK_GPU_DEVICE`
+(a case-insensitive substring of a device name or vendor) forces a specific one.
+AMD GPUs and Ryzen APUs run through the OpenCL ICD.
+
+**No GPU but want the speed elsewhere?** Offload instead: `xcrack hashline` emits
+`$office$`/`$pdf$`/`$zip2$`/`$dmg$` lines for hashcat/John, and `xcrack
+export-challenge` + `--resume-from` round-trips a portable challenge to any
+external cracker.
 
 ---
 

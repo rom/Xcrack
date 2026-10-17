@@ -209,9 +209,47 @@ func parseAgile(xmlBytes []byte) (*Info, error) {
 }
 
 func (i *Info) verifyAgile(password []byte) (bool, error) {
+	hfinal := prim.OfficeAgileHash(i.ag.pwHash, i.ag.pwSalt, prim.UTF16LE(password), i.ag.spinCount)
+	return i.verifyAgileWithHfinal(hfinal)
+}
+
+// AccelAgile reports the agile iterated-hash parameters an accelerator needs to
+// run the spin — the password salt, the hash name ("sha1"/"sha256"/"sha384"/
+// "sha512"), and the spin count — and ok=false when this Info is not an
+// accelerable agile scheme (standard, an unknown hash, or a non-positive spin).
+// The salt is the one fed to the first hash, H(salt || UTF16LE(password)).
+func (i *Info) AccelAgile() (salt []byte, algo string, spin int, ok bool) {
+	if !i.agile || i.ag.spinCount <= 0 {
+		return nil, "", 0, false
+	}
+	switch i.ag.pwHash().Size() {
+	case 20:
+		algo = "sha1"
+	case 32:
+		algo = "sha256"
+	case 48:
+		algo = "sha384"
+	case 64:
+		algo = "sha512"
+	default:
+		return nil, "", 0, false
+	}
+	return i.ag.pwSalt, algo, i.ag.spinCount, true
+}
+
+// VerifyAgileHfinal is verifyAgile given the already-computed iterated hash
+// Hfinal (the OfficeAgileHash output an accelerator produces). It performs the
+// authoritative verifier check, so an accelerator-derived Hfinal yields the same
+// verdict as the CPU path and can never cause a false positive.
+func (i *Info) VerifyAgileHfinal(hfinal []byte) (bool, error) {
+	if !i.agile {
+		return false, nil
+	}
+	return i.verifyAgileWithHfinal(hfinal)
+}
+
+func (i *Info) verifyAgileWithHfinal(hfinal []byte) (bool, error) {
 	a := i.ag
-	pw := prim.UTF16LE(password)
-	hfinal := prim.OfficeAgileHash(a.pwHash, a.pwSalt, pw, a.spinCount)
 	keyVI := prim.OfficeAgileKey(a.pwHash, hfinal, blockVerifierHashInput, a.pwKeyLen)
 	keyVV := prim.OfficeAgileKey(a.pwHash, hfinal, blockVerifierHashValue, a.pwKeyLen)
 	iv := prim.OfficeAgileIV(a.pwHash, a.pwSalt, nil, a.pwBlkSz)

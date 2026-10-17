@@ -2,8 +2,12 @@ package xcrack
 
 import (
 	"context"
+	"crypto/sha1" //nolint:gosec // ODF/Office start-key hash is SHA-1 by spec
+	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"fmt"
+	"hash"
 	"io"
 	"sync"
 
@@ -11,6 +15,7 @@ import (
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/attack"
 	"github.com/rom/xcrypto/candidates"
+	"github.com/rom/xcrypto/prim"
 	"github.com/rom/xfileformats"
 )
 
@@ -765,15 +770,74 @@ func (e *engine) accelBatchSize() int {
 // HMAC variant the AccelKDF asks for. An unknown PRF returns ErrUnsupported so
 // the caller falls back to the CPU.
 func accelDerive(a Accelerator, ak *xfileformats.AccelKDF, batch [][]byte) ([][]byte, error) {
-	switch ak.PRF {
-	case "", "sha1":
-		return a.PBKDF2SHA1(batch, ak.Salt, ak.Iter, ak.DKLen)
+	// Office agile/standard iterated hash: not a PBKDF2 at all. The CPU does the
+	// one variable-length first hash cur0 = H(salt || UTF16LE(pw)) per candidate,
+	// and the device runs the fixed-size spin loop (the dominant cost).
+	if ak.Office != nil {
+		oh, ok := a.(accel.OfficeHasher)
+		if !ok {
+			return nil, accel.ErrUnsupported
+		}
+		nh := officeHashCtor(ak.Office.Algo)
+		if nh == nil {
+			return nil, accel.ErrUnsupported
+		}
+		seeds := make([][]byte, len(batch))
+		for i, pw := range batch {
+			h := nh()
+			h.Write(ak.Salt)
+			h.Write(prim.UTF16LE(pw))
+			seeds[i] = h.Sum(nil)
+		}
+		return oh.OfficeSpin(seeds, ak.Office.Spin, ak.Office.Algo)
+	}
+	// Schemes whose PBKDF2 input is a pre-hashed "start key" (ODF) ask for a
+	// per-candidate CPU hash before the kernel runs. The transform is cheap (one
+	// hash over the short password) and keeps the kernel a plain PBKDF2.
+	in := batch
+	switch ak.PreHash {
+	case "":
 	case "sha256":
-		return a.PBKDF2SHA256(batch, ak.Salt, ak.Iter, ak.DKLen)
-	case "sha512":
-		return a.PBKDF2SHA512(batch, ak.Salt, ak.Iter, ak.DKLen)
+		in = make([][]byte, len(batch))
+		for i, pw := range batch {
+			s := sha256.Sum256(pw)
+			in[i] = s[:]
+		}
+	case "sha1":
+		in = make([][]byte, len(batch))
+		for i, pw := range batch {
+			s := sha1.Sum(pw) //nolint:gosec // ODF start-key hash is SHA-1 by spec
+			in[i] = s[:]
+		}
 	default:
 		return nil, accel.ErrUnsupported
+	}
+	switch ak.PRF {
+	case "", "sha1":
+		return a.PBKDF2SHA1(in, ak.Salt, ak.Iter, ak.DKLen)
+	case "sha256":
+		return a.PBKDF2SHA256(in, ak.Salt, ak.Iter, ak.DKLen)
+	case "sha512":
+		return a.PBKDF2SHA512(in, ak.Salt, ak.Iter, ak.DKLen)
+	default:
+		return nil, accel.ErrUnsupported
+	}
+}
+
+// officeHashCtor maps an Office agile/standard hash name to its constructor, or
+// nil for an unknown algorithm (so the caller falls back to the CPU).
+func officeHashCtor(algo string) func() hash.Hash {
+	switch algo {
+	case "sha1":
+		return sha1.New
+	case "sha256":
+		return sha256.New
+	case "sha384":
+		return sha512.New384
+	case "sha512":
+		return sha512.New
+	default:
+		return nil
 	}
 }
 

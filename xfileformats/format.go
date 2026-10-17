@@ -84,6 +84,22 @@ type AccelKDF struct {
 	// (SQLCipher-v4-class). The engine dispatches to the matching batch kernel and
 	// falls back to the CPU for any value its backend cannot serve.
 	PRF string
+	// PreHash, when non-empty ("sha256" or "sha1"), tells the engine to replace
+	// each candidate with its hash digest before handing it to the PBKDF2 kernel,
+	// for schemes whose PBKDF2 input is a pre-hashed "start key" rather than the
+	// raw password (ODF). "" passes the password through unchanged. The cheap
+	// per-candidate hash is done on the CPU; Finish still receives the original
+	// password. It never affects correctness — Finish re-checks every hit.
+	PreHash string
+	// Office, when non-nil, makes this an Office agile/standard iterated-hash
+	// derivation rather than PBKDF2 (PRF/Iter/DKLen/PreHash are then ignored). The
+	// engine computes the one variable-length first hash H(Salt || UTF16LE(pw))
+	// per candidate on the CPU, offloads the spin loop — the dominant cost of
+	// every Office 2007+ document — to an OfficeHasher-capable accelerator, and
+	// hands the final digest to Finish, which derives the block key and runs the
+	// authoritative verifier. Finish re-checks every hit, so the device never
+	// decides correctness.
+	Office *OfficeKDF
 	// Salt, Iter, DKLen are the exact PBKDF2 parameters the accelerator must
 	// derive with -- byte-identical to what the CPU verifier uses (e.g. the DMG
 	// verifier's fixed 20-byte salt, not the raw stored salt).
@@ -97,6 +113,15 @@ type AccelKDF struct {
 	// concurrent use. password is supplied for schemes that need it alongside the
 	// derived key (most ignore it).
 	Finish func(dk, password []byte) bool
+}
+
+// OfficeKDF describes the Office agile/standard iterated hash for an
+// accelerator: the hash algorithm ("sha1", "sha256", "sha384" or "sha512") and
+// the spin (iteration) count. The salt is the enclosing AccelKDF.Salt. Set it on
+// an AccelKDF to route the derivation through an OfficeHasher instead of PBKDF2.
+type OfficeKDF struct {
+	Algo string
+	Spin int
 }
 
 // Accelerable is an optional capability of a whole-file Encrypted format whose

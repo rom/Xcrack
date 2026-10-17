@@ -161,7 +161,7 @@ func encryptedEntry(zf *stdzip.File, name string, p xodf.EntryParams) *xfileform
 		}
 		return io.ReadAll(io.LimitReader(rc, maxDecompressed))
 	}
-	return &xfileformats.Entry{
+	e := &xfileformats.Entry{
 		Path:      name,
 		Size:      p.UncompressedSize,
 		Encrypted: true,
@@ -192,6 +192,29 @@ func encryptedEntry(zf *stdzip.File, name string, p xodf.EntryParams) *xfileform
 			return bytes.NewReader(plain), nil
 		},
 	}
+	// Offload the dominant PBKDF2-HMAC-SHA1 spin to an accelerator when present:
+	// ODF derives the content key from PBKDF2(sha(password)), so PreHash tells the
+	// engine to hash each candidate first. Finish re-runs the authoritative CBC
+	// checksum / GCM tag check on the derived key, so the device never decides
+	// correctness.
+	if preHash, keyLen, ok := xodf.AccelStartHash(p); ok {
+		e.Accel = &xfileformats.AccelKDF{
+			PreHash: preHash,
+			PRF:     "sha1",
+			Salt:    p.Salt,
+			Iter:    p.Iterations,
+			DKLen:   keyLen,
+			Finish: func(dk, _ []byte) bool {
+				b, err := raw()
+				if err != nil {
+					return false
+				}
+				ok, _ := xodf.VerifyWithKey(dk, p, b)
+				return ok
+			},
+		}
+	}
+	return e
 }
 
 func plainEntry(zf *stdzip.File, name string) *xfileformats.Entry {

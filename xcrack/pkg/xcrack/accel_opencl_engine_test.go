@@ -13,10 +13,13 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto/candidates"
+	fooxml "github.com/rom/xfileformats/formats/ooxml"
 )
 
 // realAccel detects a device and validates the kernel, skipping the test when
@@ -73,5 +76,78 @@ func TestOpenCLDMGLive(t *testing.T) {
 			t.Fatalf("%s: GPU path got (%v,%q), want decrypted/opensesame",
 				f, res.Root.Status, res.Root.Password)
 		}
+	}
+}
+
+// TestOpenCLODFLive cracks the real LibreOffice ODF fixture through the engine
+// with the OpenCL accelerator. ODF exercises the new PreHash path: the kernel
+// runs PBKDF2-HMAC-SHA1 over SHA-256(password), not the raw password.
+func TestOpenCLODFLive(t *testing.T) {
+	acc := realAccel(t)
+	data, err := os.ReadFile("../../../xfileformats/formats/odf/testdata/libreoffice-aes256cbc.odt")
+	if err != nil {
+		t.Fatalf("read ODF fixture: %v", err)
+	}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("wrong", "nope", "opensesame"), Options{Accelerator: acc})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != "opensesame" {
+		t.Fatalf("GPU ODF path did not recover the password (node=%+v)", n)
+	}
+}
+
+// TestOpenCLRAR5Live generates a RAR5 archive with the real `rar` tool and
+// cracks it through the engine with the OpenCL accelerator doing the
+// PBKDF2-HMAC-SHA256 sweep that produces the 8-byte password-check value.
+func TestOpenCLRAR5Live(t *testing.T) {
+	acc := realAccel(t)
+	rarBin, err := exec.LookPath("rar")
+	if err != nil {
+		t.Skip("rar CLI not available")
+	}
+	dir := t.TempDir()
+	payload := filepath.Join(dir, "msg.txt")
+	if err := os.WriteFile(payload, []byte("rar5 gpu payload\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	const pw = "Midsommar2024!"
+	arc := filepath.Join(dir, "a.rar")
+	if out, err := exec.Command(rarBin, "a", "-p"+pw, "-idq", arc, payload).CombinedOutput(); err != nil {
+		t.Fatalf("rar a: %v\n%s", err, out)
+	}
+	data, err := os.ReadFile(arc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("wrong", "nope", pw), Options{Accelerator: acc})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != pw {
+		t.Fatalf("GPU RAR5 path did not recover the password (node=%+v)", n)
+	}
+}
+
+// TestOpenCLOfficeAgileLive cracks an agile OOXML (Office 2010+, SHA-512 spin)
+// document through the engine with the OpenCL accelerator running the Office
+// iterated-hash spin — the dominant cost of every modern Office document.
+func TestOpenCLOfficeAgileLive(t *testing.T) {
+	acc := realAccel(t)
+	const password = "Secret-Office-99"
+	pkg := bytes.Repeat([]byte("inner ooxml package bytes "), 64)
+	data, err := fooxml.BuildEncryptedAgile([]byte(password), pkg, 4000)
+	if err != nil {
+		t.Fatalf("build agile OOXML: %v", err)
+	}
+	res, err := Process(context.Background(), bytes.NewReader(data), int64(len(data)),
+		candidates.Explicit("wrong", "nope", password), Options{Accelerator: acc})
+	if err != nil {
+		t.Fatalf("Process: %v", err)
+	}
+	if n := findDecrypted(res.Root); n == nil || n.Password != password {
+		t.Fatalf("GPU Office-agile path did not recover the password (node=%+v)", n)
 	}
 }
