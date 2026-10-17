@@ -15,6 +15,35 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Ethereum keystore wallets** (Web3 Secret Storage v3, the `ethwallet`
+  format): scrypt / PBKDF2-HMAC-SHA256 key derivation verified by the
+  Keccak-256 MAC, detected on the keystore JSON markers. Cross-validated against
+  the two canonical geth test vectors (the pbkdf2 MAC is the verbatim published
+  value; the scrypt MAC is reproduced identically by a pycryptodome oracle and
+  the Go path).
+- **Legacy KeePass KDBX3.1** passphrase recovery in the `keepass` scheme/format
+  (AES-KDF + AES-256-CBC stream-start-bytes verifier), alongside the existing
+  KDBX4. Cross-validated against a genuine KDBX3 fixture accepted by both
+  KeePassXC 2.7.6 and pykeepass 4.2.0.
+- **Office 97/2000 RC4 40-bit key attack** (`xcrack office-keyattack FILE`): the
+  Elcomsoft "Thunder Tables" weakness — sweep the 2^40 trunc keyspace against the
+  document verifier to recover the key regardless of password length/complexity
+  (shardable with `--shard i/N`, parallel across cores, resumable). Office
+  XP/2003 CryptoAPI RC4 is correctly excluded (160-bit intermediate). The
+  `xcrypto/scheme/officebinary` verifier/searcher is cross-validated against the
+  msoffcrypto-tool reference vector.
+- **GPU PBKDF2-HMAC-SHA256 and -SHA512 kernels** in the opt-in OpenCL tier
+  (RAR5-class and SQLCipher-v4-class), beyond the existing SHA-1. The
+  `xfileformats.AccelKDF` seam gained a PRF selector and the engine dispatches to
+  the matching kernel. Every variant is validated byte-for-byte against the Go
+  reference at startup.
+- **Multi-device OpenCL + batch-size autotune**: the GPU tier now builds a queue
+  and kernel per device and splits a batch across devices concurrently, and
+  autotunes the per-dispatch batch size (exposed via `accel.BatchTuner`, used by
+  the engine; `Options.AccelBatch` overrides).
+- **Automatic cost-aware recovery queue** (`--cost-queue`, config
+  `search.cost_queue`): benchmark each input file's verify rate and attack the
+  fastest/weakest schemes first across a pile of files.
 - **Inspection / estimation modes** on the crack command (no cracking):
   `--stdout` prints the assembled candidate stream (hashcat `--stdout`);
   `--keyspace` prints the candidate keyspace size; `--benchmark`/`-b` measures
