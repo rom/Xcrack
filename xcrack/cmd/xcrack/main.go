@@ -40,6 +40,8 @@ func run(args []string) int {
 			return runHashline(args[1:])
 		case "export-challenge":
 			return runExportChallenge(args[1:])
+		case "office-keyattack":
+			return runOfficeKeyAttack(args[1:])
 		case "help", "-h", "--help":
 			usage()
 			return 0
@@ -905,6 +907,8 @@ USAGE:
   xcrack hashline [sources...]     emit $office$/$pdf$/... lines for hashcat/John
   xcrack export-challenge [srcs]   emit the portable JSON challenge envelope(s)
                                    for an external cracker (import with --resume-from)
+  xcrack office-keyattack FILE     direct 40-bit key attack on Office 97/2000 RC4
+                                   (recovers the key, not the password; --shard i/N)
   xcrack version
 
 COMMON FLAGS:
