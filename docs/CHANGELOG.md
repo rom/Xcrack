@@ -14,6 +14,13 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
+### Changed
+- **Embedded dictionaries moved to `xcrypto/candidates/dictionaries/`.** The
+  shipped Swedish wordlist is now `dictionaries/swedish.txt` (embed path and the
+  `gen_swedish.go` regenerate command updated); the new directory has a README
+  and is the home for future embedded, locale-specific lists. No behaviour
+  change — `--swedish` works exactly as before.
+
 ### Added
 - **GPU kernel: VBA project salted-SHA-1 batch.** The MS VBA project-protection
   verifier — `PasswordHash = SHA1(password‖salt)` with a 4-byte salt, hashcat's
@@ -147,6 +154,28 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   the header-encrypted `hdr.7z`/`hdr.rar`).
 
 ### Docs
+- **New [`USERMANUAL.md`](USERMANUAL.md)** — a task-oriented user manual:
+  introduction, how to use the tool, GPU acceleration, distributed environments,
+  advanced usage, and debugging/troubleshooting. Linked as the start-here doc in
+  both doc indexes.
+- **New [`docs/Makefile`](Makefile)** — builds a combined printable PDF
+  (`Xcrack-Manual.pdf`) and per-doc PDFs from the Markdown via pandoc + a PDF
+  engine (`make check` reports tool availability; graceful error if absent).
+- **TERMINOLOGY.md**: every table reordered strictly A–Z, and substantially
+  expanded with more terms, abbreviations and TLAs across all sections (engine,
+  KDFs, ciphers/modes, formats, attacks, acceleration, and the abbreviation
+  index).
+- **roadmap-enhancements.md**: folded in the 2026-10 competitor analysis
+  (hashcat / John / Passware / Elcomsoft) and detailed the remaining format
+  work — Java key stores (BKS/JCEKS), regional/legacy docs (HWP/HWPX,
+  WordPerfect, Lotus 1-2-3), Apple images (`.sparseimage`/`.sparsebundle`,
+  iOS/iTunes keybag), installers & disk images (MSI/CAB/NSIS/ISO/UDF/VHD(X)/IMG,
+  with the note that all image/container parsers live in `xfileformats`), and
+  more codecs (brotli/LZH/ARJ/ACE/SecureZIP, cpio, ar). Added items for
+  precomputed Thunder Tables / rainbow tables for the 40-bit Office/PDF sweeps,
+  a dual CPU+GPU parallel-pipeline (per-file race), broadening the GPU tier, and
+  the net-new competitor gaps (key-from-memory/recovery-key decryption, a
+  forensic GUI/reporting layer, managed cloud-burst/agent orchestration).
 - **New [`PERFORMANCE.md`](PERFORMANCE.md)** — per-format KDF cost model, measured
   single-box CPU verify rates (`xcrack --benchmark` on a 4-core Xeon), attack-method
   effort, the 40-bit key-sweep rate, and CPU / distributed / GPU scaling.

@@ -162,7 +162,8 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 
 ## Documentation
 
-- **[Usage](docs/USAGE.md)** — commands, flags, config, patterns, library, service — with many examples and end-to-end use cases.
+- **[User Manual](docs/USERMANUAL.md)** — task-oriented guide: intro, basic use, GPU acceleration, distributed environments, advanced usage, troubleshooting. Start here.
+- **[Usage](docs/USAGE.md)** — the exhaustive reference: commands, flags, config, patterns, library, service — with many examples and end-to-end use cases.
 - **[How Xcrack attacks each format](docs/CRACKING.md)** — per-format KDF/cipher/verifier, the attack used, and the verification shortcuts & cryptanalysis exploited (ZipCrypto key recovery, Office/PDF 40-bit key attacks, Access Jet header XOR).
 - **[File formats & variants](docs/FILEFORMATS.md)** — every supported format, its variants, detection, verifier/KDF/cipher, and cross-validation oracle.
 - **[FAQ](docs/FAQ.md)** — quick answers on formats, orchestration, methods, KDFs, ciphers, shortcuts, candidate ordering, cryptanalysis, output, config and CLI options (topic-indexed).
