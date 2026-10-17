@@ -137,6 +137,7 @@ func runCrack(args []string) int {
 	clusterBatch := fs_.Int("cluster-batch", 0, "candidates shipped per server request in distributed mode (0=20000)")
 	clusterDefaults := fs_.Bool("cluster-allow-defaults", false, "in distributed mode, let each server also try its own default list")
 	clusterPerReq := fs_.String("cluster-per-request", "", "per-request server deadline hint in distributed mode (e.g. 30s)")
+	clusterSession := fs_.String("cluster-session", "", "persist/resume distributed progress to FILE: an interrupted run skips the candidates already confirmed tried per file (cross-worker dedup across runs)")
 
 	progressF := fs_.Bool("progress", false, "print live progress (files/candidates/rate/ETA) to stderr")
 	stdoutF := fs_.Bool("stdout", false, "don't crack: print the candidate stream (wordlists + rules + masks + generators) to stdout and exit")
@@ -674,7 +675,7 @@ func runCrack(args []string) int {
 		fmt.Fprintf(os.Stderr, "xcrack: %v\n", derr)
 		return 2
 	} else if distributed {
-		return runDistributed(files, servers, copts, buildCandidates, pot)
+		return runDistributed(files, servers, copts, buildCandidates, pot, *clusterSession)
 	}
 
 	// Full-run session resume: skip files already fully searched in a prior run
@@ -1085,6 +1086,7 @@ COMMON FLAGS:
       --server URL[@GROUP]       distribute to an xcrackd server (repeatable; many servers crack in parallel)
       --cluster-mode MODE        collective (share one file) | partition (groups take different files)
       --cluster-batch N  --cluster-allow-defaults  --cluster-per-request D
+      --cluster-session FILE     resume a distributed run; skip candidates already tried across the fleet
       --adaptive                 corpus-wide promotion: reuse found passwords across files, smallest first
       --cost-queue               triage many files weakest/fastest-attack-first (benchmark, then attack cheap schemes first)
       --spray                    curated spray set (common + season/year), tried early

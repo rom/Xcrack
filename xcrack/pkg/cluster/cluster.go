@@ -63,6 +63,12 @@ type Options struct {
 	MaxCandidates int64         // stop after shipping this many per file (0 => until exhausted/found)
 	Client        *http.Client  // nil => a default client
 	OnProgress    func(Progress)
+	// ResumeOffsets maps a FileJob.Path to the number of candidates a prior run
+	// confirmed tried; collective mode skips that prefix of the (deterministic)
+	// candidate stream, so an interrupted distributed run resumes without
+	// re-trying work. Safe because only the contiguous completed prefix is ever
+	// recorded (see Progress.Tried).
+	ResumeOffsets map[string]int64
 }
 
 // Progress is reported as batches complete.
@@ -218,28 +224,46 @@ func crackCollective(parent context.Context, servers []Server, job FileJob, opts
 		res.Err = err
 		return res
 	}
+	// Resume: skip the candidates a prior run already confirmed tried for this
+	// file (ResumeOffsets[path]). The source is deterministic across runs (same
+	// config), so skipping a prefix never drops an untried candidate.
+	baseSkip := int64(0)
+	if opts.ResumeOffsets != nil {
+		if n := opts.ResumeOffsets[job.Path]; n > 0 {
+			for baseSkip < n {
+				if _, err := src.Next(); err != nil {
+					break
+				}
+				baseSkip++
+			}
+		}
+	}
 
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	var (
-		mu       sync.Mutex
-		shipped  int64
-		feedDone bool
-		batches  int64
+		mu        sync.Mutex
+		shipped   int64
+		feedDone  bool
+		batches   int64
+		nextSeq   int64
+		lowWater  int64             // smallest seq not yet confirmed complete
+		confirmed int64             // candidates in the contiguous completed prefix
+		doneLen   = map[int64]int{} // seq -> candidate count, for seqs completed out of order
 	)
-	// nextBatch pulls up to batchSize candidates from the shared source. It
-	// serializes source access (sources are not concurrency-safe) and enforces
-	// the optional per-file candidate cap.
-	nextBatch := func() [][]byte {
+	// nextBatch pulls up to batchSize candidates from the shared source, serializing
+	// source access, and tags the batch with a monotonic sequence number so
+	// completions can be tracked in order. It enforces the optional per-file cap.
+	nextBatch := func() ([][]byte, int64) {
 		mu.Lock()
 		defer mu.Unlock()
 		if feedDone {
-			return nil
+			return nil, 0
 		}
 		if opts.MaxCandidates > 0 && shipped >= opts.MaxCandidates {
 			feedDone = true
-			return nil
+			return nil, 0
 		}
 		n := opts.batchSize()
 		if opts.MaxCandidates > 0 {
@@ -257,7 +281,28 @@ func crackCollective(parent context.Context, servers []Server, job FileJob, opts
 			batch = append(batch, append([]byte(nil), pw...))
 		}
 		shipped += int64(len(batch))
-		return batch
+		seq := nextSeq
+		nextSeq++
+		return batch, seq
+	}
+	// complete records that batch seq finished and advances the contiguous
+	// confirmed prefix (lowWater). confirmed counts only candidates whose batch —
+	// and every earlier batch — has returned, so baseSkip+confirmed is a safe
+	// resume offset even though batches finish out of order.
+	complete := func(seq int64, n int) int64 {
+		mu.Lock()
+		defer mu.Unlock()
+		doneLen[seq] = n
+		for {
+			ln, ok := doneLen[lowWater]
+			if !ok {
+				break
+			}
+			confirmed += int64(ln)
+			delete(doneLen, lowWater)
+			lowWater++
+		}
+		return baseSkip + confirmed
 	}
 
 	var (
@@ -277,20 +322,23 @@ func crackCollective(parent context.Context, servers []Server, job FileJob, opts
 				if ctx.Err() != nil {
 					return
 				}
-				batch := nextBatch()
+				batch, seq := nextBatch()
 				if len(batch) == 0 {
 					return
 				}
 				rep, err := postBatch(ctx, opts, srv, job.Data, batch)
 				bn := atomicAdd(&mu, &batches, 1)
-				if opts.OnProgress != nil {
-					opts.OnProgress(Progress{Path: job.Path, Server: srv.URL, Batches: bn, Tried: loadShipped(&mu, &shipped)})
-				}
 				if err != nil {
 					if ctx.Err() == nil { // not just our own cancellation
 						errOnce.Do(func() { firstErr = fmt.Errorf("%s: %w", srv.URL, err) })
 					}
 					return
+				}
+				// Batch completed: advance the confirmed prefix and report it as Tried,
+				// so a --cluster-session can persist a safe resume offset.
+				tried := complete(seq, len(batch))
+				if opts.OnProgress != nil {
+					opts.OnProgress(Progress{Path: job.Path, Server: srv.URL, Batches: bn, Tried: tried})
 				}
 				if pw, ok := passwordFromReport(rep); ok {
 					once.Do(func() {

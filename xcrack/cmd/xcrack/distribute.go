@@ -2,15 +2,77 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rom/xcrack/pkg/cluster"
 	"github.com/rom/xcrypto/candidates"
 )
+
+// clusterSession persists, per file, the number of candidates a distributed run
+// has confirmed tried (the contiguous completed prefix reported as
+// Progress.Tried), so an interrupted fleet run resumes without re-trying that
+// work. Writes are throttled; the final state is flushed at the end.
+type clusterSession struct {
+	path string
+	mu   sync.Mutex
+	done map[string]int64
+	last time.Time
+}
+
+func loadClusterSession(path string) *clusterSession {
+	s := &clusterSession{path: path, done: map[string]int64{}}
+	if data, err := os.ReadFile(path); err == nil {
+		_ = json.Unmarshal(data, &s.done)
+	}
+	return s
+}
+
+// offsets returns a copy of the recorded per-file tried counts for ResumeOffsets.
+func (s *clusterSession) offsets() map[string]int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make(map[string]int64, len(s.done))
+	for k, v := range s.done {
+		out[k] = v
+	}
+	return out
+}
+
+// record keeps the maximum tried count per file and persists at most every ~2s.
+func (s *clusterSession) record(path string, tried int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if tried > s.done[path] {
+		s.done[path] = tried
+	}
+	if time.Since(s.last) > 2*time.Second {
+		s.persistLocked()
+		s.last = time.Now()
+	}
+}
+
+func (s *clusterSession) flush() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.persistLocked()
+}
+
+func (s *clusterSession) persistLocked() {
+	data, err := json.MarshalIndent(s.done, "", "  ")
+	if err != nil {
+		return
+	}
+	tmp := s.path + ".tmp"
+	if os.WriteFile(tmp, data, 0o600) == nil {
+		_ = os.Rename(tmp, s.path)
+	}
+}
 
 // parseServerSpec parses a --server value of the form "URL" or "URL@GROUP".
 func parseServerSpec(spec string) cluster.Server {
@@ -85,7 +147,7 @@ func buildCluster(serverFlags []string, mode string, batch int, allowDefaults bo
 // runDistributed cracks every file by fanning candidate batches out to the
 // configured xcrackd fleet, then renders the per-file outcome. It returns the
 // process exit code (0 any decrypted, 1 all locked, 2 on error).
-func runDistributed(files []string, servers []cluster.Server, opts cluster.Options, build func(path string) candidates.Source, pot *potfile) int {
+func runDistributed(files []string, servers []cluster.Server, opts cluster.Options, build func(path string) candidates.Source, pot *potfile, sessionPath string) int {
 	jobs := make([]cluster.FileJob, 0, len(files))
 	ok := true
 	for _, path := range files {
@@ -108,9 +170,22 @@ func runDistributed(files []string, servers []cluster.Server, opts cluster.Optio
 		return 2
 	}
 
+	// Distributed resume: seed ResumeOffsets from a prior run's persisted progress
+	// and keep persisting the confirmed-tried offset per file, so an interrupted
+	// fleet run skips the candidates already covered (cross-run dedup).
+	var csess *clusterSession
+	if sessionPath != "" {
+		csess = loadClusterSession(sessionPath)
+		opts.ResumeOffsets = csess.offsets()
+		opts.OnProgress = func(pr cluster.Progress) { csess.record(pr.Path, pr.Tried) }
+	}
+
 	fmt.Fprintf(os.Stderr, "xcrack: distributing %d file(s) across %d server(s) [%s]\n",
 		len(jobs), len(servers), modeName(opts.Mode))
 	results := cluster.Run(context.Background(), servers, jobs, opts)
+	if csess != nil {
+		csess.flush()
+	}
 
 	anyDecrypted, anyLocked := false, false
 	for _, r := range results {
