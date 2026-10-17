@@ -15,6 +15,23 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Syslog + structured audit logging (CLI and `xcrackd`).** A new
+  `pkg/auditlog` package builds one `log/slog`-backed logger for both tools with
+  `--log-level`, `--log-format text|json`, an optional `--log-file`, and a
+  `--syslog` backend (`--syslog-address`/`--syslog-network` for a remote sink,
+  `--syslog-tag`), so the whole run — the engine's diagnostics and the audit
+  trail — can be followed in one place. Every processed source emits an audit
+  record; a successful recovery is logged at info as **"file cracked"** with the
+  **filename, file type, time-to-crack** and cracked entries, and a per-node
+  debug trace lets the full execution be followed at `--log-level debug`. The
+  **recovered password is logged only with `--audit-log-password`** (off by
+  default, so the trail stays secrets-free). The engine gained a per-node
+  `Node.CrackDuration` (per-node time-to-crack), an opt-in
+  `Options.AuditIncludeSecrets`, and `Node.AuditEvent`; `xcrackd` serves the
+  same trail per request (client, endpoint, bytes, elapsed) via the new
+  `api.Config.Audit` hook. The syslog backend is Unix-only (guarded by build
+  tags; `--syslog` is a clean error elsewhere) and the default build stays
+  pure-Go (ADR 0001).
 - **GPU-accelerated Thunder-Table generation.** `xcrack thunder-gen --gpu`
   offloads the rainbow-chain walk — the heavy one-time cost of building the PDF
   V1/R2 TMTO — to an OpenCL device via the new `pdf_thunderchain` kernel (one

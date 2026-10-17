@@ -340,10 +340,43 @@ the CPU — results are identical, only slower. Confirm you built with
 `-tags opencl` and have an OpenCL runtime; use `XCRACK_GPU_DEVICE` to pick a
 device.
 
-### Logging
+### Logging and the audit trail
 
-`--log-level debug|info|warn|error` controls the structured log (never emits a
-password or plaintext). `--log-format text|json`.
+Both `xcrack` and `xcrackd` write one structured, audit-grade log. It records
+what was processed and, for every successful recovery, a **"file cracked"** entry
+carrying the **filename, file type and time-to-crack** — so a run can be audited
+and followed end to end.
+
+| Flag | Meaning |
+|------|---------|
+| `--log-level debug\|info\|warn\|error` | verbosity. Crack successes are logged at **info** (shown by default); the per-node execution trace is at **debug**. |
+| `--log-format text\|json` | human-readable `key=value` (default) or one JSON object per line for a log pipeline. |
+| `--log-file PATH` | append the log + audit trail to a file instead of stderr. |
+| `--syslog` | send the log + audit trail to the system logger (Unix). |
+| `--syslog-address host:port` / `--syslog-network udp\|tcp` | ship to a remote syslog sink; omit both for the local socket. |
+| `--syslog-tag NAME` | syslog tag/ident (default: the program name). |
+| `--audit-log-password` | **also record the recovered password** in the crack entry. Off by default, so the trail never persists a cleartext secret unless you ask. |
+
+A crack entry looks like this (text; `--audit-log-password` adds `passwords=[…]`):
+
+```
+level=INFO msg="file cracked" file=invoice.zip type=zip encrypted=true \
+  cracked=true time_to_crack=4.2s cracked_entries="[invoice.zip!/secret.xlsx]"
+```
+
+Ship it to syslog and tail it as the audit record of a recovery run:
+
+```sh
+xcrack --syslog --syslog-tag xcrack --log-format json -s invoice.zip -w rockyou.txt
+# central host:
+xcrack --syslog --syslog-network udp --syslog-address logs.example.net:514 -s *.pdf -w words.txt
+```
+
+`xcrackd` takes the same flags and, in addition, tags every record with the
+client address and endpoint and emits a per-request "request served" summary
+(bytes, elapsed), so the server keeps a complete audit trail of who asked for
+what. These settings also live under `output:` in a config file (see
+[`config/README.md`](../config/README.md)).
 
 ### Exit codes
 

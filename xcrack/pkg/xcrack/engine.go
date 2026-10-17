@@ -122,11 +122,15 @@ type Options struct {
 
 	OnProgress func(Progress)
 	OnFound    func(Found)
-	// OnAudit, if set, is called once per result node after a Process call with a
-	// secrets-free AuditEvent (for an audit log or trace). It never receives a
-	// password or content.
+	// OnAudit, if set, is called once per result node after a Process call with an
+	// AuditEvent (for an audit log or trace). It carries no content and — unless
+	// AuditIncludeSecrets is set — no password, so the default is safe to persist.
 	OnAudit func(AuditEvent)
-	Logger  Logger
+	// AuditIncludeSecrets, when true, lets the AuditEvent handed to OnAudit carry
+	// the recovered password (AuditEvent.Password). It is opt-in: the zero value
+	// keeps audit events secrets-free. It has no effect when OnAudit is nil.
+	AuditIncludeSecrets bool
+	Logger              Logger
 
 	// CandidateProvider, when set, supplies candidates tried ahead of the
 	// per-call source on every Process call (a pluggable live provider). nil
@@ -360,11 +364,7 @@ func (p *Pool) Process(ctx context.Context, src io.ReaderAt, size int64, candida
 	p.metrics.record(res, stats.Elapsed)
 	if p.opts.OnAudit != nil && root != nil {
 		root.Walk(func(n *Node) {
-			ev := AuditEvent{Path: n.Path, Format: n.Format, Status: n.Status.String(), Encrypted: n.WasEncrypted}
-			if n.Content != nil {
-				ev.Size = n.Content.Size()
-			}
-			p.opts.OnAudit(ev)
+			p.opts.OnAudit(n.AuditEvent(p.opts.AuditIncludeSecrets))
 		})
 	}
 	return res, nil

@@ -10,6 +10,7 @@ import (
 	"hash"
 	"io"
 	"sync"
+	"time"
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrypto"
@@ -135,7 +136,9 @@ func (e *engine) decompose(ctx context.Context, path string, src *source, depth 
 				}
 			}
 		}
+		crackStart := time.Now()
 		pw, found := e.searchTarget(ctx, path, verify, depth, prom, acc, base, ctxText, ch.Hint, ak)
+		n.CrackDuration = time.Since(crackStart)
 		if !found {
 			n.WasEncrypted = true
 			n.Status = StatusLocked
@@ -241,9 +244,11 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		if verify == nil {
 			return e.errNode(childPath, fmt.Errorf("%w: entry has no verifier", xfileformats.ErrUnsupported), acc)
 		}
+		crackStart := time.Now()
 		pw, found := e.searchTarget(ctx, childPath, verify, depth, prom, acc, base, ctxText, hintOf(entry.Challenge), entry.Accel)
+		entryDur := time.Since(crackStart)
 		if !found {
-			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked}
+			n := &Node{Path: childPath, WasEncrypted: true, Status: StatusLocked, CrackDuration: entryDur}
 			if !acc.addNode() {
 				n.Status = StatusLimitExceeded
 				acc.limitHit()
@@ -262,6 +267,9 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 		child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 		child.WasEncrypted = true
 		child.Password = pw
+		// The time to open this entry includes any inner whole-file crack already
+		// recorded by decompose on the decrypted payload.
+		child.CrackDuration += entryDur
 		if child.Status == StatusPlain {
 			child.Status = StatusDecrypted
 		}
@@ -285,7 +293,9 @@ func (e *engine) processEntry(ctx context.Context, childPath string, entry *xfil
 // falls back to the password search. The key-recovery closure re-validates its
 // result, so a wrong `known` cannot yield a false positive.
 func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, entry *xfileformats.Entry, known []byte, offload any, depth int, ancestors [][32]byte, prom *promoter, acc *accounting, base CandidateSource, ctxText []byte) (*Node, bool) {
+	crackStart := time.Now()
 	r, ok, err := entry.KeyRecover(ctx, known, offload)
+	recoverDur := time.Since(crackStart)
 	if err != nil || !ok {
 		return nil, false
 	}
@@ -299,6 +309,7 @@ func (e *engine) recoverWithPlaintext(ctx context.Context, childPath string, ent
 	child := e.decompose(ctx, childPath, childSrc, depth, ancestors, prom, acc, base, ctxText)
 	child.WasEncrypted = true
 	child.KeyRecovered = true
+	child.CrackDuration += recoverDur
 	if child.Status == StatusPlain {
 		child.Status = StatusDecrypted
 	}

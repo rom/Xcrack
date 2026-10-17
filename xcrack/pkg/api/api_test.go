@@ -28,6 +28,55 @@ func encryptedDoc(t *testing.T) []byte {
 	return b
 }
 
+func TestAuditHookCalledOnDecrypt(t *testing.T) {
+	data := encryptedDoc(t)
+
+	type call struct {
+		meta AuditMeta
+		res  *xcrack.Result
+	}
+	var calls []call
+	cfg := Config{Audit: func(res *xcrack.Result, meta AuditMeta) {
+		calls = append(calls, call{meta: meta, res: res})
+	}}
+	ts := newTestServer(cfg)
+	defer ts.Close()
+
+	resp, err := http.Post(ts.URL+"/v1/decrypt?password=Password1234_",
+		"application/octet-stream", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	if len(calls) != 1 {
+		t.Fatalf("audit hook called %d times, want 1", len(calls))
+	}
+	c := calls[0]
+	if c.meta.Endpoint != "/v1/decrypt" {
+		t.Errorf("endpoint = %q, want /v1/decrypt", c.meta.Endpoint)
+	}
+	if c.meta.Bytes != len(data) {
+		t.Errorf("bytes = %d, want %d", c.meta.Bytes, len(data))
+	}
+	if c.meta.RemoteAddr == "" {
+		t.Error("remote addr not populated")
+	}
+	// The result tree carries the cracked node and its per-node timing.
+	cracked := false
+	c.res.Root.Walk(func(n *xcrack.Node) {
+		if n.WasEncrypted && n.Status == xcrack.StatusDecrypted {
+			cracked = true
+		}
+	})
+	if !cracked {
+		t.Error("audit result tree has no decrypted node")
+	}
+}
+
 func TestHealth(t *testing.T) {
 	ts := newTestServer(Config{})
 	defer ts.Close()

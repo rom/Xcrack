@@ -127,14 +127,21 @@ func (m Metrics) WritePrometheus(w io.Writer) (int, error) {
 }
 
 // AuditEvent describes one node for observability/audit purposes. It carries no
-// password and no content — only what was seen and what happened — so it is safe
-// to emit to an audit log or a trace.
+// content, and no password unless the caller opted in (Options.AuditIncludeSecrets
+// / Node.AuditEvent(true)) — only what was seen and what happened — so by default
+// it is safe to emit to an audit log or a trace.
 type AuditEvent struct {
-	Path      string // lineage, e.g. "invoice.zip!/report.docx"
-	Format    string // detected format name
-	Status    string // "plain" | "decrypted" | "locked" | "limit-exceeded" | "error"
-	Encrypted bool   // whether this node required a password
-	Size      int64  // content size, or 0
+	Path         string        // lineage, e.g. "invoice.zip!/report.docx"
+	Format       string        // detected format name (the "file type")
+	Status       string        // "plain" | "decrypted" | "locked" | "limit-exceeded" | "error"
+	Encrypted    bool          // whether this node required a password
+	Size         int64         // content size, or 0
+	TimeToCrack  time.Duration // wall-clock search time for this node (0 if not searched)
+	KeyRecovered bool          // unlocked by known-plaintext key recovery (no password)
+	// Password is the recovered password. It is populated ONLY when the caller
+	// opted in (Options.AuditIncludeSecrets or Node.AuditEvent(true)); otherwise it
+	// is always empty, even for a decrypted node.
+	Password string
 }
 
 // CandidateProvider supplies candidates for a Process call. It lets an embedder

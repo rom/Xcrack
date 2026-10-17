@@ -111,6 +111,13 @@ environment variables override the config.
 | `format` | string | `text` \| `json` \| `jsonl` |
 | `results_file` | string | append a JSON result manifest here |
 | `log_level` | string | `debug` \| `info` \| `warn` \| `error` |
+| `log_format` | string | log + audit trail format: `text` (default) \| `json` |
+| `log_file` | string | append the structured log + audit trail to this file (default: stderr) |
+| `syslog` | bool | send the log + audit trail to the system logger instead of stderr/file |
+| `syslog_address` | string | remote syslog `host:port` (with `syslog`; empty = local socket) |
+| `syslog_network` | string | remote syslog transport `udp` \| `tcp` (with `syslog_address`) |
+| `syslog_tag` | string | syslog tag/ident (with `syslog`; default: program name) |
+| `audit_log_password` | bool | include the recovered password in the "file cracked" audit entry (default off: the trail stays secrets-free) |
 | `extract_suffix` | string | per-source extracted-tree directory suffix under `--out` (default `.extracted`; single path segment, no `/` or `..`) |
 
 ### `budget:`

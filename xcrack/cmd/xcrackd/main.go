@@ -2,16 +2,22 @@
 //
 // It is intended to run on a hardened backend host (optionally fronting a
 // GPU/OpenCL cracking tier) and be called by clients such as an Impex kiosk or
-// an Impex DataLock appliance. The service ships no authentication or TLS; run
-// it behind a reverse proxy / mesh that provides authn/z and transport security,
-// and never expose it directly to untrusted networks.
+// an Impex DataLock appliance. The service ships no authentication; run it
+// behind a reverse proxy / mesh that provides authn/z, and never expose it
+// directly to untrusted networks.
+//
+// Logging is an audit trail: every request that completes emits a structured
+// record (client address, endpoint, bytes, elapsed) and, for each file that was
+// successfully cracked, an entry with the filename, file type and time-to-crack.
+// The record can go to stderr, a file, or the system logger (--syslog), in text
+// or JSON. The recovered password is logged only with --audit-log-password.
 package main
 
 import (
 	"context"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,10 +26,15 @@ import (
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrack/pkg/api"
+	"github.com/rom/xcrack/pkg/auditlog"
 	"github.com/rom/xcrack/pkg/xcrack"
 )
 
 func main() {
+	os.Exit(run())
+}
+
+func run() int {
 	var (
 		addr          = flag.String("addr", ":8080", "listen address")
 		workers       = flag.Int("workers", 0, "candidate-test goroutines per file (0=NumCPU)")
@@ -37,17 +48,43 @@ func main() {
 		shutdownGrace = flag.Duration("shutdown-grace", 20*time.Second, "graceful shutdown grace period")
 		gpu           = flag.Bool("gpu", false, "enable the optional OpenCL GPU acceleration tier (requires a binary built with -tags opencl on a host with OpenCL hardware; the default build is pure-Go)")
 		gpuSelfTest   = flag.Bool("gpu-selftest", false, "validate the OpenCL PBKDF2 kernel against the CPU reference and exit (requires -tags opencl)")
+
+		logLevel      = flag.String("log-level", "info", "log level: debug|info|warn|error")
+		logFormat     = flag.String("log-format", "text", "log/audit output format: text|json")
+		logFile       = flag.String("log-file", "", "append the structured log + audit trail to this file (default: stderr)")
+		syslogF       = flag.Bool("syslog", false, "send the log + audit trail to the system logger (syslog) instead of stderr")
+		syslogAddr    = flag.String("syslog-address", "", "remote syslog host:port (with --syslog; empty uses the local syslog socket)")
+		syslogNet     = flag.String("syslog-network", "", "remote syslog transport udp|tcp (with --syslog-address)")
+		syslogTag     = flag.String("syslog-tag", "xcrackd", "syslog tag/ident (with --syslog)")
+		auditPassword = flag.Bool("audit-log-password", false, "include the recovered password in the audit log entry for a cracked file (off by default so the trail stays secrets-free)")
 	)
 	flag.Parse()
+
+	logger, logCloser, err := auditlog.New(auditlog.Config{
+		Level:          *logLevel,
+		Format:         *logFormat,
+		File:           *logFile,
+		Syslog:         *syslogF,
+		SyslogNetwork:  *syslogNet,
+		SyslogAddress:  *syslogAddr,
+		SyslogTag:      *syslogTag,
+		IncludeSecrets: *auditPassword,
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrackd: logging: %v\n", err)
+		return 1
+	}
+	defer logCloser.Close()
 
 	// GPU self-test: prove the OpenCL kernel is byte-for-byte correct on this
 	// host, then exit. Useful before enabling --gpu in production.
 	if *gpuSelfTest {
 		if err := accel.GPUSelfTest(); err != nil {
-			log.Fatalf("GPU self-test FAILED: %v", err)
+			logger.Error("GPU self-test FAILED", "err", err)
+			return 1
 		}
-		log.Printf("GPU self-test PASSED: OpenCL PBKDF2-HMAC-SHA1 matches the CPU reference")
-		return
+		logger.Info("GPU self-test PASSED: OpenCL PBKDF2-HMAC-SHA1 matches the CPU reference")
+		return 0
 	}
 
 	// Optional GPU tier. It is opt-in and hardware-gated: without an -tags opencl
@@ -59,11 +96,11 @@ func main() {
 	var gpuAcc accel.Accelerator
 	if *gpu {
 		if !accel.Built() {
-			log.Printf("--gpu requested but this binary is pure-Go; rebuild with -tags opencl. Continuing on CPU.")
+			logger.Warn("--gpu requested but this binary is pure-Go; rebuild with -tags opencl. Continuing on CPU.")
 		} else if acc, err := accel.Detect(); err != nil {
-			log.Printf("--gpu requested but no usable OpenCL device: %v. Continuing on CPU.", err)
+			logger.Warn("--gpu requested but no usable OpenCL device; continuing on CPU", "err", err)
 		} else if err := accel.GPUSelfTest(); err != nil {
-			log.Printf("GPU self-test failed (%v); not using the GPU tier. Continuing on CPU.", err)
+			logger.Warn("GPU self-test failed; not using the GPU tier, continuing on CPU", "err", err)
 			acc.Close()
 		} else {
 			gpuAcc = acc
@@ -73,13 +110,15 @@ func main() {
 				if d.UnifiedMem && d.Type == "GPU" {
 					kind = "GPU/APU"
 				}
-				log.Printf("GPU tier: [%s] %s %s (%s, %d compute units)", accel.VendorArch(d.Vendor), d.Vendor, d.Name, kind, d.ComputeUnits)
+				logger.Info("GPU tier device",
+					"arch", accel.VendorArch(d.Vendor), "vendor", d.Vendor, "name", d.Name,
+					"kind", kind, "compute_units", d.ComputeUnits)
 			}
 			msg := fmt.Sprintf("GPU tier: PBKDF2-HMAC-SHA1/SHA256/SHA512 kernels validated and active across %d device(s)", len(acc.Devices()))
 			if bt, ok := acc.(accel.BatchTuner); ok {
 				msg += fmt.Sprintf("; autotuned batch %d", bt.OptimalBatch())
 			}
-			log.Print(msg)
+			logger.Info(msg)
 		}
 	}
 
@@ -88,6 +127,7 @@ func main() {
 		MaxProcs:        *maxProcs,
 		FileConcurrency: *fileJobs,
 		Accelerator:     gpuAcc,
+		Logger:          auditlog.Printf(logger),
 	})
 	defer pool.Close()
 
@@ -95,6 +135,22 @@ func main() {
 		MaxBodyBytes:     *maxBody,
 		RequestTimeout:   *reqTimeout,
 		AllowDefaultList: *allowDefaults,
+		// Per-request audit trail: one "request served" summary plus a "file
+		// cracked" entry (filename, file type, time-to-crack, optionally the
+		// password) for every recovery, all tagged with the client and endpoint.
+		Audit: func(res *xcrack.Result, meta api.AuditMeta) {
+			clientAttrs := []slog.Attr{
+				slog.String("client", meta.RemoteAddr),
+				slog.String("endpoint", meta.Endpoint),
+			}
+			auditlog.LogFile(logger, "", res, *auditPassword, clientAttrs...)
+			logger.LogAttrs(context.Background(), slog.LevelInfo, "request served",
+				slog.String("client", meta.RemoteAddr),
+				slog.String("endpoint", meta.Endpoint),
+				slog.Int("bytes", meta.Bytes),
+				slog.String("elapsed", meta.Elapsed.Round(time.Millisecond).String()),
+			)
+		},
 	})
 
 	httpSrv := &http.Server{
@@ -105,22 +161,29 @@ func main() {
 		IdleTimeout:  120 * time.Second,
 	}
 
+	serveErr := make(chan error, 1)
 	go func() {
-		log.Printf("xcrackd listening on %s", *addr)
+		logger.Info("xcrackd listening", "addr", *addr)
 		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("server error: %v", err)
+			serveErr <- err
 		}
 	}()
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	log.Printf("shutting down...")
+	select {
+	case err := <-serveErr:
+		logger.Error("server error", "err", err)
+		return 1
+	case <-stop:
+	}
+	logger.Info("shutting down")
 
 	ctx, cancel := context.WithTimeout(context.Background(), *shutdownGrace)
 	defer cancel()
 	if err := httpSrv.Shutdown(ctx); err != nil {
-		log.Printf("graceful shutdown failed: %v", err)
-		os.Exit(1)
+		logger.Error("graceful shutdown failed", "err", err)
+		return 1
 	}
+	return 0
 }

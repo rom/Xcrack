@@ -65,7 +65,14 @@ type fileConfig struct {
 		Format        string `yaml:"format"`
 		ResultsFile   string `yaml:"results_file"`
 		LogLevel      string `yaml:"log_level"`
-		ExtractSuffix string `yaml:"extract_suffix"` // suffix for each source's extracted-tree dir under --out (default ".extracted")
+		LogFormat     string `yaml:"log_format"`         // "text" (default) or "json"
+		LogFile       string `yaml:"log_file"`           // append structured log/audit lines to this path
+		Syslog        bool   `yaml:"syslog"`             // send log/audit lines to the system logger
+		SyslogAddress string `yaml:"syslog_address"`     // remote syslog host:port ("" = local socket)
+		SyslogNetwork string `yaml:"syslog_network"`     // "udp"/"tcp" for a remote syslog ("" = local socket)
+		SyslogTag     string `yaml:"syslog_tag"`         // syslog tag/ident (default: program name)
+		AuditPassword bool   `yaml:"audit_log_password"` // include the recovered password in the audit log
+		ExtractSuffix string `yaml:"extract_suffix"`     // suffix for each source's extracted-tree dir under --out (default ".extracted")
 	} `yaml:"output"`
 	Budget struct {
 		PerFile string `yaml:"per_file"`

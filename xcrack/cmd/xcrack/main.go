@@ -9,7 +9,9 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
+	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -20,6 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rom/xcrack/pkg/auditlog"
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
 	"github.com/rom/xcrypto/pattern"
@@ -93,6 +96,13 @@ func runCrack(args []string) int {
 
 	format := fs_.String("format", "text", "output format: text|json|jsonl")
 	logLevel := fs_.String("log-level", "info", "log level: debug|info|warn|error")
+	logFormat := fs_.String("log-format", "text", "log/audit output format: text|json")
+	logFile := fs_.String("log-file", "", "append structured log + audit lines to this file (default: stderr)")
+	syslogF := fs_.Bool("syslog", false, "send the log + audit trail to the system logger (syslog) instead of stderr")
+	syslogAddr := fs_.String("syslog-address", "", "remote syslog host:port (with --syslog; empty uses the local syslog socket)")
+	syslogNet := fs_.String("syslog-network", "", "remote syslog transport udp|tcp (with --syslog-address)")
+	syslogTag := fs_.String("syslog-tag", "", "syslog tag/ident (with --syslog; default: program name)")
+	auditPasswordF := fs_.Bool("audit-log-password", false, "include the recovered password in the audit log entry for a cracked file (off by default so the trail stays secrets-free)")
 	resultsFile := fs_.String("results-file", "", "write JSON manifest/results here")
 
 	workers := fs_.Int("workers", 0, "candidate-test goroutines per file (0=NumCPU)")
@@ -271,7 +281,43 @@ func runCrack(args []string) int {
 	outFormat := firstNonEmpty(flagIf(set["format"], *format), env("XCRACK_FORMAT_STR"), cfgStr(cfg, func(c *fileConfig) string { return c.Output.Format }), "text")
 	resFile := firstNonEmpty(flagIf(set["results-file"], *resultsFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.ResultsFile }), "")
 	logLvl := firstNonEmpty(flagIf(set["log-level"], *logLevel), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogLevel }), "info")
-	opts.Logger = newLogger(logLvl)
+	auditPassword := *auditPasswordF || (cfg != nil && cfg.Output.AuditPassword)
+	logCfg := auditlog.Config{
+		Level:          logLvl,
+		Format:         firstNonEmpty(flagIf(set["log-format"], *logFormat), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogFormat }), "text"),
+		File:           firstNonEmpty(flagIf(set["log-file"], *logFile), cfgStr(cfg, func(c *fileConfig) string { return c.Output.LogFile }), ""),
+		Syslog:         *syslogF || (cfg != nil && cfg.Output.Syslog),
+		SyslogNetwork:  firstNonEmpty(flagIf(set["syslog-network"], *syslogNet), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogNetwork }), ""),
+		SyslogAddress:  firstNonEmpty(flagIf(set["syslog-address"], *syslogAddr), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogAddress }), ""),
+		SyslogTag:      firstNonEmpty(flagIf(set["syslog-tag"], *syslogTag), cfgStr(cfg, func(c *fileConfig) string { return c.Output.SyslogTag }), ""),
+		IncludeSecrets: auditPassword,
+	}
+	// The live logger (which may dial syslog or open a log file) is built lazily:
+	// the non-cracking modes below (--show-config, --keyspace, --stdout, ...) read
+	// only the logCfg fields and must not require a reachable syslog. ensureLogger
+	// builds it at most once, right before a run that needs it.
+	var (
+		logger    *slog.Logger
+		logCloser io.Closer
+	)
+	defer func() {
+		if logCloser != nil {
+			logCloser.Close()
+		}
+	}()
+	ensureLogger := func() bool {
+		if logger != nil {
+			return true
+		}
+		l, closer, err := auditlog.New(logCfg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: logging: %v\n", err)
+			return false
+		}
+		logger, logCloser = l, closer
+		opts.Logger = auditlog.Printf(l)
+		return true
+	}
 
 	// Extracted-tree directory suffix: an explicit flag wins (even "" for none),
 	// else the config, else ".extracted". It must stay a single path segment so it
@@ -768,6 +814,11 @@ func runCrack(args []string) int {
 			Format:         outFormat,
 			ResultsFile:    resFile,
 			LogLevel:       logLvl,
+			LogFormat:      logCfg.Format,
+			LogFile:        logCfg.File,
+			Syslog:         logCfg.Syslog,
+			SyslogAddress:  logCfg.SyslogAddress,
+			AuditPassword:  auditPassword,
 			OutDir:         *out,
 			ExtractSuffix:  extractSuffixVal,
 			PerFile:        opts.Budget.PerFile,
@@ -843,6 +894,9 @@ func runCrack(args []string) int {
 		fmt.Fprintln(os.Stderr, "xcrack: --reuse-output needs -o/--out; ignoring")
 	}
 
+	if !ensureLogger() {
+		return 2
+	}
 	ctx := context.Background()
 	pool := xcrack.NewPool(opts)
 	defer pool.Close()
@@ -972,6 +1026,11 @@ func runCrack(args []string) int {
 			}
 			res.Root.Path = filepath.Base(path)
 			results[i] = res
+			// Audit trail: one "file cracked" entry (filename, file type,
+			// time-to-crack, optionally the password) per recovered source, plus a
+			// per-node debug trace so the execution can be followed at --log-level
+			// debug.
+			auditlog.LogFile(logger, res.Root.Path, res, auditPassword)
 			// Batch-level session: this file's search ran to completion, so record it
 			// (with any recovered passwords) and never re-search it on resume.
 			if sess != nil {
