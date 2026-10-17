@@ -48,6 +48,20 @@ func run() int {
 		maxBody       = flag.Int64("max-body", 256<<20, "maximum request body size in bytes")
 		reqTimeout    = flag.Duration("request-timeout", 120*time.Second, "per-request processing deadline")
 		allowDefaults = flag.Bool("allow-default-list", false, "allow ?defaults=true to use the embedded wordlist")
+
+		// Engine knobs (match the CLI's — the server configures the same engine).
+		batchSize    = flag.Int("batch-size", 0, "candidates per worker hand-off (0=auto)")
+		throttle     = flag.Int("throttle", 0, "approximate CPU duty cycle percent 1..99 (0=off)")
+		noRecurse    = flag.Bool("no-recurse", false, "disable container decomposition (treat each upload as a single target)")
+		explode      = flag.Bool("explode-documents", false, "decompose documents into their internal parts")
+		contextCands = flag.Bool("context", false, "seed guesses from the node name and plaintext harvested from plain sibling entries")
+		hintCands    = flag.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment)")
+		maxDepth     = flag.Int("max-depth", 0, "max nesting depth (0=default)")
+		maxNodes     = flag.Int("max-nodes", 0, "max extracted entries (0=default)")
+		maxTotal     = flag.Int64("max-total-bytes", 0, "cumulative decompressed byte budget (0=default)")
+		maxEntry     = flag.Int64("max-entry-size", 0, "max single-entry size (0=default)")
+		maxCand      = flag.Int64("max-candidates", 0, "max candidates tested per encrypted node (0=unlimited)")
+
 		readTimeout   = flag.Duration("read-timeout", 30*time.Second, "HTTP read timeout")
 		writeTimeout  = flag.Duration("write-timeout", 150*time.Second, "HTTP write timeout")
 		shutdownGrace = flag.Duration("shutdown-grace", 20*time.Second, "graceful shutdown grace period")
@@ -136,13 +150,38 @@ func run() int {
 	if *dualPipeline && gpuAcc == nil {
 		logger.Warn("--dual-pipeline has no effect without an active GPU tier; running the CPU search alone")
 	}
+
+	// Engine limits: start from the safe defaults and override only what the
+	// operator set (0 keeps the default floor; normalize() re-applies floors).
+	limits := xcrack.DefaultLimits()
+	if *maxDepth > 0 {
+		limits.MaxDepth = *maxDepth
+	}
+	if *maxNodes > 0 {
+		limits.MaxNodes = *maxNodes
+	}
+	if *maxTotal > 0 {
+		limits.MaxTotalBytes = *maxTotal
+	}
+	if *maxEntry > 0 {
+		limits.MaxEntrySize = *maxEntry
+	}
+	limits.MaxCandidates = *maxCand
+
 	pool := xcrack.NewPool(xcrack.Options{
-		Workers:         *workers,
-		MaxProcs:        *maxProcs,
-		FileConcurrency: *fileJobs,
-		Accelerator:     gpuAcc,
-		DualPipeline:    *dualPipeline,
-		Logger:          auditlog.Printf(logger),
+		Workers:           *workers,
+		MaxProcs:          *maxProcs,
+		FileConcurrency:   *fileJobs,
+		BatchSize:         *batchSize,
+		ThrottlePercent:   *throttle,
+		NoRecurse:         *noRecurse,
+		ExplodeDocuments:  *explode,
+		ContextCandidates: *contextCands,
+		HintCandidates:    *hintCands,
+		Limits:            limits,
+		Accelerator:       gpuAcc,
+		DualPipeline:      *dualPipeline,
+		Logger:            auditlog.Printf(logger),
 	})
 	defer pool.Close()
 

@@ -15,6 +15,23 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Library/REST parity, an API reference, a bigger manual, and embedding
+  examples.** `xcrackd` now exposes the same engine knobs as the CLI as flags —
+  `--batch-size`, `--throttle`, `--no-recurse`, `--explode-documents`,
+  `--context`, `--hint`, and the `--max-depth`/`--max-nodes`/`--max-total-bytes`/
+  `--max-entry-size`/`--max-candidates` limits — so an operator configures the
+  server engine exactly as the local engine (the library already mirrored the CLI
+  via `Options`). New [`docs/API.md`](API.md) documents the embeddable library
+  (`Pool`/`Process`, every `Options` field, candidate sources, results and
+  callbacks) and the REST API (`xcrackd` flags, endpoints, request shapes and the
+  JSON report), and explains the parity model (the controller generates
+  candidates; the server is a stateless verify/KDF worker). The user manual gained
+  a **CLI reference** chapter (every subcommand and flag family), an **Embedding
+  the library** chapter, and much richer distributed/GPU and advanced-usage
+  sections with many more worked examples. Five new runnable embedding examples
+  join `impex-embed`: `batch-triage`, `candidate-pipeline`, `pin-fastreject`,
+  `inspect-tree` and `http-service` (indexed in
+  [`xcrack/examples/README.md`](../xcrack/examples/README.md)).
 - **TLS for the REST API and the distributed client.** `xcrackd` can now
   terminate HTTPS itself: `--tls-cert`/`--tls-key` serve TLS (1.2 floor, or
   `--tls-min-version 1.3`), and `--tls-client-ca` turns on **mutual TLS**

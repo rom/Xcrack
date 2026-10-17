@@ -24,6 +24,7 @@ VERSION     ?= $(shell git -C .. describe --tags --always --dirty 2>/dev/null ||
 # names: FILEFORMATS.md, REFERENCES.md.)
 DOCS := USERMANUAL.md \
         USAGE.md \
+        API.md \
         FILEFORMATS.md \
         CRACKING.md \
         PERFORMANCE.md \
