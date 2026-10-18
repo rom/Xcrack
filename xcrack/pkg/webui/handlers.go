@@ -1,0 +1,368 @@
+package webui
+
+import (
+	"fmt"
+	"io"
+	"mime/multipart"
+	"net/http"
+	"os"
+	"path/filepath"
+
+	"github.com/rom/xcrack/pkg/jobspec"
+	"github.com/rom/xcrack/pkg/xcrack"
+)
+
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+}
+
+func (s *Server) handleMeta(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, buildMeta(s.cfg))
+}
+
+// handleValidate parses a YAML spec strictly and validates it, so the editor can
+// show problems before a run.
+func (s *Server) handleValidate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "could not read body")
+		return
+	}
+	spec, err := jobspec.ParseStrict(body)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
+		return
+	}
+	if err := spec.Validate(); err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"valid": true})
+}
+
+// handleFormat parses then re-marshals a spec so the editor's "Format" button
+// tidies the document.
+func (s *Server) handleFormat(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4<<20))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "could not read body")
+		return
+	}
+	spec, err := jobspec.ParseStrict(body)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	out, err := spec.Marshal()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not format")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"yaml": string(out)})
+}
+
+// handleIdentify detects the format/encryption of each uploaded file without
+// cracking.
+func (s *Server) handleIdentify(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeErr(w, http.StatusBadRequest, "could not parse upload")
+		return
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+	reg := xcrack.DefaultRegistry()
+	type idResult struct {
+		Name       string `json:"name"`
+		Format     string `json:"format"`
+		Encrypted  bool   `json:"encrypted"`
+		Container  bool   `json:"container"`
+		Explodable bool   `json:"explodable"`
+		Unknown    bool   `json:"unknown,omitempty"`
+	}
+	var out []idResult
+	parts := append(r.MultipartForm.File["source"], r.MultipartForm.File["file"]...)
+	for _, fh := range parts {
+		res := idResult{Name: safeSegment(fh.Filename)}
+		peek, err := peekPart(fh, 512)
+		if err != nil {
+			res.Unknown = true
+			out = append(out, res)
+			continue
+		}
+		f, derr := reg.Detect(peek)
+		if derr != nil {
+			res.Unknown = true
+			out = append(out, res)
+			continue
+		}
+		c := f.Caps()
+		res.Format, res.Encrypted, res.Container, res.Explodable = f.Name(), c.Encrypted, c.Container, c.Explodable
+		out = append(out, res)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"files": out})
+}
+
+// handleCreateJob accepts a multipart submission: a "spec" YAML field, one or
+// more "source" file parts (the targets), and any number of "aux" file parts
+// (wordlists, breach corpora, combinator/hcmask inputs) the spec references by
+// base name.
+func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes)
+	if err := r.ParseMultipartForm(16 << 20); err != nil {
+		writeErr(w, http.StatusBadRequest, "could not parse upload (is it too large?)")
+		return
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+
+	specText := r.FormValue("spec")
+	spec, err := jobspec.ParseStrict([]byte(specText))
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, "spec: "+err.Error())
+		return
+	}
+
+	sources := r.MultipartForm.File["source"]
+	if len(sources) == 0 {
+		writeErr(w, http.StatusBadRequest, "no source files uploaded (need at least one 'source' part)")
+		return
+	}
+
+	job, err := s.mgr.newJob()
+	if err != nil {
+		writeErr(w, http.StatusInternalServerError, "could not allocate job")
+		return
+	}
+
+	// Save auxiliary files (wordlists etc.) the spec may reference by base name.
+	for _, fh := range r.MultipartForm.File["aux"] {
+		if _, err := savePart(fh, filepath.Join(job.dir, "aux")); err != nil {
+			writeErr(w, http.StatusBadRequest, "aux upload: "+err.Error())
+			return
+		}
+	}
+	// Save the source files (the recovery targets).
+	var names, paths []string
+	for _, fh := range sources {
+		p, err := savePart(fh, filepath.Join(job.dir, "uploads"))
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "source upload: "+err.Error())
+			return
+		}
+		names = append(names, safeSegment(fh.Filename))
+		paths = append(paths, p)
+	}
+
+	// Lock the spec's file references to the uploaded files (unless the operator
+	// trusts server paths), and validate before queuing.
+	if err := sanitizeSpecPaths(spec, filepath.Join(job.dir, "aux"), s.cfg.AllowServerPaths); err != nil {
+		writeErr(w, http.StatusBadRequest, "spec: "+err.Error())
+		return
+	}
+	if err := spec.Validate(); err != nil {
+		writeErr(w, http.StatusBadRequest, "spec: "+err.Error())
+		return
+	}
+	yamlOut, _ := spec.Marshal()
+
+	job.mu.Lock()
+	job.spec = spec
+	job.Files = names
+	job.sources = paths
+	job.FilesTotal = len(paths)
+	job.SpecYAML = string(yamlOut)
+	job.mu.Unlock()
+
+	s.mgr.start(job)
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID})
+}
+
+func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": s.mgr.list()})
+}
+
+func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
+	job := s.mgr.get(r.PathValue("id"))
+	if job == nil {
+		writeErr(w, http.StatusNotFound, "no such job")
+		return
+	}
+	writeJSON(w, http.StatusOK, job.snapshot())
+}
+
+func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if !s.mgr.cancel(r.PathValue("id")) {
+		writeErr(w, http.StatusNotFound, "no such job (or already finished)")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
+}
+
+// handleJobEvents streams a job's events as Server-Sent Events: the history so
+// far, then live updates until the job ends or the client disconnects.
+func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
+	job := s.mgr.get(r.PathValue("id"))
+	if job == nil {
+		writeErr(w, http.StatusNotFound, "no such job")
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeErr(w, http.StatusInternalServerError, "streaming unsupported")
+		return
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	history, ch, done, cancel := job.subscribe()
+	defer cancel()
+	for _, e := range history {
+		writeSSE(w, e)
+	}
+	flusher.Flush()
+	for {
+		select {
+		case e := <-ch:
+			writeSSE(w, e)
+			flusher.Flush()
+		case <-done:
+			// Drain any events emitted between the last read and completion.
+			for {
+				select {
+				case e := <-ch:
+					writeSSE(w, e)
+				default:
+					flusher.Flush()
+					return
+				}
+			}
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+// handleDownload streams the job's extracted output tree as a zip archive.
+func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
+	job := s.mgr.get(r.PathValue("id"))
+	if job == nil {
+		writeErr(w, http.StatusNotFound, "no such job")
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", "xcrack-"+job.ID+".zip"))
+	if err := job.zipOutputs(w); err != nil {
+		// Headers are already sent; nothing better than ending the stream.
+		return
+	}
+}
+
+// handleStats reports aggregate counters across all jobs for the dashboard.
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	jobs := s.mgr.list()
+	var running, done int
+	var candidates int64
+	var decrypted, locked, files int
+	for _, j := range jobs {
+		switch j.State {
+		case StateRunning, StateQueued:
+			running++
+		case StateDone, StateError, StateCanceled:
+			done++
+		}
+		candidates += j.Candidates
+		files += j.FilesDone
+		for _, fr := range j.Results {
+			if fr.Report == nil {
+				continue
+			}
+			decrypted += countStatus(fr.Report.Root, "decrypted")
+			locked += countStatus(fr.Report.Root, "locked")
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"jobs_total":       len(jobs),
+		"jobs_active":      running,
+		"jobs_finished":    done,
+		"candidates_tried": candidates,
+		"files_processed":  files,
+		"nodes_decrypted":  decrypted,
+		"nodes_locked":     locked,
+	})
+}
+
+func (s *Server) handleListDocs(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"docs": s.mgr.listDocs()})
+}
+
+func (s *Server) handleGetDoc(w http.ResponseWriter, r *http.Request) {
+	data, ok := s.mgr.readDoc(r.PathValue("name"))
+	if !ok {
+		writeErr(w, http.StatusNotFound, "no such document")
+		return
+	}
+	w.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(data)
+}
+
+// --- helpers ---
+
+// countStatus counts nodes with the given status string in a report subtree.
+func countStatus(n xcrack.NodeReport, status string) int {
+	c := 0
+	if n.Status == status {
+		c++
+	}
+	for _, ch := range n.Children {
+		c += countStatus(ch, status)
+	}
+	return c
+}
+
+// savePart writes one uploaded file part to dir under a sanitized base name and
+// returns the absolute path. It bounds nothing itself; the request body is
+// already capped by MaxBytesReader.
+func savePart(fh *multipart.FileHeader, dir string) (string, error) {
+	src, err := fh.Open()
+	if err != nil {
+		return "", err
+	}
+	defer src.Close()
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	dst := filepath.Join(dir, safeSegment(fh.Filename))
+	f, err := os.OpenFile(dst, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o600)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if _, err := io.Copy(f, src); err != nil {
+		return "", err
+	}
+	return dst, nil
+}
+
+// peekPart reads up to n leading bytes of an uploaded file part.
+func peekPart(fh *multipart.FileHeader, n int) ([]byte, error) {
+	f, err := fh.Open()
+	if err != nil {
+		return nil, err
+	}
+	defer f.Close()
+	buf := make([]byte, n)
+	m, err := io.ReadFull(f, buf)
+	if err != nil && err != io.ErrUnexpectedEOF && err != io.EOF {
+		return nil, err
+	}
+	return buf[:m], nil
+}
+
+func writeSSE(w io.Writer, e Event) {
+	b, err := marshalEvent(e)
+	if err != nil {
+		return
+	}
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", b)
+}
