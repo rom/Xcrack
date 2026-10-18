@@ -45,6 +45,7 @@ async function boot() {
   wireRun();
   wireEditorButtons();
   wirePreview();
+  wireTools();
   applyHelp();
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
   renderBadges();
@@ -548,6 +549,274 @@ function miniMarkdown(md) {
   }
   if (inList) out.push("</ul>"); if (inCode) out.push("</code></pre>");
   return out.join("\n");
+}
+
+// ---- tools (specialist, non-cracking subcommands) --------------------------
+// The quick inspect/recover tools call synchronous /tools/* endpoints; the long
+// key sweeps and table generation are turned into a copy-ready CLI command.
+const QUICK = {
+  identify: "/identify",
+  hashline: "/tools/hashline",
+  "vba-recover": "/tools/vba-recover",
+  "access-recover": "/tools/access-recover",
+};
+
+function wireTools() {
+  document.querySelectorAll(".tool-run[data-tool]").forEach((b) =>
+    b.addEventListener("click", () => runQuickTool(b.dataset.tool)));
+  $("export-challenge-run").addEventListener("click", exportChallenge);
+  $("pdf-table-run").addEventListener("click", pdfTable);
+  $("wl-run").addEventListener("click", wordlistTool);
+  wireCLI();
+}
+
+const toolOut = (name) => document.querySelector(`.tool-out[data-out="${name}"]`);
+
+async function runQuickTool(tool) {
+  const out = toolOut(tool);
+  const input = document.querySelector(`.tool-files[data-tool="${tool}"]`);
+  if (!input || !input.files.length) { out.textContent = "Choose at least one file first."; return; }
+  out.textContent = "Working…";
+  const fd = new FormData();
+  for (const f of input.files) fd.append("source", f);
+  let res;
+  try { res = await fetch(api(QUICK[tool]), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  renderTool(tool, await res.json(), out);
+}
+
+function renderTool(tool, data, out) {
+  out.textContent = "";
+  const files = data.files || [];
+  if (!files.length) { out.append(el("p", { className: "hint", textContent: "No result." })); return; }
+  for (const f of files) {
+    const card = el("div", { className: "tool-file" });
+    card.append(el("div", { className: "tool-file-name", textContent: f.name }));
+    if (f.error) { card.append(el("div", { className: "err", textContent: f.error })); out.append(card); continue; }
+    if (tool === "identify") card.append(renderIdentify(f));
+    else if (tool === "hashline") card.append(renderHashline(f));
+    else card.append(renderKV(f)); // vba-recover / access-recover
+    out.append(card);
+  }
+}
+
+function renderIdentify(f) {
+  const wrap = el("div", { className: "id-row" });
+  if (f.unknown) { wrap.append(el("span", { className: "badge off", textContent: "unknown format" })); return wrap; }
+  wrap.append(el("span", { className: "fmt", textContent: f.format }));
+  wrap.append(el("span", { className: "badge " + (f.encrypted ? "on" : "off"), textContent: f.encrypted ? "encrypted" : "cleartext" }));
+  if (f.container) wrap.append(el("span", { className: "badge on", textContent: "container" }));
+  if (f.explodable) wrap.append(el("span", { className: "badge on", textContent: "explodable" }));
+  return wrap;
+}
+
+function renderHashline(f) {
+  const wrap = el("div", {});
+  if (f.note) wrap.append(el("div", { className: "hint", textContent: f.note }));
+  for (const l of f.lines || []) {
+    const meta = [];
+    if (l.target) meta.push(l.target);
+    if (l.hashcat >= 0) meta.push("hashcat -m " + l.hashcat);
+    if (l.john) meta.push("john --format=" + l.john);
+    if (meta.length) wrap.append(el("div", { className: "hint", textContent: meta.join(" · ") }));
+    wrap.append(el("pre", { className: "hashline", textContent: l.line }));
+  }
+  return wrap;
+}
+
+// renderKV shows the meaningful fields of a vba-recover / access-recover result.
+function renderKV(f) {
+  const dl = el("dl", { className: "kv" });
+  const secretKey = (k) => k === "password" || k === "hashcat" || k === "john";
+  for (const k of ["kind", "variant", "has_password", "password", "hashcat", "john", "note"]) {
+    const v = f[k];
+    if (v === undefined || v === null || v === "") continue;
+    dl.append(el("dt", { textContent: k.replace(/_/g, " ") }));
+    const text = typeof v === "boolean" ? (v ? "yes" : "no") : String(v);
+    dl.append(el("dd", {}, [secretKey(k) ? el("code", { textContent: text }) : text]));
+  }
+  if (!dl.childNodes.length) dl.append(el("dd", { textContent: "(no result)" }));
+  return dl;
+}
+
+async function exportChallenge() {
+  const out = toolOut("export-challenge");
+  const input = document.querySelector('.tool-files[data-tool="export-challenge"]');
+  if (!input.files.length) { out.textContent = "Choose at least one file first."; return; }
+  out.textContent = "Exporting…";
+  const fd = new FormData();
+  for (const f of input.files) fd.append("source", f);
+  let res;
+  try { res = await fetch(api("/tools/export-challenge"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  // Success streams a downloadable JSON (Content-Disposition set); otherwise the
+  // body is a JSON {error} explaining why nothing was exported.
+  if (res.ok && res.headers.get("Content-Disposition")) {
+    downloadBlob(await res.blob(), "challenges.json");
+    out.textContent = "✓ Downloaded challenges.json — solve externally, then xcrack --resume-from";
+    return;
+  }
+  const j = await res.json().catch(() => ({}));
+  out.textContent = j.error || ("HTTP " + res.status);
+}
+
+async function pdfTable() {
+  const out = toolOut("pdf-table");
+  const src = $("pdf-table-src").files[0], tbl = $("pdf-table-tbl").files[0];
+  if (!src || !tbl) { out.textContent = "Choose a PDF and a thunder table."; return; }
+  out.textContent = "Inverting…";
+  const fd = new FormData(); fd.append("source", src); fd.append("table", tbl);
+  let res;
+  try { res = await fetch(api("/tools/pdf-keyattack-table"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  const j = await res.json();
+  out.textContent = "";
+  if (j.found) {
+    out.append(el("div", { className: "ok", textContent: "🔑 file key recovered" }));
+    out.append(el("pre", { className: "hashline", textContent: j.key_hex }));
+  } else {
+    out.append(el("div", { className: "hint", textContent: j.note || "not found" }));
+  }
+}
+
+async function wordlistTool() {
+  const out = toolOut("wordlist");
+  const file = $("wl-file").files[0], text = $("wl-text").value;
+  if (!file && !text.trim()) { out.textContent = "Upload a wordlist or paste some lines."; return; }
+  out.textContent = "Processing…";
+  const fd = new FormData();
+  if (file) fd.append("source", file);
+  if (text.trim()) fd.append("text", text);
+  fd.append("op", $("wl-op").value);
+  fd.append("min_length", $("wl-min").value || "0");
+  fd.append("max_length", $("wl-max").value || "0");
+  fd.append("split", $("wl-split").value || "0");
+  let res;
+  try { res = await fetch(api("/tools/wordlist"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  if ((res.headers.get("Content-Type") || "").startsWith("application/zip")) {
+    downloadBlob(await res.blob(), "wordlist-split.zip");
+    out.textContent = "✓ Downloaded wordlist-split.zip";
+    return;
+  }
+  const body = await res.text();
+  const lines = body ? body.replace(/\n$/, "").split("\n") : [];
+  out.textContent = "";
+  out.append(el("div", { className: "row tool-actions" }, [
+    el("span", { className: "hint", textContent: `${lines.length.toLocaleString()} line(s)` }),
+    el("button", { type: "button", className: "mini", textContent: "download .txt", onclick: () => downloadBlob(new Blob([body], { type: "text/plain" }), "wordlist.txt") }),
+  ]));
+  const preview = lines.slice(0, 200).join("\n");
+  out.append(el("pre", { className: "hashline", textContent: preview + (lines.length > 200 ? `\n… (${(lines.length - 200).toLocaleString()} more)` : "") }));
+}
+
+// ---- CLI command builder (long-running sweeps / table generation) ----------
+const CLI_SPECS = {
+  "pdf-keyattack": {
+    positional: { label: "PDF file", placeholder: "secret.pdf" },
+    flags: [
+      { flag: "--table", type: "text", label: "Thunder table (optional, instant V1/R2 lookup)", placeholder: "v1r2.thunder" },
+      { flag: "--gpu", type: "bool", label: "Offload the 2⁴⁰ sweep to an OpenCL device" },
+      { flag: "--workers", type: "num", label: "CPU workers (0 = all cores)", def: 0 },
+      { flag: "--shard", type: "text", label: "Shard i/N for distribution (optional)", placeholder: "0/8" },
+      { flag: "--quiet", type: "bool", label: "Suppress progress output" },
+    ],
+  },
+  "office-keyattack": {
+    positional: { label: "Office file", placeholder: "secret.doc" },
+    flags: [
+      { flag: "--gpu", type: "bool", label: "Offload the 2⁴⁰ sweep to an OpenCL device" },
+      { flag: "--workers", type: "num", label: "CPU workers (0 = all cores)", def: 0 },
+      { flag: "--shard", type: "text", label: "Shard i/N for distribution (optional)", placeholder: "0/8" },
+      { flag: "--quiet", type: "bool", label: "Suppress progress output" },
+    ],
+  },
+  "thunder-gen": {
+    positional: null,
+    flags: [
+      { flag: "--out", type: "text", label: "Output table file (required)", placeholder: "v1r2.thunder", required: true },
+      { flag: "--bits", type: "num", label: "Key-space exponent (40 inverts every V1/R2)", def: 40 },
+      { flag: "--length", type: "num", label: "Chain length t (smaller = faster lookup, larger table)", def: 4096 },
+      { flag: "--chains", type: "num", label: "Chains per sub-table", def: 1 << 26 },
+      { flag: "--tables", type: "num", label: "Independent sub-tables (more = higher coverage)", def: 4 },
+      { flag: "--workers", type: "num", label: "Generation workers (0 = all cores)", def: 0 },
+      { flag: "--gpu", type: "bool", label: "Offload chain generation to an OpenCL device" },
+      { flag: "--progress", type: "text", label: "Periodic progress (e.g. 5%, 2hour, 1day)", placeholder: "5%" },
+      { flag: "--dry-run", type: "bool", label: "Print the plan (work, size, time) and exit" },
+    ],
+  },
+};
+const flagId = (fl) => "cli-f-" + fl.flag.replace(/^--/, "").replace(/[^a-z0-9]/gi, "-");
+
+function wireCLI() {
+  const op = $("cli-op"), fields = $("cli-fields");
+  const render = () => { renderCLIFields(CLI_SPECS[op.value], fields); updateCLI(); };
+  op.addEventListener("change", render);
+  fields.addEventListener("input", updateCLI);
+  fields.addEventListener("change", updateCLI);
+  $("cli-copy").addEventListener("click", async () => {
+    let ok = false;
+    try { await navigator.clipboard.writeText($("cli-cmd").textContent); ok = true; } catch {}
+    $("cli-copy-status").textContent = ok ? "copied" : "copy failed — select the command manually";
+    setTimeout(() => { $("cli-copy-status").textContent = ""; }, 1800);
+  });
+  render();
+}
+
+function renderCLIFields(spec, host) {
+  host.textContent = "";
+  if (spec.positional) host.append(fieldRow("cli-pos", spec.positional.label, "text", spec.positional.placeholder || "", ""));
+  for (const fl of spec.flags) {
+    const id = flagId(fl);
+    if (fl.type === "bool") host.append(boolRow(id, fl.label));
+    else host.append(fieldRow(id, fl.label, fl.type === "num" ? "number" : "text", fl.placeholder || "", fl.def !== undefined ? String(fl.def) : ""));
+  }
+}
+function fieldRow(id, label, type, placeholder, value) {
+  return el("div", { className: "field" }, [
+    el("label", { textContent: label, htmlFor: id }),
+    el("input", { id, type, placeholder, value }),
+  ]);
+}
+function boolRow(id, label) {
+  return el("label", { className: "check cli-check" }, [el("input", { id, type: "checkbox" }), " " + label]);
+}
+
+function updateCLI() {
+  const spec = CLI_SPECS[$("cli-op").value];
+  const parts = ["xcrack", $("cli-op").value];
+  for (const fl of spec.flags) {
+    const e = $(flagId(fl));
+    if (!e) continue;
+    if (fl.type === "bool") { if (e.checked) parts.push(fl.flag); continue; }
+    const v = e.value.trim();
+    if (fl.type === "num") {
+      if (v !== "" && Number(v) !== (fl.def ?? 0)) parts.push(fl.flag, v);
+    } else if (v) {
+      parts.push(fl.flag, shq(v));
+    } else if (fl.required) {
+      parts.push(fl.flag, fl.flag.replace(/^--/, "").toUpperCase());
+    }
+  }
+  if (spec.positional) {
+    const v = ($("cli-pos")?.value || "").trim();
+    parts.push(v ? shq(v) : "FILE");
+  }
+  $("cli-cmd").textContent = parts.join(" ");
+}
+// shq single-quotes a value for a POSIX shell unless it is already a safe token.
+function shq(v) {
+  return /^[\w.,:/@=+%-]+$/.test(v) ? v : "'" + v.replace(/'/g, "'\\''") + "'";
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = el("a", { href: url, download: name });
+  document.body.append(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
 boot();

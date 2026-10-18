@@ -989,7 +989,38 @@ zip of the extracted tree.
 **Preview** button shows the first lines of the `.txt` in a dialog, so you can
 check a list before launching the run.
 
-### 10.5 Statistics
+### 10.5 Tools (specialist subcommands)
+
+The **Tools** tab surfaces the CLI's specialist, non-cracking subcommands
+(§[3](#3-command-reference)) without leaving the browser. The quick, stateless
+operations run in-engine against the `/api/v1/tools/*` endpoints and return
+right away:
+
+- **Identify** — detect each file's format and whether it is encrypted, a
+  container, or explodable (the `identify` subcommand).
+- **Hash lines** — emit `$office$`/`$pdf$`/`$zip2$`/`$keepass$`… lines for
+  hashcat / John, with the hashcat mode and John format shown (`hashline`).
+- **VBA project password** — recover a VBA project-protection password (plaintext
+  or a crackable salted-SHA-1 line) from an Office carrier or `vbaProject.bin`.
+- **Access (Jet) password** — read a Jet (`.mdb`) database password straight from
+  the header (no cracking).
+- **Export challenge** — download the portable JSON challenge envelope(s) to
+  solve on an external cracker, then bring the result back with `--resume-from`.
+- **PDF 40-bit key (thunder table)** — invert a V1/R2 PDF's file key instantly
+  by uploading the PDF and a precomputed thunder table (the `pdf-keyattack
+  --table` fast path).
+- **Wordlist utilities** — length-filter, dedupe, sort, sort-by-length, or split
+  a wordlist (upload or paste); split downloads a zip of equal parts.
+
+The long compute jobs — a full 2⁴⁰ `pdf-keyattack` / `office-keyattack` sweep
+and `thunder-gen` table generation — are **not** run from the browser; instead
+the tab builds the exact CLI command from a small form (with `--gpu`, workers,
+sharding, progress, table-generation knobs, …) for you to copy and run on the
+CLI or the distributed tier. Recovered secrets (keys, VBA/Access passwords) are
+shown only when the server was started with `--expose-secrets`; otherwise a
+redaction marker stands in, exactly as on the crack path.
+
+### 10.6 Statistics
 
 The **Statistics** tab shows the aggregate counters across jobs (files
 processed, candidates tried, decrypted vs. still-locked), a live candidate-
@@ -998,7 +1029,7 @@ throughput chart for the running job, a **speed-by-algorithm/cipher** table
 recovered passwords** list (most frequently recovered, when the server exposes
 secrets).
 
-### 10.6 Appearance (themes) and in-app documentation
+### 10.7 Appearance (themes) and in-app documentation
 
 The **Configuration** tab's Appearance picker offers six themes plus System
 (which follows your OS light/dark setting): **Light**, **Dark**, **Glow**,
@@ -1006,7 +1037,7 @@ The **Configuration** tab's Appearance picker offers six themes plus System
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
 
-### 10.7 Security
+### 10.8 Security
 
 `xcrack-web` ships no authentication and, bound to localhost (the default), is a
 single-user console; exposing it on a network needs a proxy and TLS. Its
