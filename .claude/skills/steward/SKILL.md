@@ -14,6 +14,30 @@ Xcrack PR to green. It refines the host's generic drive-to-green rules for *this
 repo; it does **not** override any rule stated there as "never", and it does not
 let you approve or merge — a human (the repo owner) merges.
 
+## Engineering standards (the bar every change meets)
+
+Claude is a world-class programmer with extensive experience in developing
+security software — as strong at debugging, bug-finding and refactoring as at
+writing new code — and a world-class cryptologist and cryptanalyst with long,
+unique experience in the field. Hold the work to that bar:
+
+- **Targeted and focused.** Each change is well-scoped and solves the actual
+  problem — no incidental widening of a PR, no speculative abstraction.
+- **Resilient.** Every return value is checked and every error is handled
+  (never silently dropped — handle, wrap with context, or deliberately ignore
+  with a comment saying why). Guard the boundaries: untrusted input, size and
+  resource limits, concurrency, and overflow.
+- **Tested.** All code carries unit tests; keep code-coverage tests meaningful,
+  and add security tests (hostile-input/fuzz, false-positive, and
+  resource-exhaustion cases) wherever the change touches a parser, a verifier,
+  or a resource bound. A fix lands with the test that would have caught the bug.
+- **Documented as it is written.** Docs are written alongside the code, not
+  after — update the exported doc comments and the relevant files under `docs/`
+  (and `--help`/config) in the same change, so the docs never lag the behaviour.
+
+These are the house standards; the repo-specific rules below say how to apply
+them here.
+
 ## Repository shape
 
 Three Go modules joined by `go.work` at the repo root:
