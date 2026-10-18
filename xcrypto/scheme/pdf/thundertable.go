@@ -68,6 +68,13 @@ type TableParams struct {
 	// GenerateTable falls back to the CPU walk if it returns an error or a
 	// short/empty result, so correctness never depends on the offload.
 	Chain ChainComputer
+	// GPUChainBatch caps how many chains are sent to Chain per offload call
+	// (0 => auto). A single GPU submission must finish well under the device's
+	// compute watchdog; a too-large dispatch trips a ring timeout and the driver
+	// resets the queue (observed on integrated GPUs). Work per chain is ~ChainLen
+	// image ops, so the auto default sizes the batch from ChainLen; lower it if a
+	// device still times out. Ignored when Chain is nil.
+	GPUChainBatch int
 	// Progress, when non-nil, is called periodically during generation with the
 	// number of chains completed and the total planned, so a caller can report
 	// progress and an ETA. It is invoked from a single background goroutine
@@ -219,7 +226,7 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 			return nil, err
 		}
 		seed := uint64(s) * 0x9E3779B97F4A7C15 // golden-ratio stride per sub-table
-		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain, doneCtr)
+		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain, p.GPUChainBatch, doneCtr)
 		if err != nil {
 			return nil, err
 		}
@@ -228,16 +235,31 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 	return t, nil
 }
 
-// gpuChainChunk is how many chain endpoints a single offloaded ChainComputer
-// call covers. Sweeping a sub-table in chunks (rather than one call for all of
-// it) lets the shared progress counter advance *during* the sub-table and keeps
-// the per-call host buffer bounded. It is a var only so tests can shrink it.
-var gpuChainChunk = 1 << 20
+// gpuChainOpBudget bounds the image-op work of one offloaded GPU submission
+// (chains-per-call × ChainLen). A single submission must finish well under the
+// device's compute watchdog, or the driver resets the queue mid-dispatch (a
+// "ring timeout" / "context lost", seen on integrated GPUs); this keeps the auto
+// batch small enough regardless of ChainLen. Each submission is a fresh enqueue,
+// so overhead (tens of µs) is negligible against a multi-hour table.
+const gpuChainOpBudget = 1 << 22 // ~4.2M image ops per submission
+
+// gpuBatchSize is how many chains to offload per Chain call: the caller's
+// override when > 0, else gpuChainOpBudget/chainLen (at least 1).
+func gpuBatchSize(chainLen, override int) int {
+	if override > 0 {
+		return override
+	}
+	n := gpuChainOpBudget / chainLen
+	if n < 1 {
+		n = 1
+	}
+	return n
+}
 
 // generateSub builds one sub-table. Chain i starts at index i (distinct,
 // reproducible starts); endpoints are deduplicated (a merge keeps one chain) and
 // sorted so Lookup can binary-search.
-func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int, chain ChainComputer, done *atomic.Uint64) (subTable, error) {
+func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int, chain ChainComputer, gpuBatch int, done *atomic.Uint64) (subTable, error) {
 	type pair struct{ start, end uint64 }
 	starts := chains
 	if uint64(starts) > n {
@@ -254,13 +276,14 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 	// is not double-counted.
 	computed := false
 	if chain != nil {
+		chunk := gpuBatchSize(chainLen, gpuBatch)
 		computed = true
 		var counted uint64
 		for lo := 0; lo < starts; {
 			if err := ctx.Err(); err != nil {
 				return subTable{}, err
 			}
-			hi := lo + gpuChainChunk
+			hi := lo + chunk
 			if hi > starts {
 				hi = starts
 			}

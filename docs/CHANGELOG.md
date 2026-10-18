@@ -83,7 +83,12 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   bounded chunks so `--progress` advances *during* each sub-table instead of
   only at its 25% boundaries (and peak host memory per offload call is bounded);
   a chunk error still falls the whole sub-table back to the CPU walk, now
-  without double-counting progress.
+  without double-counting progress. Each offload call is also sized to a bounded
+  image-op budget (≈ `chains × ChainLen`) so a single GPU submission stays well
+  under the device's compute watchdog — a too-large dispatch otherwise trips a
+  "ring timeout" / "context lost" and the driver resets the queue (seen on
+  integrated GPUs). `--gpu-batch N` / `XCRACK_GPU_CHAIN_BATCH` overrides the
+  per-submission chain count when a device needs a smaller one.
 - **Thunder Tables usable by default + parallel lookup.** The shipped
   `thunder-gen` default chain length was `2^20`, which made a V1/R2 lookup cost
   ~`tables×t²/2 ≈ 2^41` RC4 image ops — *slower* than the `2^40` brute-force
