@@ -1,116 +1,26 @@
 package main
 
 import (
-	"os"
 	"time"
 
-	"gopkg.in/yaml.v3"
+	"github.com/rom/xcrack/pkg/jobspec"
 )
 
-// fileConfig mirrors the YAML config file. Pointers are used where the zero
-// value is meaningful, so "unset in config" is distinguishable from "set false".
-type fileConfig struct {
-	Concurrency struct {
-		Workers      int  `yaml:"workers"`
-		FileJobs     int  `yaml:"file_jobs"`
-		MaxProcs     int  `yaml:"max_procs"`
-		BatchSize    int  `yaml:"batch_size"`
-		Throttle     int  `yaml:"throttle"`
-		DualPipeline bool `yaml:"dual_pipeline"` // race the CPU search and the --gpu sweep over one shared keyspace per file
-	} `yaml:"concurrency"`
-	Limits struct {
-		MaxDepth      int   `yaml:"max_depth"`
-		MaxTotalBytes int64 `yaml:"max_total_bytes"`
-		MaxNodes      int   `yaml:"max_nodes"`
-		MaxEntrySize  int64 `yaml:"max_entry_size"`
-		MaxRatio      int   `yaml:"max_ratio"`
-		MaxCandidates int64 `yaml:"max_candidates"`
-	} `yaml:"limits"`
-	Recursion struct {
-		Recurse          *bool `yaml:"recurse"`
-		ExplodeDocuments bool  `yaml:"explode_documents"`
-	} `yaml:"recursion"`
-	Search struct {
-		Promote       *bool    `yaml:"promote_passwords"`
-		Context       bool     `yaml:"context_candidates"`
-		Hint          bool     `yaml:"hint_candidates"`
-		HintRules     []string `yaml:"hint_rules"`     // hashcat-style rule lines applied to hint-derived words
-		HybridAppend  []string `yaml:"hybrid_append"`  // masks appended to each wordlist word (dict+mask)
-		HybridPrepend []string `yaml:"hybrid_prepend"` // masks prepended to each wordlist word (mask+dict)
-		ToggleCase    bool     `yaml:"toggle_case"`    // case-toggle variants of each wordlist word
-		Prince        bool     `yaml:"prince"`         // PRINCE chains over the wordlists
-		KeyboardWalk  bool     `yaml:"keyboard_walk"`  // QWERTY keyboard-adjacency walks
-		Spray         bool     `yaml:"spray"`          // curated password-spraying set
-		SprayTokens   []string `yaml:"spray_tokens"`   // org/product/user tokens mangled into the spray set
-		Adaptive      bool     `yaml:"adaptive"`       // corpus-wide adaptive promotion across files
-		Shard         string   `yaml:"shard"`          // distributed cracking: this worker's shard, "I/N"
-		Markov        bool     `yaml:"markov"`         // Markov best-first generated guesses
-		Order         string   `yaml:"order"`          // reorder wordlist candidates: "markov" | "none"
-		CostQueue     bool     `yaml:"cost_queue"`     // triage many files weakest/fastest-attack-first
-	} `yaml:"search"`
-	Candidates struct {
-		Wordlists      []string `yaml:"wordlists"`
-		Passwords      []string `yaml:"passwords"`
-		Breach         []string `yaml:"breach"`           // frequency-annotated breach corpora
-		BreachMinCount int64    `yaml:"breach_min_count"` // drop breach entries below this prevalence
-		UseDefaultList *bool    `yaml:"use_default_list"`
-		Swedish        bool     `yaml:"swedish"` // also try the built-in Swedish-targeted wordlist
-	} `yaml:"candidates"`
-	Patterns struct {
-		Masks          []string          `yaml:"masks"`
-		Rules          []string          `yaml:"rules"`
-		CustomCharsets map[string]string `yaml:"custom_charsets"`
-		HCMask         []string          `yaml:"hcmask"` // hashcat .hcmask files (per-line masks)
-	} `yaml:"patterns"`
-	Output struct {
-		Format        string `yaml:"format"`
-		ResultsFile   string `yaml:"results_file"`
-		LogLevel      string `yaml:"log_level"`
-		LogFormat     string `yaml:"log_format"`         // "text" (default) or "json"
-		LogFile       string `yaml:"log_file"`           // append structured log/audit lines to this path
-		Syslog        bool   `yaml:"syslog"`             // send log/audit lines to the system logger
-		SyslogAddress string `yaml:"syslog_address"`     // remote syslog host:port ("" = local socket)
-		SyslogNetwork string `yaml:"syslog_network"`     // "udp"/"tcp" for a remote syslog ("" = local socket)
-		SyslogTag     string `yaml:"syslog_tag"`         // syslog tag/ident (default: program name)
-		AuditPassword bool   `yaml:"audit_log_password"` // include the recovered password in the audit log
-		ExtractSuffix string `yaml:"extract_suffix"`     // suffix for each source's extracted-tree dir under --out (default ".extracted")
-	} `yaml:"output"`
-	Budget struct {
-		PerFile string `yaml:"per_file"`
-		Total   string `yaml:"total"`
-	} `yaml:"budget"`
-	Cluster struct {
-		Servers       []clusterServer `yaml:"servers"`        // xcrackd endpoints to distribute across
-		Mode          string          `yaml:"mode"`           // "collective" | "partition"
-		Batch         int             `yaml:"batch"`          // candidates shipped per server request
-		AllowDefaults bool            `yaml:"allow_defaults"` // let each server also use its own default list
-		PerRequest    string          `yaml:"per_request"`    // per-request server deadline hint (e.g. 30s)
-		TLS           struct {
-			CA         string `yaml:"ca"`          // PEM CA bundle to verify the server cert (private CA / self-signed)
-			Cert       string `yaml:"cert"`        // client certificate (PEM) for mutual TLS
-			Key        string `yaml:"key"`         // private key (PEM) for cert
-			ServerName string `yaml:"server_name"` // expected server cert name (SNI / verification override)
-			Insecure   bool   `yaml:"insecure"`    // skip server verification (INSECURE — testing only)
-		} `yaml:"tls"`
-	} `yaml:"cluster"`
-}
+// fileConfig is the YAML config model. It is an alias of jobspec.Spec, the
+// single canonical schema shared by the CLI's --config, the embeddable library
+// and the xcrack-web advanced editor, so a capability expressible in the config
+// is reachable from every surface. The CLI resolves flag/env/config precedence
+// into these fields and then (where applicable) hands the result to the jobspec
+// assembler.
+type fileConfig = jobspec.Spec
 
 // clusterServer is one xcrackd endpoint in the config's cluster block.
-type clusterServer struct {
-	URL   string `yaml:"url"`
-	Group string `yaml:"group"`
-}
+type clusterServer = jobspec.ClusterServer
 
+// loadConfig reads and parses a YAML config file (leniently — unknown keys are
+// ignored, preserving the CLI's long-standing behaviour).
 func loadConfig(path string) (*fileConfig, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var c fileConfig
-	if err := yaml.Unmarshal(data, &c); err != nil {
-		return nil, err
-	}
-	return &c, nil
+	return jobspec.LoadFile(path)
 }
 
 func parseDuration(s string) (time.Duration, error) {
