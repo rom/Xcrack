@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/xcrack"
@@ -161,6 +162,12 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "spec: "+err.Error())
 		return
 	}
+	// Distributed cracking makes the server connect out to the configured
+	// xcrackd endpoints; only a trusted (local) instance may drive it.
+	if len(spec.Cluster.Servers) > 0 && !s.cfg.AllowServerPaths {
+		writeErr(w, http.StatusBadRequest, "distributed cracking (a cluster block) requires the server to be started with --allow-server-paths (trusted local instance)")
+		return
+	}
 	yamlOut, _ := spec.Marshal()
 
 	job.mu.Lock()
@@ -257,12 +264,22 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleStats reports aggregate counters across all jobs for the dashboard.
+// handleStats reports aggregate counters across all jobs for the dashboard,
+// plus per-format/algorithm throughput and a recovered-password top list.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	jobs := s.mgr.list()
 	var running, done int
 	var candidates int64
 	var decrypted, locked, files int
+
+	type algoAgg struct {
+		cand  int64
+		ms    int64
+		files int
+	}
+	algo := map[string]*algoAgg{}
+	pwCount := map[string]int{}
+
 	for _, j := range jobs {
 		switch j.State {
 		case StateRunning, StateQueued:
@@ -278,8 +295,59 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 			}
 			decrypted += countStatus(fr.Report.Root, "decrypted")
 			locked += countStatus(fr.Report.Root, "locked")
+			// Per-algorithm speed: attribute this file's candidate work and time to
+			// the encrypted scheme it exercised.
+			format := primaryFormat(fr.Report.Root)
+			a := algo[format]
+			if a == nil {
+				a = &algoAgg{}
+				algo[format] = a
+			}
+			a.cand += fr.Report.Stats.CandidatesTried
+			a.ms += fr.Report.Stats.ElapsedMS
+			a.files++
+			if s.cfg.ExposeSecrets {
+				for _, pw := range fr.Report.Passwords {
+					pwCount[pw]++
+				}
+			}
 		}
 	}
+
+	type algoSpeed struct {
+		Format     string  `json:"format"`
+		CandPerSec float64 `json:"candidates_per_sec"`
+		Candidates int64   `json:"candidates"`
+		Files      int     `json:"files"`
+	}
+	speeds := make([]algoSpeed, 0, len(algo))
+	for f, a := range algo {
+		rate := 0.0
+		if a.ms > 0 {
+			rate = float64(a.cand) / (float64(a.ms) / 1000)
+		}
+		speeds = append(speeds, algoSpeed{Format: f, CandPerSec: rate, Candidates: a.cand, Files: a.files})
+	}
+	sort.Slice(speeds, func(i, j int) bool { return speeds[i].CandPerSec > speeds[j].CandPerSec })
+
+	type pwEntry struct {
+		Password string `json:"password"`
+		Count    int    `json:"count"`
+	}
+	top := make([]pwEntry, 0, len(pwCount))
+	for pw, c := range pwCount {
+		top = append(top, pwEntry{Password: pw, Count: c})
+	}
+	sort.Slice(top, func(i, j int) bool {
+		if top[i].Count != top[j].Count {
+			return top[i].Count > top[j].Count
+		}
+		return top[i].Password < top[j].Password
+	})
+	if len(top) > 20 {
+		top = top[:20]
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
 		"jobs_total":       len(jobs),
 		"jobs_active":      running,
@@ -288,7 +356,28 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		"files_processed":  files,
 		"nodes_decrypted":  decrypted,
 		"nodes_locked":     locked,
+		"algo_speed":       speeds,
+		"top_passwords":    top,
+		"expose_secrets":   s.cfg.ExposeSecrets,
 	})
+}
+
+// primaryFormat returns the format of the first encrypted node in a report
+// subtree (the scheme actually attacked), falling back to the root format, or
+// "unknown".
+func primaryFormat(n xcrack.NodeReport) string {
+	if n.WasEncrypted && n.Format != "" {
+		return n.Format
+	}
+	for _, c := range n.Children {
+		if f := primaryFormat(c); f != "" && f != "unknown" {
+			return f
+		}
+	}
+	if n.Format != "" {
+		return n.Format
+	}
+	return "unknown"
 }
 
 func (s *Server) handleListDocs(w http.ResponseWriter, r *http.Request) {
