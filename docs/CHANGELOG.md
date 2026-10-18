@@ -15,6 +15,18 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI, expanded.** `xcrack-web` gains: a dedicated **Configuration** view
+  holding the YAML editor (with a "run from this YAML" toggle) and an
+  **Appearance** theme picker (System / Light / Dark / Glow / Gold / Autumn /
+  Spring, remembered per browser); an **Advanced** Crack form exposing the full
+  engine surface in grouped panels, including a **Distributed cracking** panel
+  that fans the search out to `xcrackd` servers via `cluster.Run` (gated to
+  `--allow-server-paths`); **hover tooltips** on every setting; a client-side
+  **wordlist preview**; a live **job panel** (start timestamp, elapsed clock,
+  determinate/indeterminate progress bar, latest term tested, throughput); and
+  **Statistics** additions — per-algorithm/cipher speed and a recovered-password
+  top list. (`/stats` now reports `algo_speed` and `top_passwords`; progress
+  events carry the keyspace and latest candidate.)
 - **`thunder-gen --progress`.** The one-time Thunder Table build can now report
   periodic progress: `--progress N%` (N = 1, 5, 10, 25) prints each time that
   fraction of the planned chains is reached, or `--progress N<hour|day>` prints

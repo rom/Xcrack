@@ -939,39 +939,74 @@ with `--docs-dir`.
 | `--tls-cert` / `--tls-key` | serve HTTPS (see [5. Distributed environments](#5-distributed-environments) for the cert scripts) |
 | `--tls-client-ca` | require client certificates (mutual TLS) |
 
-### 10.2 Easy mode and advanced mode
+### 10.2 Easy mode, advanced mode and the Configuration view
 
 - **Easy mode** (default) is a guided form: drop the locked file(s), pick a
   wordlist, tick the candidate sources and generators (masks, rules, Markov,
   PRINCE, toggle-case, keyboard-walk, name/sibling context, embedded hint), and
   press **Run**.
-- **Advanced mode** (the toggle in the header) reveals every engine knob —
-  concurrency, limits, time budgets, the GPU tier — and an **IDE-style editor**
-  for the job's YAML configuration, with line numbers and syntax highlighting.
-  **Validate** checks the document, **Format** tidies it, and **↤ From form**
-  regenerates it from the easy-mode fields so you can start simple and then
-  fine-tune the YAML by hand. The schema is exactly the one in
-  [`config/README.md`](../config/README.md).
+- **Advanced mode** (the toggle in the header) expands the Crack form with the
+  full engine surface in grouped, collapsible panels: concurrency &
+  acceleration, search behaviour, generators & ordering (Markov/PCFG, order,
+  increment, hybrid, combinator, hint-rules), candidate lists (spray, breach,
+  password files, length, encoding, Swedish), patterns (custom charsets ?1–?4,
+  .hcmask, generate-rules), limits & budget, recursion/input/output (force-
+  format, output format, the TPM-sealed cache), **Distributed cracking**, and an
+  auxiliary-file uploader.
+- **Configuration view** (its own tab) holds the **IDE-style YAML editor** for
+  the job configuration — line numbers, syntax highlighting, **Validate**,
+  **Format**, and **↤ From form** (fill the editor from the Crack form). Tick
+  *Run from the YAML below* to use the document verbatim instead of the form.
+  The schema is exactly the one in [`config/README.md`](../config/README.md).
+  This view also has the **Appearance** theme picker (see §10.6).
 
-### 10.3 Running a job
+Every setting carries a **hover tooltip** explaining what it does (e.g. what a
+Markov generator is, or that "max candidates 0" means unlimited).
 
-Progress streams live: the candidate counter, the per-file "done" ticks, the
-engine log, and each recovered password appear as the search proceeds (over
-Server-Sent Events, so nothing is polled). When a file is unlocked its decrypted
-contents can be **downloaded** as a zip of the extracted tree.
+### 10.3 Distributed cracking from the GUI
 
-### 10.4 Statistics
+The **Distributed cracking** panel (advanced mode) fans the search out to a
+fleet of `xcrackd` servers instead of cracking locally: list the server URLs
+(append `@group` for partition groups), pick collective or partition mode, set
+the batch size / per-request deadline, and configure TLS (CA, client cert for
+mutual TLS, SNI, insecure toggle). Because this makes the server connect out to
+the configured endpoints, it is only honoured when `xcrack-web` was started with
+`--allow-server-paths` (a trusted, local instance); otherwise the job is
+rejected. Passwords are recovered on the servers; decrypted content stays there,
+so a distributed run reports passwords without a local download.
 
-The **Statistics** tab charts live candidate throughput for the running job and
-shows the aggregate counters across jobs — files processed, candidates tried,
-and the decrypted-vs-locked breakdown.
+### 10.4 Running a job
 
-### 10.5 Documentation in the app
+Progress streams live over Server-Sent Events (nothing is polled). The running
+job shows the **start timestamp**, a ticking **elapsed** clock, a **progress
+bar** (a true percentage against the keyspace for a single finite-keyspace
+target, otherwise an indeterminate sweep), the **latest candidate/term** being
+tested, live throughput, the engine log, and each recovered password as it is
+found. When a file is unlocked its decrypted contents can be **downloaded** as a
+zip of the extracted tree.
 
+**Previewing a wordlist:** next to each uploaded wordlist (or auxiliary file) a
+**Preview** button shows the first lines of the `.txt` in a dialog, so you can
+check a list before launching the run.
+
+### 10.5 Statistics
+
+The **Statistics** tab shows the aggregate counters across jobs (files
+processed, candidates tried, decrypted vs. still-locked), a live candidate-
+throughput chart for the running job, a **speed-by-algorithm/cipher** table
+(per-format candidate throughput measured from finished jobs), and a **top
+recovered passwords** list (most frequently recovered, when the server exposes
+secrets).
+
+### 10.6 Appearance (themes) and in-app documentation
+
+The **Configuration** tab's Appearance picker offers six themes plus System
+(which follows your OS light/dark setting): **Light**, **Dark**, **Glow**,
+**Gold**, **Autumn** and **Spring**. The choice is remembered in the browser.
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
 
-### 10.6 Security
+### 10.7 Security
 
 `xcrack-web` ships no authentication and, bound to localhost (the default), is a
 single-user console; exposing it on a network needs a proxy and TLS. Its
