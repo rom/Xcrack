@@ -152,6 +152,36 @@ func TestThunderTableNoFalsePositive(t *testing.T) {
 	}
 }
 
+// TestGenerateTableProgress checks the Progress callback is invoked and reaches
+// the full planned chain count by the end of generation.
+func TestGenerateTableProgress(t *testing.T) {
+	var calls int
+	var maxDone, gotTotal uint64
+	_, err := GenerateTable(context.Background(), TableParams{
+		KeyspaceBits: 12, ChainLen: 16, Chains: 256, Tables: 2,
+		Progress: func(done, total uint64) {
+			calls++
+			if done > maxDone {
+				maxDone = done
+			}
+			gotTotal = total
+		},
+	})
+	if err != nil {
+		t.Fatalf("GenerateTable: %v", err)
+	}
+	if calls == 0 {
+		t.Fatal("Progress was never called")
+	}
+	const want = uint64(2 * 256) // Tables * Chains
+	if gotTotal != want {
+		t.Fatalf("Progress total = %d, want %d", gotTotal, want)
+	}
+	if maxDone != want {
+		t.Fatalf("final Progress done = %d, want %d (all chains)", maxDone, want)
+	}
+}
+
 // TestReadTableRejectsGarbage checks the loader rejects a non-table stream.
 func TestReadTableRejectsGarbage(t *testing.T) {
 	if _, err := ReadTable(bytes.NewReader([]byte("not a thunder table at all"))); err != ErrBadTable {

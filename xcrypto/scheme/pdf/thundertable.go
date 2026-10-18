@@ -68,6 +68,13 @@ type TableParams struct {
 	// GenerateTable falls back to the CPU walk if it returns an error or a
 	// short/empty result, so correctness never depends on the offload.
 	Chain ChainComputer
+	// Progress, when non-nil, is called periodically during generation with the
+	// number of chains completed and the total planned, so a caller can report
+	// progress and an ETA. It is invoked from a single background goroutine
+	// (never concurrently) at roughly twice a second, plus once when generation
+	// finishes; the caller decides how often to actually surface an update. It
+	// must be cheap and must not block.
+	Progress func(done, total uint64)
 }
 
 // ChainComputer computes rainbow-chain endpoints for the R2 key space: for each
@@ -170,13 +177,49 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 	if workers <= 0 {
 		workers = runtime.GOMAXPROCS(0)
 	}
+
+	// Progress accounting: a shared chains-done counter the workers advance, read
+	// ~twice a second by a background reporter that forwards to p.Progress. The
+	// caller throttles the actual output; here we only report the raw counts.
+	perSub := uint64(p.Chains)
+	if perSub > n {
+		perSub = n
+	}
+	total := uint64(p.Tables) * perSub
+	var done atomic.Uint64
+	var doneCtr *atomic.Uint64
+	if p.Progress != nil {
+		doneCtr = &done
+		reportCtx, stopReport := context.WithCancel(ctx)
+		var reportWG sync.WaitGroup
+		reportWG.Add(1)
+		go func() {
+			defer reportWG.Done()
+			tk := time.NewTicker(500 * time.Millisecond)
+			defer tk.Stop()
+			for {
+				select {
+				case <-reportCtx.Done():
+					return
+				case <-tk.C:
+					p.Progress(done.Load(), total)
+				}
+			}
+		}()
+		defer func() {
+			stopReport()
+			reportWG.Wait()
+			p.Progress(done.Load(), total) // final count
+		}()
+	}
+
 	t := &Table{n: n, chainLen: p.ChainLen, subs: make([]subTable, p.Tables)}
 	for s := 0; s < p.Tables; s++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		seed := uint64(s) * 0x9E3779B97F4A7C15 // golden-ratio stride per sub-table
-		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain)
+		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain, doneCtr)
 		if err != nil {
 			return nil, err
 		}
@@ -188,7 +231,7 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 // generateSub builds one sub-table. Chain i starts at index i (distinct,
 // reproducible starts); endpoints are deduplicated (a merge keeps one chain) and
 // sorted so Lookup can binary-search.
-func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int, chain ChainComputer) (subTable, error) {
+func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint64, workers int, chain ChainComputer, done *atomic.Uint64) (subTable, error) {
 	type pair struct{ start, end uint64 }
 	starts := chains
 	if uint64(starts) > n {
@@ -203,6 +246,9 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 		if ends, err := chain(n, chainLen, seed, 0, uint64(starts)); err == nil && len(ends) == starts {
 			for i := range ends {
 				out[i] = pair{start: uint64(i), end: ends[i]}
+			}
+			if done != nil {
+				done.Add(uint64(starts))
 			}
 			computed = true
 		}
@@ -233,6 +279,17 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 			wg.Add(1)
 			go func(lo, hi int) {
 				defer wg.Done()
+				// Count chains locally and flush to the shared counter in batches to
+				// keep progress accounting off the per-chain hot path.
+				const flushEvery = 1024
+				local := 0
+				flush := func() {
+					if done != nil && local > 0 {
+						done.Add(uint64(local))
+						local = 0
+					}
+				}
+				defer flush()
 				for i := lo; i < hi; i++ {
 					if i%checkEvery == 0 && ctx.Err() != nil {
 						cancelled.Do(func() { cerr = ctx.Err() })
@@ -243,6 +300,9 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 						k = reduce(r2Image(k), col, seed, n)
 					}
 					out[i] = pair{start: uint64(i), end: k}
+					if local++; local >= flushEvery {
+						flush()
+					}
 				}
 			}(lo, hi)
 		}
