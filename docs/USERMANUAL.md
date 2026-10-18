@@ -21,6 +21,7 @@ for the vocabulary see [`TERMINOLOGY.md`](TERMINOLOGY.md); for quick answers see
 8. [Logging and the audit trail](#8-logging-and-the-audit-trail)
 9. [Debugging and troubleshooting](#9-debugging-and-troubleshooting)
 10. [Web GUI (xcrack-web)](#10-web-gui-xcrack-web)
+11. [Security](#11-security)
 
 ---
 
@@ -162,7 +163,7 @@ xcrack <subcommand> …       a focused tool (below)
 | `export-challenge` | export an encrypted target as a portable challenge envelope |
 | `office-keyattack` | sweep the 40-bit RC4 key of a legacy `.doc/.xls/.ppt` (`--gpu`, `--shard`) |
 | `pdf-keyattack` | sweep the 40-bit RC4 key of a PDF V1/R2 (`--gpu`, `--table`, `--shard`) |
-| `thunder-gen` | build a precomputed "Thunder Table" (rainbow TMTO) for PDF R2 (`--gpu`) |
+| `thunder-gen` | build a precomputed "Thunder Table" (rainbow TMTO) for PDF R2 (`--gpu`; `--progress N%` or `N<hour\|day>` for periodic progress) |
 | `access-recover` | recover/strip an MS Access database password |
 | `vba-recover` | recover an Office VBA project password |
 | `wordlist` | wordlist utilities (dedupe, sort, length filter, …) |
@@ -970,7 +971,122 @@ and the decrypted-vs-locked breakdown.
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
 
-### 10.6 Encrypting the found-password cache (TPM)
+### 10.6 Security
+
+`xcrack-web` ships no authentication and, bound to localhost (the default), is a
+single-user console; exposing it on a network needs a proxy and TLS. Its
+security model, how to enable TLS, and the TPM-sealed cache are covered in
+[11. Security](#11-security) — see [§11.4](#114-the-web-gui-xcrack-web),
+[§11.5](#115-enabling-tls) and [§11.6](#116-encrypting-the-found-password-cache-tpm).
+
+---
+
+## 11. Security
+
+Xcrack recovers access to files you are authorized to access. This chapter
+describes what it defends against, the security of each delivery form, how to
+enable TLS, and how to seal the found-password cache to a TPM.
+
+### 11.1 Threat model
+
+**What Xcrack is.** A defensive / recovery tool that takes an untrusted,
+possibly hostile input file and a set of password candidates and produces a
+verified tree of decrypted content. The two things it handles are therefore
+both sensitive: the **input files** (attacker-controlled bytes fed to parsers)
+and the **recovered secrets** (passwords, keys, decrypted content).
+
+**Hostile input is the primary adversary.** Every format parser treats its
+input as hostile: container decomposition is bounded (depth, node count,
+cumulative and per-entry size, decompression ratio — see `limits:`) to defuse
+zip-bombs and quadratic blow-ups, parsers are fuzzed with committed crashers
+replayed on every CI run, and large inputs stream to disk rather than being held
+in memory. A malformed or malicious file should be rejected or safely bounded,
+never crash the process or exhaust the host.
+
+**Correctness is adversarial too.** Every cryptographic scheme is cross-checked
+against an external oracle, and every GPU/table "hit" is re-verified by the
+format's own CPU verifier before it is reported — so an accelerator bug or a
+crafted table can never cause a false positive.
+
+**What Xcrack does *not* defend against.** It is not a sandbox: run it on inputs
+you are authorized to process, as a user with no more privilege than the task
+needs. It does not protect recovered secrets once you have asked for them — a
+results file, an audit log with `--audit-log-password`, or an on-screen password
+is yours to protect. The network services (`xcrackd`, `xcrack-web`) **ship no
+authentication or authorization**; that is the operator's responsibility (below).
+Side-channel resistance (timing, power) of the cracking primitives is out of
+scope — Xcrack attacks crypto, it is not a constant-time secrets vault.
+
+### 11.2 The CLI (`xcrack`) and the library
+
+`xcrack` runs locally with the privileges of the user who invokes it; there is
+no network surface. Keep secrets off the command line (visible to `ps`): prefer
+`--password-file`, `--password-env`, or the found-password cache over `-p`. The
+audit trail is secrets-free by default — the recovered password is recorded only
+with `--audit-log-password` (see [8. Logging](#8-logging-and-the-audit-trail)).
+Output written with `-o` is guarded against path traversal (a malicious entry
+name cannot escape the output directory). The embeddable library (`pkg/xcrack`)
+has the same posture: an embedder chooses whether `OnFound`/the result tree —
+which carry recovered passwords — cross a trust boundary, and applies its own
+access control if so.
+
+### 11.3 The HTTP service (`xcrackd`)
+
+`xcrackd` is a hardened, headless backend meant to run on a trusted host and be
+called by a thin client. It **ships no authentication**, holds no state beyond
+the shared engine pool, and must never be exposed directly to an untrusted
+network. In front of it, place authentication/authorization (a reverse proxy, a
+mesh, mutual TLS) and transport security. Request bodies are bounded
+(`--max-body`) and handed to the same hostile-input-safe parsers as the CLI;
+per-request deadlines bound processing. Recovered passwords appear in responses
+and are logged only when the operator opts in (`--audit-log-password`). It can
+terminate TLS itself (next section) or sit behind a TLS-terminating proxy.
+
+### 11.4 The web GUI (`xcrack-web`)
+
+`xcrack-web` has the same "no built-in auth" posture as `xcrackd`. Bound to
+localhost (the default `127.0.0.1:8899`) it is a single-user console on your own
+machine. If you bind a non-localhost address it warns on startup, because it is
+then reachable by others with no authentication: put it behind an authenticating
+reverse proxy and enable TLS, and pass `--expose-secrets=false` so recovered
+passwords do not appear in the shared UI or event stream.
+
+A submitted job may reference **only the files uploaded with it**: every
+file-path field in the job spec is resolved within that job's upload area and
+anything absolute or traversing is rejected. `--allow-server-paths` relaxes this
+to allow server-side paths and is for a trusted, local single-user instance
+only. Output destinations named in a spec are ignored — the backend chooses
+where results are written. Uploads are bounded by `--max-upload`.
+
+### 11.5 Enabling TLS
+
+Both network binaries terminate TLS the same way. First generate a certificate:
+
+```sh
+# self-signed (and, with -c, a full mutual-TLS kit: server + client + CA):
+scripts/gen-selfsigned-cert.sh -o tls -d crack.internal
+# or a real certificate for a public name via Let's Encrypt / ACME:
+scripts/gen-letsencrypt-cert.sh -d crack.example.net -m you@example.net -o tls
+```
+
+Then serve HTTPS:
+
+```sh
+# xcrackd:
+bin/xcrackd --addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key
+# xcrack-web:
+bin/xcrack-web --addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key
+```
+
+Add `--tls-client-ca tls/ca.crt` to require and verify client certificates
+(mutual TLS), and `--tls-min-version 1.3` to raise the floor from the TLS 1.2
+default. The `xcrack` distributed client trusts a private server cert with
+`--tls-ca` and presents its own cert with `--tls-cert`/`--tls-key`; see
+[5. Distributed environments](#5-distributed-environments) for a fleet example.
+Enabling the binary's own TLS is independent of any outer proxy — use whichever
+fits your deployment, but never expose plaintext on an untrusted network.
+
+### 11.6 Encrypting the found-password cache (TPM)
 
 The found-password cache (the "potfile": passwords recovered on earlier runs,
 tried first on later ones — `--found-cache`/`--remember`/`--potfile`) can be
@@ -991,20 +1107,11 @@ output:
 
 How it works: the cache is encrypted with AES-256-GCM under a random
 data-encryption key, and that key is TPM-sealed under a storage primary unique
-to the machine's TPM. A cache file that is copied to another host — or
-tampered with — fails to unseal/authenticate and is rejected (the run aborts
-rather than silently discarding your cache). TPM support is compiled in only
-with `-tags tpm`; the default pure-Go build reports a clear error if you ask for
-it, so you are never left believing the cache is protected when it is not. A
+to the machine's TPM. A cache file copied to another host — or tampered with —
+fails to unseal/authenticate and is rejected (the run aborts rather than
+silently discarding your cache). TPM support is compiled in only with
+`-tags tpm`; the default pure-Go build reports a clear error if you ask for it,
+so you are never left believing the cache is protected when it is not. A
 plaintext cache remains the default and is unchanged.
 
-### 10.7 Security posture
-
-Like `xcrackd`, `xcrack-web` ships **no authentication**. Bound to localhost
-(the default) it is a single-user console on your own machine. If you expose it
-on a network, put it behind an authenticating reverse proxy and enable TLS
-(`--tls-cert`/`--tls-key`), and consider `--expose-secrets=false` so recovered
-passwords do not appear in the shared UI. By default a submitted job may read
-only the files uploaded with it; `--allow-server-paths` relaxes that for a
-trusted local instance only. Operate only on files you own or are permitted to
-access.
+> Authorized use only: operate on files you own or are permitted to access.

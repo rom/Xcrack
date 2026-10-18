@@ -15,6 +15,16 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **`thunder-gen --progress`.** The one-time Thunder Table build can now report
+  periodic progress: `--progress N%` (N = 1, 5, 10, 25) prints each time that
+  fraction of the planned chains is reached, or `--progress N<hour|day>` prints
+  on that wall-clock cadence. Each line shows percent, chains done/total,
+  elapsed and an ETA (`pdf.TableParams` gains a `Progress` callback). Both the
+  CPU and `--gpu` paths are covered; generation speed is unaffected.
+- **Security chapter in the user manual.** `docs/USERMANUAL.md` gains a dedicated
+  Security chapter: the threat model, the security posture of `xcrack`,
+  `xcrackd` and `xcrack-web`, how to enable TLS, and the TPM-sealed cache
+  (moved from the web-GUI chapter).
 - **Web GUI (`xcrack-web`).** A new single binary serves a browser front-end to
   the engine plus a JSON/SSE API (`pkg/webui`): drag-and-drop uploads, an
   easy-mode form and an **advanced mode** with an IDE-style YAML configuration
