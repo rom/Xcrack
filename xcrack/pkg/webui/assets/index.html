@@ -16,11 +16,10 @@
     <button data-tab="crack" class="active">Crack</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
+    <button data-tab="config">Configuration</button>
   </nav>
   <div class="spacer"></div>
-  <label class="modeswitch" title="Reveal every engine option and the YAML editor">
-    <input type="checkbox" id="advanced"> Advanced mode
-  </label>
+  <label class="modeswitch" title="Reveal every engine option in the Crack form"><input type="checkbox" id="advanced"> Advanced</label>
   <span id="meta-badges"></span>
 </header>
 
@@ -28,7 +27,7 @@
   <!-- CRACK ------------------------------------------------------------- -->
   <section id="tab-crack" class="tab active">
     <div class="grid">
-      <div class="card" id="easy-panel">
+      <div class="card">
         <h2>1 · Choose files</h2>
         <div id="dropzone" class="dropzone">
           <input type="file" id="files" multiple hidden>
@@ -38,22 +37,10 @@
 
         <h2>2 · Candidate sources</h2>
         <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
-        <div class="field">
-          <label>Explicit guesses (one per line, tried first)</label>
-          <textarea id="passwords" rows="2" placeholder="hunter2"></textarea>
-        </div>
-        <div class="field">
-          <label>Wordlists <small>(uploaded with the job)</small></label>
-          <input type="file" id="wordlists" multiple>
-        </div>
-        <div class="field">
-          <label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label>
-          <textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea>
-        </div>
-        <div class="field">
-          <label>Mangling rules <small>(hashcat syntax, one per line)</small></label>
-          <textarea id="rules" rows="2" placeholder="c&#10;$1"></textarea>
-        </div>
+        <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
+        <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
+        <div class="field"><label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label><textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea></div>
+        <div class="field"><label>Mangling rules <small>(hashcat syntax, one per line)</small></label><textarea id="rules" rows="2" placeholder="c&#10;$1"></textarea></div>
         <fieldset class="generators">
           <legend>Generators</legend>
           <label><input type="checkbox" id="markov"> Markov</label>
@@ -63,29 +50,133 @@
           <label><input type="checkbox" id="context"> Name / sibling context</label>
           <label><input type="checkbox" id="hint"> Embedded hint</label>
         </fieldset>
-
-        <div class="adv-only">
-          <h2>3 · Advanced</h2>
-          <div class="row">
-            <div class="field"><label>Workers <small>(0 = per CPU)</small></label><input type="number" id="workers" min="0" value="0"></div>
-            <div class="field"><label>Per-file budget</label><input type="text" id="per_file" placeholder="30s"></div>
-            <div class="field"><label>Max candidates / node</label><input type="number" id="max_candidates" min="0" value="0"></div>
-          </div>
-          <div class="field"><label><input type="checkbox" id="gpu"> Use GPU tier (if available)</label></div>
-          <div class="field"><label><input type="checkbox" id="dual_pipeline"> Dual CPU+GPU pipeline</label></div>
-        </div>
       </div>
 
-      <div class="card adv-only" id="yaml-panel">
-        <h2>Configuration (YAML)</h2>
-        <p class="hint">The exact schema the <code>xcrack --config</code> CLI accepts. Edited here it overrides the form on the left.</p>
-        <div class="editor-toolbar">
-          <button type="button" id="yaml-validate">Validate</button>
-          <button type="button" id="yaml-format">Format</button>
-          <button type="button" id="yaml-from-form">↤ From form</button>
-          <span id="yaml-status"></span>
-        </div>
-        <div id="editor-host"><textarea id="yaml" spellcheck="false" rows="24"></textarea></div>
+      <!-- Advanced knobs -->
+      <div class="card adv-only">
+        <h2>Advanced settings</h2>
+
+        <details open><summary>Concurrency &amp; acceleration</summary>
+          <div class="row">
+            <div class="field"><label>Workers <small>(0=auto)</small></label><input type="number" id="workers" min="0" value="0"></div>
+            <div class="field"><label>File jobs</label><input type="number" id="file_jobs" min="0" value="0"></div>
+            <div class="field"><label>Max procs</label><input type="number" id="max_procs" min="0" value="0"></div>
+            <div class="field"><label>Batch size</label><input type="number" id="batch_size" min="0" value="0"></div>
+            <div class="field"><label>Throttle %</label><input type="number" id="throttle" min="0" max="100" value="0"></div>
+          </div>
+          <label><input type="checkbox" id="gpu"> GPU tier (if available)</label>
+          <label><input type="checkbox" id="dual_pipeline"> Dual CPU+GPU pipeline</label>
+        </details>
+
+        <details><summary>Search behaviour</summary>
+          <label><input type="checkbox" id="adaptive"> Adaptive (reuse found passwords across files)</label>
+          <label><input type="checkbox" id="cost_queue"> Cost queue (weakest/fastest first)</label>
+          <label><input type="checkbox" id="find_all"> Find-all (keep searching every node)</label>
+          <label><input type="checkbox" id="loopback"> Loopback (re-mangle cached passwords)</label>
+        </details>
+
+        <details><summary>Generators &amp; ordering</summary>
+          <label><input type="checkbox" id="markov_pos"> Position-aware Markov</label>
+          <div class="row">
+            <div class="field"><label>Markov max</label><input type="number" id="markov_max" min="0" value="0"></div>
+            <div class="field"><label>Markov threshold</label><input type="number" id="markov_threshold" min="0" value="0"></div>
+          </div>
+          <label><input type="checkbox" id="pcfg"> PCFG generation</label>
+          <div class="field"><label>PCFG max</label><input type="number" id="pcfg_max" min="0" value="0"></div>
+          <div class="row">
+            <div class="field"><label>Order</label><select id="order"><option value="">none</option><option value="markov">markov</option></select></div>
+            <div class="field"><label>Order max</label><input type="number" id="order_max" min="0" value="0"></div>
+            <div class="field"><label>Increment <small>MIN:MAX</small></label><input type="text" id="increment" placeholder="1:8"></div>
+          </div>
+          <div class="field"><label>Hybrid append masks <small>(one per line)</small></label><textarea id="hybrid_append" rows="2"></textarea></div>
+          <div class="field"><label>Hybrid prepend masks</label><textarea id="hybrid_prepend" rows="2"></textarea></div>
+          <div class="row">
+            <div class="field"><label>Combinator left <small>(aux name)</small></label><input type="text" id="comb_left"></div>
+            <div class="field"><label>Combinator right</label><input type="text" id="comb_right"></div>
+            <div class="field"><label>Separator</label><input type="text" id="comb_sep"></div>
+          </div>
+          <div class="field"><label>Hint rules <small>(one per line)</small></label><textarea id="hint_rules" rows="2"></textarea></div>
+        </details>
+
+        <details><summary>Candidates &amp; lists</summary>
+          <label><input type="checkbox" id="swedish"> Swedish-targeted list</label>
+          <label><input type="checkbox" id="spray"> Spray set</label>
+          <div class="field"><label>Spray tokens <small>(comma-separated)</small></label><input type="text" id="spray_tokens" placeholder="acme,2024"></div>
+          <div class="field"><label>Spray years <small>(comma-separated)</small></label><input type="text" id="spray_years" placeholder="2023,2024"></div>
+          <div class="row">
+            <div class="field"><label>Min length</label><input type="number" id="min_length" min="0" value="0"></div>
+            <div class="field"><label>Max length</label><input type="number" id="max_length" min="0" value="0"></div>
+            <div class="field"><label>Encoding</label><select id="encoding"><option value="">utf-8</option><option>latin1</option><option>utf-16le</option><option>utf-16be</option></select></div>
+          </div>
+          <div class="field"><label>Breach corpora <small>(aux names, one per line)</small></label><textarea id="breach" rows="2"></textarea></div>
+          <div class="field"><label>Password files <small>(aux names, one per line)</small></label><textarea id="password_files" rows="2"></textarea></div>
+        </details>
+
+        <details><summary>Patterns</summary>
+          <div class="row">
+            <div class="field"><label>?1</label><input type="text" id="cc1" placeholder="?l?d"></div>
+            <div class="field"><label>?2</label><input type="text" id="cc2"></div>
+            <div class="field"><label>?3</label><input type="text" id="cc3"></div>
+            <div class="field"><label>?4</label><input type="text" id="cc4"></div>
+          </div>
+          <div class="field"><label>.hcmask files <small>(aux names, one per line)</small></label><textarea id="hcmask" rows="2"></textarea></div>
+          <div class="row">
+            <div class="field"><label>Generate rules (N)</label><input type="number" id="generate_rules" min="0" value="0"></div>
+            <div class="field"><label>Seed</label><input type="number" id="generate_rules_seed" value="0"></div>
+          </div>
+        </details>
+
+        <details><summary>Limits &amp; budget</summary>
+          <div class="row">
+            <div class="field"><label>Max depth</label><input type="number" id="max_depth" min="0" value="0"></div>
+            <div class="field"><label>Max nodes</label><input type="number" id="max_nodes" min="0" value="0"></div>
+            <div class="field"><label>Max ratio</label><input type="number" id="max_ratio" min="0" value="0"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Max total bytes</label><input type="number" id="max_total_bytes" min="0" value="0"></div>
+            <div class="field"><label>Max entry size</label><input type="number" id="max_entry_size" min="0" value="0"></div>
+            <div class="field"><label>Max candidates/node</label><input type="number" id="max_candidates" min="0" value="0"></div>
+          </div>
+          <div class="row">
+            <div class="field"><label>Per-file budget</label><input type="text" id="per_file" placeholder="30s"></div>
+            <div class="field"><label>Total budget</label><input type="text" id="total" placeholder="10m"></div>
+          </div>
+        </details>
+
+        <details><summary>Recursion, input &amp; output</summary>
+          <label><input type="checkbox" id="recurse" checked> Recurse into containers</label>
+          <label><input type="checkbox" id="explode_documents"> Explode documents into parts</label>
+          <div class="row">
+            <div class="field"><label>Force format</label><select id="as"><option value="">auto</option><option>sqlcipher</option><option>vba</option></select></div>
+            <div class="field"><label>Output format</label><select id="format"><option value="">text</option><option>json</option><option>jsonl</option></select></div>
+          </div>
+          <label><input type="checkbox" id="audit_log_password"> Log recovered password in the audit trail</label>
+          <div class="field"><label>Found-cache encryption</label><select id="cache_encryption"><option value="">none</option><option value="tpm">tpm (sealed to host TPM)</option></select></div>
+        </details>
+
+        <details id="dist-panel"><summary>Distributed cracking</summary>
+          <p class="hint">Fan the search out to <code>xcrackd</code> servers. Requires the server to run with <code>--allow-server-paths</code>.</p>
+          <div class="field"><label>Servers <small>(URL or URL@GROUP, one per line)</small></label><textarea id="servers" rows="2" placeholder="https://node1:8443&#10;https://node2:8443@gpu"></textarea></div>
+          <div class="row">
+            <div class="field"><label>Mode</label><select id="cluster_mode"><option value="">collective</option><option>partition</option></select></div>
+            <div class="field"><label>Batch</label><input type="number" id="cluster_batch" min="0" value="0"></div>
+            <div class="field"><label>Per-request</label><input type="text" id="cluster_per_request" placeholder="30s"></div>
+          </div>
+          <label><input type="checkbox" id="cluster_allow_defaults"> Let each server use its own default list</label>
+          <div class="row">
+            <div class="field"><label>TLS CA</label><input type="text" id="tls_ca" placeholder="ca.crt"></div>
+            <div class="field"><label>Client cert</label><input type="text" id="tls_cert"></div>
+            <div class="field"><label>Client key</label><input type="text" id="tls_key"></div>
+            <div class="field"><label>Server name</label><input type="text" id="tls_server_name"></div>
+          </div>
+          <label><input type="checkbox" id="tls_insecure"> Skip server cert verification (INSECURE)</label>
+        </details>
+
+        <details><summary>Auxiliary files</summary>
+          <p class="hint">Upload wordlists, breach corpora, combinator / .hcmask / password-file inputs here, then reference them by file name in the fields above.</p>
+          <input type="file" id="aux" multiple>
+          <ul id="auxlist" class="filepreview"></ul>
+        </details>
       </div>
     </div>
 
@@ -93,10 +184,18 @@
       <button id="run" class="primary">▶ Run</button>
       <button id="cancel" disabled>■ Cancel</button>
       <span id="run-status"></span>
+      <span id="run-source"></span>
     </div>
 
     <div class="card" id="results-card" hidden>
-      <h2>Results</h2>
+      <div class="jobhead">
+        <div><span class="k">Started</span> <span id="job-started">—</span></div>
+        <div><span class="k">Elapsed</span> <span id="job-elapsed">—</span></div>
+      </div>
+      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
+      <div id="progress-text" class="progress-text">—</div>
+      <div id="latest-term" class="latest"></div>
+      <h3>Results</h3>
       <div id="results"></div>
       <h3>Live log</h3>
       <pre id="log" class="log"></pre>
@@ -106,9 +205,10 @@
   <!-- STATISTICS -------------------------------------------------------- -->
   <section id="tab-stats" class="tab">
     <div class="grid stats-grid" id="stat-cards"></div>
-    <div class="card">
-      <h2>Current run</h2>
-      <div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput and the decrypted/locked breakdown.</p></div>
+    <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
+    <div class="grid">
+      <div class="card"><h2>Speed by algorithm / cipher</h2><div id="algo-speed"><p class="hint">Per-format candidate throughput from finished jobs.</p></div></div>
+      <div class="card"><h2>Top recovered passwords</h2><div id="top-pw"><p class="hint">Most frequently recovered passwords across jobs.</p></div></div>
     </div>
   </section>
 
@@ -119,7 +219,51 @@
       <div class="card"><div id="docview" class="doc">Select a document.</div></div>
     </div>
   </section>
+
+  <!-- CONFIGURATION ----------------------------------------------------- -->
+  <section id="tab-config" class="tab">
+    <div class="grid">
+      <div class="card">
+        <h2>Appearance</h2>
+        <div class="field">
+          <label>Theme</label>
+          <select id="theme">
+            <option value="">System</option>
+            <option value="light">Light</option>
+            <option value="dark">Dark</option>
+            <option value="glow">Glow</option>
+            <option value="gold">Gold</option>
+            <option value="autumn">Autumn</option>
+            <option value="spring">Spring</option>
+          </select>
+        </div>
+        <div class="swatches" id="swatches"></div>
+        <h2>Run source</h2>
+        <label><input type="checkbox" id="yaml-authoritative"> Run from the YAML below (override the form)</label>
+        <p class="hint">Off: the Crack form builds the job. On: the configuration document here is used verbatim.</p>
+      </div>
+      <div class="card">
+        <h2>Configuration (YAML)</h2>
+        <p class="hint">The exact schema the <code>xcrack --config</code> CLI accepts — see the config reference in Docs.</p>
+        <div class="editor-toolbar">
+          <button type="button" id="yaml-validate">Validate</button>
+          <button type="button" id="yaml-format">Format</button>
+          <button type="button" id="yaml-from-form">↤ From form</button>
+          <span id="yaml-status"></span>
+        </div>
+        <div id="editor-host"><textarea id="yaml" spellcheck="false" rows="24"></textarea></div>
+      </div>
+    </div>
+  </section>
 </main>
+
+<div id="preview-modal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><strong id="preview-title">Preview</strong><button type="button" id="preview-close" class="x">✕</button></div>
+    <div id="preview-meta" class="hint"></div>
+    <pre id="preview-body" class="preview-body"></pre>
+  </div>
+</div>
 
 <script src="vendor/codemirror.js"></script>
 <script src="vendor/codemirror-yaml.js"></script>
