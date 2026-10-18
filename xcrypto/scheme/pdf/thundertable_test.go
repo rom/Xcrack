@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"math/rand"
 	"testing"
 
@@ -179,6 +180,63 @@ func TestGenerateTableProgress(t *testing.T) {
 	}
 	if maxDone != want {
 		t.Fatalf("final Progress done = %d, want %d (all chains)", maxDone, want)
+	}
+}
+
+// TestGenerateTableChunkedChainComputer exercises the offloaded (GPU) chain
+// path: a supplied ChainComputer is swept in gpuChainChunk-sized pieces, and an
+// error partway through a sub-table falls back to the CPU walk without
+// double-counting progress (final done must equal total, never exceed it).
+func TestGenerateTableChunkedChainComputer(t *testing.T) {
+	defer func(old int) { gpuChainChunk = old }(gpuChainChunk)
+	gpuChainChunk = 4 // tiny so a 16-chain sub-table takes several offload calls
+
+	// Success path: the ChainComputer is called in 4-chain chunks.
+	var calls int
+	cc := func(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
+		calls++
+		out := make([]uint64, count)
+		for i := range out {
+			out[i] = (startIdx + uint64(i)) & (n - 1) // arbitrary but deterministic
+		}
+		return out, nil
+	}
+	if _, err := GenerateTable(context.Background(), TableParams{
+		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: cc,
+	}); err != nil {
+		t.Fatalf("GenerateTable (chunked offload): %v", err)
+	}
+	if calls < 4 { // 16 chains / chunk 4 => 4 calls for the single sub-table
+		t.Fatalf("ChainComputer called %d time(s), want >= 4 (not chunked)", calls)
+	}
+
+	// Fallback path: the ChainComputer errors after the first chunk. Generation
+	// must complete on the CPU and the final progress count must be exactly the
+	// planned total — i.e. the partial offload count was rolled back.
+	var fcalls int
+	ferr := func(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
+		if fcalls++; fcalls >= 2 {
+			return nil, errors.New("simulated device-lost")
+		}
+		return make([]uint64, count), nil
+	}
+	var gotTotal, maxDone uint64
+	if _, err := GenerateTable(context.Background(), TableParams{
+		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: ferr,
+		Progress: func(done, total uint64) {
+			gotTotal = total
+			if done > maxDone {
+				maxDone = done
+			}
+		},
+	}); err != nil {
+		t.Fatalf("GenerateTable (offload fallback): %v", err)
+	}
+	if gotTotal != 16 {
+		t.Fatalf("Progress total = %d, want 16", gotTotal)
+	}
+	if maxDone != gotTotal {
+		t.Fatalf("final done = %d, want %d (partial offload count not rolled back)", maxDone, gotTotal)
 	}
 }
 

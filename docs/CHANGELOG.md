@@ -74,6 +74,16 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   unchanged and remains the default.
 
 ### Fixed / performance
+- **`thunder-gen --gpu` self-tests the kernel and shows progress.** Before
+  trusting a device for the whole table, `thunder-gen --gpu` now runs the GPU
+  self-test (which validates the thunder-chain generator against the CPU
+  reference) and falls back to the CPU on any mismatch — a miscomputing kernel
+  can no longer silently produce a corrupt table, since a thunder endpoint is
+  not re-checked anywhere later. The offloaded chain walk is also swept in
+  bounded chunks so `--progress` advances *during* each sub-table instead of
+  only at its 25% boundaries (and peak host memory per offload call is bounded);
+  a chunk error still falls the whole sub-table back to the CPU walk, now
+  without double-counting progress.
 - **Thunder Tables usable by default + parallel lookup.** The shipped
   `thunder-gen` default chain length was `2^20`, which made a V1/R2 lookup cost
   ~`tables×t²/2 ≈ 2^41` RC4 image ops — *slower* than the `2^40` brute-force
