@@ -27,6 +27,7 @@ import (
 
 	"github.com/rom/xcrack/pkg/accel"
 	"github.com/rom/xcrack/pkg/jobspec"
+	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/webui"
 	"github.com/rom/xcrack/pkg/xcrack"
 )
@@ -63,7 +64,7 @@ func run() int {
 		ExposeSecrets:    *exposeSecrets,
 		AllowServerPaths: *allowPaths,
 		GPUAvailable:     accel.Built(),
-		TPMBuild:         tpmBuilt,
+		TPMBuild:         securecache.TPMBuilt,
 		Version:          version,
 		Accelerator:      gpuAccelerator(logger),
 	}
@@ -117,7 +118,7 @@ func run() int {
 	serveErr := make(chan error, 1)
 	go func() {
 		logger.Info("xcrack-web listening", "addr", *addr, "scheme", scheme,
-			"gpu", accel.Built(), "tpm", tpmBuilt, "expose_secrets", *exposeSecrets)
+			"gpu", accel.Built(), "tpm", securecache.TPMBuilt, "expose_secrets", *exposeSecrets)
 		var err error
 		if tlsEnabled {
 			err = httpSrv.ListenAndServeTLS(*tlsCert, *tlsKey)

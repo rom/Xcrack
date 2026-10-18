@@ -128,6 +128,10 @@ type Spec struct {
 		SyslogTag     string `yaml:"syslog_tag"`         // syslog tag/ident (default: program name)
 		AuditPassword bool   `yaml:"audit_log_password"` // include the recovered password in the audit log
 		ExtractSuffix string `yaml:"extract_suffix"`     // suffix for each source's extracted-tree dir under --out (default ".extracted")
+		// CacheEncryption controls at-rest protection of the found-password
+		// cache/potfile: "" / "none" (plaintext) or "tpm" (the cache key is sealed
+		// to this host's TPM; requires a -tags tpm build). (web/library)
+		CacheEncryption string `yaml:"cache_encryption"`
 	} `yaml:"output"`
 	Budget struct {
 		PerFile string `yaml:"per_file"`

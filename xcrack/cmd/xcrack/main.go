@@ -188,6 +188,7 @@ func runCrack(args []string) int {
 	foundCacheF := fs_.String("found-cache", "", "path to a persistent found-password cache: its passwords are tried FIRST on every run and new finds are appended, so a reused password is recovered instantly next time")
 	rememberF := fs_.Bool("remember", false, "enable the found-password cache at the default location ($XDG_DATA_HOME/xcrack/found.txt) without naming a path")
 	loopbackF := fs_.Bool("loopback", false, "also feed the cached/pot recovered passwords back through the mangling rules (hashcat --loopback), tried early")
+	cacheEncF := fs_.String("cache-encryption", "", "encrypt the found-password cache/potfile at rest: none (default) or tpm (seal the cache key to this host's TPM; requires a -tags tpm build)")
 	minLenF := fs_.Int("min-length", 0, "skip candidates shorter than N characters (0=no minimum)")
 	maxLenF := fs_.Int("max-length", 0, "skip candidates longer than N characters (0=no maximum)")
 	encodingF := fs_.String("encoding", "", "transcode each candidate to this encoding before testing: utf-8 (default), latin1, utf-16le, utf-16be")
@@ -446,7 +447,21 @@ func runCrack(args []string) int {
 		}
 	}
 	if potPath != "" {
-		pot = loadPotfile(potPath)
+		cacheEnc := *cacheEncF
+		if cacheEnc == "" && cfg != nil {
+			cacheEnc = cfg.Output.CacheEncryption
+		}
+		sealer, serr := resolveCacheSealer(cacheEnc)
+		if serr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: --cache-encryption: %v\n", serr)
+			return 2
+		}
+		p, lerr := loadPotfile(potPath, sealer)
+		if lerr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack: found-cache %s: %v\n", potPath, lerr)
+			return 2
+		}
+		pot = p
 		priorityPW = append(priorityPW, pot.passwords()...)
 	}
 	// Candidate encoding: transcode each candidate to this byte encoding before
@@ -1083,6 +1098,9 @@ func runCrack(args []string) int {
 				pot.add(r.Passwords()...)
 			}
 		}
+		if e := pot.err(); e != nil {
+			logger.Warn("found-cache: could not persist recovered passwords", "err", e)
+		}
 	}
 
 	// --outfile-format: write found-password lines in the requested field format,
@@ -1430,6 +1448,7 @@ COMMON FLAGS:
       --results-file FILE
       --potfile FILE             load/append recovered passwords (tried first next time)
       --found-cache FILE / --remember   persistent found-password cache (reused passwords found instantly)
+      --cache-encryption none|tpm       encrypt the found-password cache at rest (tpm seals the key to the host TPM; needs a -tags tpm build)
       --checkpoint FILE          resume one long single-file run where it stopped
       --session FILE             resume a whole multi-file run: skip files already fully searched
       --show / --left            report which files the found-password cache already solves (no cracking)

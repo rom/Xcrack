@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/rom/xcrack/pkg/securecache"
 )
 
 func TestServerTLSConfig(t *testing.T) {
@@ -47,7 +49,7 @@ func TestGPUAcceleratorPureGo(t *testing.T) {
 	if ok || acc != nil || closer != nil {
 		t.Fatalf("pure-Go GPU hook = (acc=%v, closer!=nil=%v, ok=%v), want (nil,nil,false)", acc, closer != nil, ok)
 	}
-	if tpmBuilt {
-		t.Error("tpmBuilt should be false in the default build")
+	if securecache.TPMBuilt {
+		t.Error("securecache.TPMBuilt should be false in the default build")
 	}
 }
