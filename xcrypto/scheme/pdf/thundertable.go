@@ -228,6 +228,12 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 	return t, nil
 }
 
+// gpuChainChunk is how many chain endpoints a single offloaded ChainComputer
+// call covers. Sweeping a sub-table in chunks (rather than one call for all of
+// it) lets the shared progress counter advance *during* the sub-table and keeps
+// the per-call host buffer bounded. It is a var only so tests can shrink it.
+var gpuChainChunk = 1 << 20
+
 // generateSub builds one sub-table. Chain i starts at index i (distinct,
 // reproducible starts); endpoints are deduplicated (a merge keeps one chain) and
 // sorted so Lookup can binary-search.
@@ -239,18 +245,41 @@ func generateSub(ctx context.Context, n uint64, chainLen, chains int, seed uint6
 	}
 	out := make([]pair, starts)
 
-	// Offloaded (GPU) endpoints, when a byte-identical ChainComputer is supplied;
-	// a short result or an error silently falls back to the CPU walk below.
+	// Offloaded (GPU) endpoints, when a byte-identical ChainComputer is supplied.
+	// Sweep the sub-table in gpuChainChunk-sized pieces rather than one call, so
+	// the shared progress counter advances during the sub-table (not only once at
+	// its end) and the per-call host buffer stays bounded. A chunk error or short
+	// result falls the whole sub-table back to the CPU walk below; any progress
+	// already counted for this sub-table is rolled back first so the CPU recount
+	// is not double-counted.
 	computed := false
 	if chain != nil {
-		if ends, err := chain(n, chainLen, seed, 0, uint64(starts)); err == nil && len(ends) == starts {
-			for i := range ends {
-				out[i] = pair{start: uint64(i), end: ends[i]}
+		computed = true
+		var counted uint64
+		for lo := 0; lo < starts; {
+			if err := ctx.Err(); err != nil {
+				return subTable{}, err
+			}
+			hi := lo + gpuChainChunk
+			if hi > starts {
+				hi = starts
+			}
+			ends, err := chain(n, chainLen, seed, uint64(lo), uint64(hi-lo))
+			if err != nil || len(ends) != hi-lo {
+				computed = false
+				break
+			}
+			for i, e := range ends {
+				out[lo+i] = pair{start: uint64(lo + i), end: e}
 			}
 			if done != nil {
-				done.Add(uint64(starts))
+				done.Add(uint64(hi - lo))
+				counted += uint64(hi - lo)
 			}
-			computed = true
+			lo = hi
+		}
+		if !computed && done != nil && counted > 0 {
+			done.Add(^(counted - 1)) // two's-complement subtract: undo the partial count
 		}
 	}
 

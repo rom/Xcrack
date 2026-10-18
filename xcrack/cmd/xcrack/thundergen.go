@@ -99,13 +99,23 @@ func runThunderGen(args []string) int {
 			fmt.Fprintf(os.Stderr, "xcrack thunder-gen: --gpu unavailable (%v); generating on CPU\n", derr)
 		} else {
 			defer acc.Close()
-			if c := gpuChainComputer(acc); c != nil {
-				chain = c
-				for _, d := range acc.Devices() {
-					fmt.Fprintf(os.Stderr, "  offloading chains to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
-				}
-			} else {
+			switch c := gpuChainComputer(acc); {
+			case c == nil:
 				fmt.Fprintln(os.Stderr, "xcrack thunder-gen: --gpu device has no thunder-chain kernel; generating on CPU")
+			default:
+				// Prove the device's kernels — including the thunder-chain generator —
+				// match the CPU reference before trusting the device for the whole
+				// table. Unlike the live crack loop, a wrong endpoint here is not
+				// re-checked anywhere, so a miscomputing kernel would silently produce a
+				// corrupt table; on any mismatch we generate on the CPU instead.
+				if err := accel.GPUSelfTestWith(acc); err != nil {
+					fmt.Fprintf(os.Stderr, "xcrack thunder-gen: --gpu self-test failed (%v); generating on CPU\n", err)
+				} else {
+					chain = c
+					for _, d := range acc.Devices() {
+						fmt.Fprintf(os.Stderr, "  offloading chains to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
+					}
+				}
 			}
 		}
 	}
