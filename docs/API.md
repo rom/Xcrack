@@ -360,7 +360,7 @@ proxied) recovery console; see [`USERMANUAL.md` §10](USERMANUAL.md#10-web-gui-x
 
 ```sh
 bin/xcrack-web                  # http://127.0.0.1:8899 (localhost)
-bin/xcrack-web --addr :9000     # all interfaces (ships no auth — see §10.7)
+bin/xcrack-web --addr :9000     # all interfaces (ships no auth — see §10.8)
 ```
 
 ### Endpoints

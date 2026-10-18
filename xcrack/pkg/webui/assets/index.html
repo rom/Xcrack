@@ -14,6 +14,7 @@
   <div class="brand">🔓 <span>Xcrack</span></div>
   <nav id="tabs">
     <button data-tab="crack" class="active">Crack</button>
+    <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
     <button data-tab="config">Configuration</button>
@@ -199,6 +200,92 @@
       <div id="results"></div>
       <h3>Live log</h3>
       <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- TOOLS ------------------------------------------------------------- -->
+  <section id="tab-tools" class="tab">
+    <p class="hint">The specialist, non-cracking operations from the CLI. Inspect/recover tools run in the browser; the long key sweeps and table generation build a ready-to-run CLI command.</p>
+    <div class="grid">
+      <div class="card tool">
+        <h3>Identify</h3>
+        <p class="hint">Detect each file's format, whether it is encrypted, and its container/explodable capabilities.</p>
+        <input type="file" class="tool-files" data-tool="identify" multiple>
+        <button class="tool-run primary" data-tool="identify">Identify</button>
+        <div class="tool-out" data-out="identify"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>Hash lines</h3>
+        <p class="hint">Emit <code>$office$</code>/<code>$pdf$</code>/<code>$zip2$</code>… lines for hashcat / John.</p>
+        <input type="file" class="tool-files" data-tool="hashline" multiple>
+        <button class="tool-run primary" data-tool="hashline">Emit</button>
+        <div class="tool-out" data-out="hashline"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>VBA project password</h3>
+        <p class="hint">Recover a VBA project-protection password from a .doc/.xls/.ppt(.m) or vbaProject.bin.</p>
+        <input type="file" class="tool-files" data-tool="vba-recover" multiple>
+        <button class="tool-run primary" data-tool="vba-recover">Recover</button>
+        <div class="tool-out" data-out="vba-recover"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>Access (Jet) password</h3>
+        <p class="hint">Recover a Jet (.mdb) database password straight from the header (no cracking).</p>
+        <input type="file" class="tool-files" data-tool="access-recover" multiple>
+        <button class="tool-run primary" data-tool="access-recover">Recover</button>
+        <div class="tool-out" data-out="access-recover"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>Export challenge</h3>
+        <p class="hint">Download the portable JSON challenge envelope(s) to solve on an external cracker, then bring back with <code>--resume-from</code>.</p>
+        <input type="file" class="tool-files" data-tool="export-challenge" multiple>
+        <button class="tool-run primary" id="export-challenge-run">Export &amp; download</button>
+        <div class="tool-out" data-out="export-challenge"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>PDF 40-bit key (thunder table)</h3>
+        <p class="hint">Instantly invert a V1/R2 PDF's file key using a precomputed thunder table.</p>
+        <div class="field"><label>PDF</label><input type="file" id="pdf-table-src"></div>
+        <div class="field"><label>Thunder table</label><input type="file" id="pdf-table-tbl"></div>
+        <button class="tool-run primary" id="pdf-table-run">Invert</button>
+        <div class="tool-out" data-out="pdf-table"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>Wordlist utilities</h3>
+        <p class="hint">Length-filter, dedupe, sort, or split a wordlist.</p>
+        <div class="field"><label>Upload a wordlist</label><input type="file" id="wl-file"></div>
+        <div class="field"><label>…or paste lines</label><textarea id="wl-text" rows="3"></textarea></div>
+        <div class="row">
+          <div class="field"><label>Operation</label><select id="wl-op"><option value="">none</option><option value="dedupe">dedupe</option><option value="sort">sort</option><option value="sort-length">sort by length</option></select></div>
+          <div class="field"><label>Min length</label><input type="number" id="wl-min" min="0" value="0"></div>
+          <div class="field"><label>Max length</label><input type="number" id="wl-max" min="0" value="0"></div>
+          <div class="field"><label>Split (lines/part)</label><input type="number" id="wl-split" min="0" value="0"></div>
+        </div>
+        <button class="tool-run primary" id="wl-run">Process</button>
+        <div class="tool-out" data-out="wordlist"></div>
+      </div>
+
+      <div class="card tool">
+        <h3>Long-running attacks → CLI command</h3>
+        <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs best run on the CLI / distributed tier. Pick one, set the options, and copy the exact command.</p>
+        <div class="field"><label>Operation</label>
+          <select id="cli-op">
+            <option value="pdf-keyattack">pdf-keyattack (full 40-bit sweep)</option>
+            <option value="office-keyattack">office-keyattack (Office 97/2000 RC4)</option>
+            <option value="thunder-gen">thunder-gen (precompute a PDF V1/R2 table)</option>
+          </select>
+        </div>
+        <div id="cli-fields"></div>
+        <div class="field"><label>Command</label><pre id="cli-cmd" class="preview-body"></pre></div>
+        <button type="button" id="cli-copy">Copy</button>
+        <span id="cli-copy-status" class="hint"></span>
+      </div>
     </div>
   </section>
 

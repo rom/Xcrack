@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — Tools tab (specialist subcommands).** `xcrack-web` gains a **Tools**
+  view exposing the CLI's non-cracking subcommands. The quick, stateless ones run
+  in the browser against new synchronous `/api/v1/tools/*` endpoints that reuse
+  the same library functions as the CLI: **Identify** (format / encrypted /
+  container / explodable), **Hash lines** (`$office$`/`$pdf$`/`$zip2$`… for
+  hashcat/John), **VBA project password**, **Access (Jet) password**, **Export
+  challenge** (downloads the portable JSON envelope for an external cracker, to
+  bring back with `--resume-from`), the **PDF 40-bit thunder-table lookup**, and
+  **wordlist utilities** (length-filter / dedupe / sort / sort-by-length /
+  split-to-zip). The long key sweeps and table generation
+  (`pdf-keyattack`, `office-keyattack`, `thunder-gen`) instead build a
+  copy-ready CLI command from a small form. Recovered secrets stay gated behind
+  `--expose-secrets`, matching the crack path.
 - **Web GUI, expanded.** `xcrack-web` gains: a dedicated **Configuration** view
   holding the YAML editor (with a "run from this YAML" toggle) and an
   **Appearance** theme picker (System / Light / Dark / Glow / Gold / Autumn /

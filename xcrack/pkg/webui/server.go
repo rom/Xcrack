@@ -54,6 +54,13 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
 	mux.HandleFunc("GET /api/v1/docs", s.handleListDocs)
 	mux.HandleFunc("GET /api/v1/docs/{name}", s.handleGetDoc)
+	// Specialist, non-cracking tools (the CLI's subcommands), synchronous.
+	mux.HandleFunc("POST /api/v1/tools/hashline", s.handleToolHashline)
+	mux.HandleFunc("POST /api/v1/tools/vba-recover", s.handleToolVBA)
+	mux.HandleFunc("POST /api/v1/tools/access-recover", s.handleToolAccess)
+	mux.HandleFunc("POST /api/v1/tools/export-challenge", s.handleToolExportChallenge)
+	mux.HandleFunc("POST /api/v1/tools/wordlist", s.handleToolWordlist)
+	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", s.handleToolPDFKeyTable)
 	mux.Handle("/", assets)
 	s.mux = mux
 	return s, nil
