@@ -16,16 +16,28 @@ let pickedSources = [];
 let currentJob = null;
 let evtSource = null;
 
-// ---- editor seam: the plain textarea, replaced by editor.js if loaded -------
+// ---- editor: CodeMirror YAML IDE when the vendored lib is present, else a
+// plain textarea. The rest of the app talks to this seam only. ----------------
 const Editor = {
-  get: () => $("yaml").value,
-  set: (v) => { $("yaml").value = v; },
-  onChange: (fn) => $("yaml").addEventListener("input", fn),
+  cm: null,
+  init() {
+    if (window.CodeMirror) {
+      this.cm = window.CodeMirror.fromTextArea($("yaml"), {
+        mode: "yaml", lineNumbers: true, lineWrapping: false,
+        indentUnit: 2, tabSize: 2, viewportMargin: Infinity,
+      });
+    }
+  },
+  get() { return this.cm ? this.cm.getValue() : $("yaml").value; },
+  set(v) { if (this.cm) this.cm.setValue(v); else $("yaml").value = v; },
+  refresh() { if (this.cm) this.cm.refresh(); },
 };
-window.XcrackEditor = Editor; // editor.js (rich build) may enhance this
+window.XcrackEditor = Editor;
 
 // ---- bootstrap --------------------------------------------------------------
 async function boot() {
+  Editor.init();
+  if (window.marked) window.XcrackMarkdown = (md) => window.marked.parse(md);
   wireTabs();
   wireAdvanced();
   wireFiles();
@@ -56,14 +68,47 @@ function wireTabs() {
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
       btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
-      if (btn.dataset.tab === "stats") refreshStats();
+      if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
     });
   });
 }
 
+// ---- live throughput chart (uPlot when present) ----------------------------
+const Charts = {
+  plot: null, data: [[], []], t0: 0,
+  reset() {
+    this.data = [[0], [0]]; this.t0 = Date.now();
+    if (this.plot) this.plot.setData(this.data);
+  },
+  point(candidates) {
+    const t = (Date.now() - this.t0) / 1000;
+    this.data[0].push(+t.toFixed(2));
+    this.data[1].push(candidates);
+    if (this.plot) this.plot.setData(this.data);
+  },
+  show() {
+    if (!window.uPlot) return;
+    const host = $("run-charts");
+    const w = host.clientWidth || 600;
+    if (!this.plot) {
+      host.textContent = "";
+      this.plot = new window.uPlot({
+        width: w, height: 220, scales: { x: { time: false } },
+        series: [{ label: "t (s)" }, { label: "candidates", stroke: "#5c7cfa", width: 2, fill: "rgba(92,124,250,.15)" }],
+        axes: [{ stroke: "#888" }, { stroke: "#888" }],
+      }, this.data, host);
+    } else {
+      this.plot.setSize({ width: w, height: 220 });
+      this.plot.setData(this.data);
+    }
+  },
+};
+
 function wireAdvanced() {
   $("advanced").addEventListener("change", (e) => {
     document.body.classList.toggle("adv", e.target.checked);
+    // CodeMirror must re-measure once its panel becomes visible.
+    if (e.target.checked) setTimeout(() => Editor.refresh(), 0);
   });
 }
 
@@ -164,6 +209,7 @@ async function runJob() {
   for (const f of pickedSources) fd.append("source", f);
   for (const f of $("wordlists").files) fd.append("aux", f);
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
+  Charts.reset();
   setRunStatus("Submitting…");
   let res;
   try { res = await fetch(api("/jobs"), { method: "POST", body: fd }); }
@@ -193,7 +239,8 @@ function handleEvent(e) {
     case "found":
       appendLog(`🔓 FOUND ${e.file} (${e.format || "?"})` + (e.password ? ` → ${e.password}` : "")); break;
     case "progress":
-      setRunStatus(`Running… ${e.file}: ${e.candidates.toLocaleString()} candidates`); break;
+      setRunStatus(`Running… ${e.file}: ${e.candidates.toLocaleString()} candidates`);
+      Charts.point(e.candidates); break;
     case "file_done":
       appendLog(`• ${e.file} done (${e.files_done}/${e.files_total})`); break;
     case "state":
@@ -272,7 +319,6 @@ async function refreshStats() {
       el("div", { className: "statlabel", textContent: label }),
     ]));
   }
-  window.XcrackCharts && window.XcrackCharts.render(s);
 }
 
 // ---- docs -------------------------------------------------------------------
