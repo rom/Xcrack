@@ -7,14 +7,15 @@ Xcrack and its standalone formats library, **Xfileformats**.
 
 - **[User Manual](USERMANUAL.md)** — the task-oriented guide: introduction, how
   to use the tool, a CLI reference, GPU acceleration, distributed environments,
-  advanced usage, embedding the library, logging/audit, and
-  debugging/troubleshooting. **Start here.**
+  advanced usage, embedding the library, logging/audit,
+  debugging/troubleshooting, and the web GUI (`xcrack-web`). **Start here.**
 - **[Usage](USAGE.md)** — the exhaustive reference: how to build (`make`), run
   the CLI and the `xcrackd` service, embed the library, and configure
   everything, with many examples.
 - **[API reference](API.md)** — the embeddable Go library (`pkg/xcrack`:
-  `Pool`/`Process`, `Options`, candidate sources, results and callbacks) and the
-  REST API (`xcrackd` endpoints, request shapes and the JSON report), with the
+  `Pool`/`Process`, `Options`, candidate sources, results and callbacks), the
+  REST API (`xcrackd` endpoints, request shapes and the JSON report), and the
+  web API (`xcrack-web` / `pkg/webui`: jobs, SSE events, downloads), with the
   runnable programs in [`../xcrack/examples/`](../xcrack/examples).
 - **[File formats & variants](FILEFORMATS.md)** — every format Xcrack
   recognizes, which variants of each, how each is detected and verified, and the

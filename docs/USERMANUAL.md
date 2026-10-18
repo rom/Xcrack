@@ -20,6 +20,7 @@ for the vocabulary see [`TERMINOLOGY.md`](TERMINOLOGY.md); for quick answers see
 7. [Embedding the library](#7-embedding-the-library)
 8. [Logging and the audit trail](#8-logging-and-the-audit-trail)
 9. [Debugging and troubleshooting](#9-debugging-and-troubleshooting)
+10. [Web GUI (xcrack-web)](#10-web-gui-xcrack-web)
 
 ---
 
@@ -899,3 +900,111 @@ decrypted / still locked, `2` = a usage or I/O error. See
 Check [`FAQ.md`](FAQ.md) (troubleshooting + limitations), confirm the scheme is
 supported in [`FILEFORMATS.md`](FILEFORMATS.md), and see how it is attacked in
 [`CRACKING.md`](CRACKING.md).
+
+---
+
+## 10. Web GUI (xcrack-web)
+
+`xcrack-web` is a browser front-end to the engine: the same recovery power as
+the CLI, reachable from a graphical interface. It is a single self-contained
+binary that embeds the engine **and** the web assets, so there is nothing to
+install alongside it and it works offline.
+
+Every feature the CLI configuration file can express is reachable from the GUI,
+because the GUI builds the *same* job description (`jobspec.Spec`, the YAML the
+`--config` flag consumes) and runs it through the same engine wiring.
+
+### 10.1 Running it
+
+```sh
+make web                     # build bin/xcrack-web
+bin/xcrack-web               # serve on http://127.0.0.1:8899 (localhost only)
+# or:
+bin/xcrack-web --addr :9000  # listen on all interfaces (see the security note)
+```
+
+Open the printed URL. The binary auto-detects a `docs/` directory next to it and
+serves this manual (and the rest of the docs) inside the app; point it elsewhere
+with `--docs-dir`.
+
+| Flag | Meaning |
+|------|---------|
+| `--addr` | listen address (default `127.0.0.1:8899`; use `:PORT` for all interfaces) |
+| `--docs-dir DIR` | Markdown docs to serve in the **Docs** tab (default: auto-detect `./docs`) |
+| `--work-dir DIR` | where per-job uploads and extracted output live (default: a temp dir) |
+| `--max-upload N` | maximum job-submission size in bytes (default 512 MiB) |
+| `--expose-secrets` | show recovered passwords in the UI/stream (default on; see below) |
+| `--allow-server-paths` | let a job reference server-side files, not just uploads (trusted local use only) |
+| `--tls-cert` / `--tls-key` | serve HTTPS (see [5. Distributed environments](#5-distributed-environments) for the cert scripts) |
+| `--tls-client-ca` | require client certificates (mutual TLS) |
+
+### 10.2 Easy mode and advanced mode
+
+- **Easy mode** (default) is a guided form: drop the locked file(s), pick a
+  wordlist, tick the candidate sources and generators (masks, rules, Markov,
+  PRINCE, toggle-case, keyboard-walk, name/sibling context, embedded hint), and
+  press **Run**.
+- **Advanced mode** (the toggle in the header) reveals every engine knob —
+  concurrency, limits, time budgets, the GPU tier — and an **IDE-style editor**
+  for the job's YAML configuration, with line numbers and syntax highlighting.
+  **Validate** checks the document, **Format** tidies it, and **↤ From form**
+  regenerates it from the easy-mode fields so you can start simple and then
+  fine-tune the YAML by hand. The schema is exactly the one in
+  [`config/README.md`](../config/README.md).
+
+### 10.3 Running a job
+
+Progress streams live: the candidate counter, the per-file "done" ticks, the
+engine log, and each recovered password appear as the search proceeds (over
+Server-Sent Events, so nothing is polled). When a file is unlocked its decrypted
+contents can be **downloaded** as a zip of the extracted tree.
+
+### 10.4 Statistics
+
+The **Statistics** tab charts live candidate throughput for the running job and
+shows the aggregate counters across jobs — files processed, candidates tried,
+and the decrypted-vs-locked breakdown.
+
+### 10.5 Documentation in the app
+
+The **Docs** tab renders this manual and the reference docs as formatted pages,
+so the full documentation travels with the GUI.
+
+### 10.6 Encrypting the found-password cache (TPM)
+
+The found-password cache (the "potfile": passwords recovered on earlier runs,
+tried first on later ones — `--found-cache`/`--remember`/`--potfile`) can be
+encrypted at rest, with its key sealed to the host's TPM so the file is useless
+if copied off the machine:
+
+```sh
+# Requires a binary built with -tags tpm on a host with a TPM 2.0 device.
+bin/xcrack --remember --cache-encryption tpm -w rockyou.txt secret.docx
+```
+
+or in the config file:
+
+```yaml
+output:
+  cache_encryption: tpm   # "" / "none" (plaintext, the default) or "tpm"
+```
+
+How it works: the cache is encrypted with AES-256-GCM under a random
+data-encryption key, and that key is TPM-sealed under a storage primary unique
+to the machine's TPM. A cache file that is copied to another host — or
+tampered with — fails to unseal/authenticate and is rejected (the run aborts
+rather than silently discarding your cache). TPM support is compiled in only
+with `-tags tpm`; the default pure-Go build reports a clear error if you ask for
+it, so you are never left believing the cache is protected when it is not. A
+plaintext cache remains the default and is unchanged.
+
+### 10.7 Security posture
+
+Like `xcrackd`, `xcrack-web` ships **no authentication**. Bound to localhost
+(the default) it is a single-user console on your own machine. If you expose it
+on a network, put it behind an authenticating reverse proxy and enable TLS
+(`--tls-cert`/`--tls-key`), and consider `--expose-secrets=false` so recovered
+passwords do not appear in the shared UI. By default a submitted job may read
+only the files uploaded with it; `--allow-server-paths` relaxes that for a
+trusted local instance only. Operate only on files you own or are permitted to
+access.

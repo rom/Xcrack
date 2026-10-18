@@ -11,6 +11,10 @@ forms over one engine:
 - **CLI** (`xcrack`) — triage, testing, manual recovery.
 - **HTTP service** (`xcrackd`) — a backend a thin client (an Impex kiosk or
   DataLock appliance) calls, optionally fronting a separate GPU/OpenCL tier.
+- **Web GUI** (`xcrack-web`) — a browser front-end exposing the full feature set
+  through a graphical interface (easy + advanced modes, an IDE-style config
+  editor, live statistics, uploads/downloads, in-app docs); runs locally or as a
+  service. See [`docs/USERMANUAL.md` §10](docs/USERMANUAL.md#10-web-gui-xcrack-web).
 
 👉 **New here? Read [`docs/USAGE.md`](docs/USAGE.md)** for commands, flags, and
 many worked examples.
@@ -99,7 +103,7 @@ fast-reject or the GPU flags, so neither can cause a false positive.
 Requires Go 1.25+ (a `go.work` ties the three modules together).
 
 ```sh
-make build                    # -> bin/xcrack and bin/xcrackd
+make build                    # -> bin/xcrack, bin/xcrackd and bin/xcrack-web
 make check                    # gofmt check + vet + race tests (what CI runs)
 
 # Decrypt + recursively decompose, writing the tree + manifest.json to ./out:
@@ -134,7 +138,7 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 | ------ | ----------- | ------- |
 | **Xcrypto** | `github.com/rom/xcrypto` | Crypto library + cracking engine: primitives, the concrete encryption schemes, candidate generation, the pattern engine, and the concurrent password search. Core schemes are stdlib-only; extended schemes may use `golang.org/x/crypto`. Knows nothing about file formats or recursion. |
 | **Xfileformats** | `github.com/rom/xfileformats` | Policy-free file-format library: detect a format, parse containers (ZIP, CFB/OLE2), build an `xcrypto.Challenge`. Delegates all cryptography to Xcrypto. |
-| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (recursive decomposition, result tree, password promotion, budgets, pool), the `xcrack` CLI, and the `xcrackd` HTTP service. |
+| **Xcrack** | `github.com/rom/xcrack` | The recovery engine (recursive decomposition, result tree, password promotion, budgets, pool), the `xcrack` CLI, the `xcrackd` HTTP service, and the `xcrack-web` browser GUI. |
 
 ```
 /
@@ -154,7 +158,8 @@ Three independent Go modules, layered so each lower one is reusable on its own:
 │    ├─ pkg/xcrack/         engine: recursion · tree · promotion · budgets · pool · metrics
 │    ├─ pkg/api/            HTTP service wrapping the engine (Pool)
 │    ├─ cmd/xcrack/         CLI
-│    └─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
+│    ├─ cmd/xcrackd/        HTTP service (backend for kiosk / DataLock)
+│    └─ cmd/xcrack-web/     browser GUI (full feature set over HTTP/SSE)
 ├─ samples/                 encrypted demo files (pw "opensesame") + generate.sh
 ├─ config/                  example --config YAML files (basic, mask-rules, hint, …)
 └─ docs/                    usage, architecture, design, ASR, MVP, threat model, ADRs

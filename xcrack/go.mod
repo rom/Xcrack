@@ -3,6 +3,7 @@ module github.com/rom/xcrack
 go 1.25.5
 
 require (
+	github.com/google/go-tpm v0.9.3
 	github.com/klauspost/compress v1.19.0
 	github.com/rom/xcrypto v0.0.0
 	github.com/rom/xfileformats v0.0.0

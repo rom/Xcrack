@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrypto/candidates"
 )
 
@@ -72,18 +73,20 @@ func collectTrainingWords(explicit []string, useDefault bool, wordlists []string
 
 // potfile is a growing set of recovered passwords persisted to disk. On load its
 // entries are offered as high-priority candidates (so a password cracked once is
-// tried first everywhere); newly recovered passwords are appended.
+// tried first everywhere); newly recovered passwords are appended. It is a thin
+// wrapper over securecache.Store, which stores the set either as the historical
+// plaintext newline file or, when a sealer is given (--cache-encryption tpm),
+// encrypted with a key sealed to the host TPM.
 type potfile struct {
-	path  string
-	mu    sync.Mutex
-	known map[string]bool
-	order []string
+	path    string
+	store   *securecache.Store
+	mu      sync.Mutex
+	lastErr error
 }
 
 // defaultFoundCache returns the default persistent found-password cache path
 // ($XDG_DATA_HOME/xcrack/found.txt, falling back to ~/.local/share and finally
-// the current directory), used by --remember. The directory is created on first
-// write by potfile.add via O_CREATE on the file; the parent dir is ensured here.
+// the current directory), used by --remember.
 func defaultFoundCache() string {
 	base := os.Getenv("XDG_DATA_HOME")
 	if base == "" {
@@ -99,60 +102,64 @@ func defaultFoundCache() string {
 	return filepath.Join(dir, "found.txt")
 }
 
-func loadPotfile(path string) *potfile {
-	p := &potfile{path: path, known: map[string]bool{}}
-	f, err := os.Open(path)
+// resolveCacheSealer maps the --cache-encryption flag / config value to a
+// securecache.Sealer (nil = plaintext). "tpm" requires a -tags tpm build and a
+// reachable TPM, otherwise a clear error is returned so the user is not left
+// believing the cache is protected when it is not.
+func resolveCacheSealer(mode string) (securecache.Sealer, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", "none", "plaintext":
+		return nil, nil
+	case "tpm":
+		return securecache.TPMSealer()
+	default:
+		return nil, fmt.Errorf("unknown cache-encryption mode %q (want none or tpm)", mode)
+	}
+}
+
+// loadPotfile opens the found-password cache at path with the given sealer. A
+// corrupt or foreign-sealed file is an error (so a wrong TPM never silently
+// starts fresh and overwrites the cache).
+func loadPotfile(path string, sealer securecache.Sealer) (*potfile, error) {
+	st, err := securecache.Open(path, sealer)
 	if err != nil {
-		return p
+		return nil, err
 	}
-	defer f.Close()
-	sc := bufio.NewScanner(f)
-	sc.Buffer(make([]byte, 0, 64*1024), 1<<20)
-	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r\n")
-		if line == "" || p.known[line] {
-			continue
-		}
-		p.known[line] = true
-		p.order = append(p.order, line)
-	}
-	return p
+	return &potfile{path: path, store: st}, nil
 }
 
 // passwords returns the known passwords in first-seen order.
 func (p *potfile) passwords() []string {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return append([]string(nil), p.order...)
+	if p == nil || p.store == nil {
+		return nil
+	}
+	return p.store.Passwords()
 }
 
-// add appends any new passwords, persisting them immediately.
+// add records any new passwords, persisting the cache. Persistence is
+// best-effort (as the plaintext potfile always was); the first write error is
+// kept so the caller can warn once via err.
 func (p *potfile) add(pws ...string) {
-	if p == nil || p.path == "" {
+	if p == nil || p.store == nil {
 		return
+	}
+	if err := p.store.Add(pws...); err != nil {
+		p.mu.Lock()
+		if p.lastErr == nil {
+			p.lastErr = err
+		}
+		p.mu.Unlock()
+	}
+}
+
+// err returns the first persistence error, if any.
+func (p *potfile) err() error {
+	if p == nil {
+		return nil
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	var fresh []string
-	for _, pw := range pws {
-		if pw == "" || p.known[pw] {
-			continue
-		}
-		p.known[pw] = true
-		p.order = append(p.order, pw)
-		fresh = append(fresh, pw)
-	}
-	if len(fresh) == 0 {
-		return
-	}
-	f, err := os.OpenFile(p.path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-	for _, pw := range fresh {
-		fmt.Fprintln(f, pw)
-	}
+	return p.lastErr
 }
 
 // candidateSig returns a short stable signature of the candidate configuration,

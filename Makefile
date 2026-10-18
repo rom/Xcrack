@@ -11,11 +11,11 @@ LDFLAGS ?=
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build cli server run-server test race check vet fmt fmt-check fuzz samples tidy clean install help
+.PHONY: all build cli server web run-server run-web test race check vet fmt fmt-check fuzz samples tidy clean install help
 
 all: build ## Build everything (alias for build)
 
-build: cli server ## Build the CLI and the HTTP service into ./bin
+build: cli server web ## Build the CLI, the HTTP service and the web GUI into ./bin
 
 cli: ## Build the xcrack CLI -> bin/xcrack
 	@mkdir -p $(BIN)
@@ -25,8 +25,15 @@ server: ## Build the xcrackd HTTP service -> bin/xcrackd
 	@mkdir -p $(BIN)
 	$(GO) build $(LDFLAGS) -o $(BIN)/xcrackd ./xcrack/cmd/xcrackd
 
+web: ## Build the xcrack-web browser GUI -> bin/xcrack-web
+	@mkdir -p $(BIN)
+	$(GO) build $(LDFLAGS) -o $(BIN)/xcrack-web ./xcrack/cmd/xcrack-web
+
 run-server: server ## Build and run the HTTP service (ADDR overrides :8080)
 	$(BIN)/xcrackd -addr $(or $(ADDR),:8080)
+
+run-web: web ## Build and run the web GUI on localhost (ADDR overrides 127.0.0.1:8899)
+	$(BIN)/xcrack-web -addr $(or $(ADDR),127.0.0.1:8899)
 
 test: ## Run the full test suite
 	$(GO) test $(MODULES)
@@ -58,10 +65,10 @@ tidy: ## go mod tidy for every module
 	cd xcrack && $(GO) mod tidy
 
 clean: ## Remove compiled binaries from ./bin
-	rm -f $(BIN)/xcrack $(BIN)/xcrackd
+	rm -f $(BIN)/xcrack $(BIN)/xcrackd $(BIN)/xcrack-web
 
-install: ## go install the CLI and service into GOBIN
-	$(GO) install ./xcrack/cmd/xcrack ./xcrack/cmd/xcrackd
+install: ## go install the CLI, service and web GUI into GOBIN
+	$(GO) install ./xcrack/cmd/xcrack ./xcrack/cmd/xcrackd ./xcrack/cmd/xcrack-web
 
 help: ## Show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | sort | \

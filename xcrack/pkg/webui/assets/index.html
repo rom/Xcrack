@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Xcrack</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='14' font-size='14'>🔓</text></svg>">
+<link rel="stylesheet" href="vendor/codemirror.css">
+<link rel="stylesheet" href="vendor/uPlot.min.css">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <div class="brand">🔓 <span>Xcrack</span></div>
+  <nav id="tabs">
+    <button data-tab="crack" class="active">Crack</button>
+    <button data-tab="stats">Statistics</button>
+    <button data-tab="docs">Docs</button>
+  </nav>
+  <div class="spacer"></div>
+  <label class="modeswitch" title="Reveal every engine option and the YAML editor">
+    <input type="checkbox" id="advanced"> Advanced mode
+  </label>
+  <span id="meta-badges"></span>
+</header>
+
+<main>
+  <!-- CRACK ------------------------------------------------------------- -->
+  <section id="tab-crack" class="tab active">
+    <div class="grid">
+      <div class="card" id="easy-panel">
+        <h2>1 · Choose files</h2>
+        <div id="dropzone" class="dropzone">
+          <input type="file" id="files" multiple hidden>
+          <p>Drop locked files here, or <button type="button" id="pick">choose files</button></p>
+          <ul id="filelist"></ul>
+        </div>
+
+        <h2>2 · Candidate sources</h2>
+        <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
+        <div class="field">
+          <label>Explicit guesses (one per line, tried first)</label>
+          <textarea id="passwords" rows="2" placeholder="hunter2"></textarea>
+        </div>
+        <div class="field">
+          <label>Wordlists <small>(uploaded with the job)</small></label>
+          <input type="file" id="wordlists" multiple>
+        </div>
+        <div class="field">
+          <label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label>
+          <textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea>
+        </div>
+        <div class="field">
+          <label>Mangling rules <small>(hashcat syntax, one per line)</small></label>
+          <textarea id="rules" rows="2" placeholder="c&#10;$1"></textarea>
+        </div>
+        <fieldset class="generators">
+          <legend>Generators</legend>
+          <label><input type="checkbox" id="markov"> Markov</label>
+          <label><input type="checkbox" id="prince"> PRINCE</label>
+          <label><input type="checkbox" id="toggle_case"> Toggle-case</label>
+          <label><input type="checkbox" id="keyboard_walk"> Keyboard-walk</label>
+          <label><input type="checkbox" id="context"> Name / sibling context</label>
+          <label><input type="checkbox" id="hint"> Embedded hint</label>
+        </fieldset>
+
+        <div class="adv-only">
+          <h2>3 · Advanced</h2>
+          <div class="row">
+            <div class="field"><label>Workers <small>(0 = per CPU)</small></label><input type="number" id="workers" min="0" value="0"></div>
+            <div class="field"><label>Per-file budget</label><input type="text" id="per_file" placeholder="30s"></div>
+            <div class="field"><label>Max candidates / node</label><input type="number" id="max_candidates" min="0" value="0"></div>
+          </div>
+          <div class="field"><label><input type="checkbox" id="gpu"> Use GPU tier (if available)</label></div>
+          <div class="field"><label><input type="checkbox" id="dual_pipeline"> Dual CPU+GPU pipeline</label></div>
+        </div>
+      </div>
+
+      <div class="card adv-only" id="yaml-panel">
+        <h2>Configuration (YAML)</h2>
+        <p class="hint">The exact schema the <code>xcrack --config</code> CLI accepts. Edited here it overrides the form on the left.</p>
+        <div class="editor-toolbar">
+          <button type="button" id="yaml-validate">Validate</button>
+          <button type="button" id="yaml-format">Format</button>
+          <button type="button" id="yaml-from-form">↤ From form</button>
+          <span id="yaml-status"></span>
+        </div>
+        <div id="editor-host"><textarea id="yaml" spellcheck="false" rows="24"></textarea></div>
+      </div>
+    </div>
+
+    <div class="runbar">
+      <button id="run" class="primary">▶ Run</button>
+      <button id="cancel" disabled>■ Cancel</button>
+      <span id="run-status"></span>
+    </div>
+
+    <div class="card" id="results-card" hidden>
+      <h2>Results</h2>
+      <div id="results"></div>
+      <h3>Live log</h3>
+      <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- STATISTICS -------------------------------------------------------- -->
+  <section id="tab-stats" class="tab">
+    <div class="grid stats-grid" id="stat-cards"></div>
+    <div class="card">
+      <h2>Current run</h2>
+      <div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput and the decrypted/locked breakdown.</p></div>
+    </div>
+  </section>
+
+  <!-- DOCS -------------------------------------------------------------- -->
+  <section id="tab-docs" class="tab">
+    <div class="grid docs-grid">
+      <div class="card"><h2>Documentation</h2><ul id="doclist" class="doclist"></ul></div>
+      <div class="card"><div id="docview" class="doc">Select a document.</div></div>
+    </div>
+  </section>
+</main>
+
+<script src="vendor/codemirror.js"></script>
+<script src="vendor/codemirror-yaml.js"></script>
+<script src="vendor/marked.min.js"></script>
+<script src="vendor/uPlot.iife.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
