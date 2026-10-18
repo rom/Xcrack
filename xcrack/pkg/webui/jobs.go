@@ -18,6 +18,7 @@ import (
 
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/xcrack"
+	"github.com/rom/xcrypto/candidates"
 )
 
 // marshalEvent renders an event as compact JSON for the SSE stream.
@@ -45,6 +46,8 @@ type Event struct {
 	State      JobState `json:"state,omitempty"`
 	File       string   `json:"file,omitempty"`
 	Candidates int64    `json:"candidates,omitempty"`
+	Keyspace   int64    `json:"keyspace,omitempty"` // total finite keyspace, or -1/0 when open-ended
+	Latest     string   `json:"latest,omitempty"`   // most recent candidate tested (only when ExposeSecrets)
 	Format     string   `json:"format,omitempty"`
 	Password   string   `json:"password,omitempty"`
 	Message    string   `json:"message,omitempty"`
@@ -63,19 +66,21 @@ type FileResult struct {
 // JobView is the lock-free, serializable projection of a Job, returned by the
 // API. It never embeds the job's mutex, channels or internal paths.
 type JobView struct {
-	ID         string       `json:"id"`
-	State      JobState     `json:"state"`
-	CreatedAt  int64        `json:"created_at"` // unix ms
-	StartedAt  int64        `json:"started_at,omitempty"`
-	EndedAt    int64        `json:"ended_at,omitempty"`
-	Files      []string     `json:"files"`
-	Error      string       `json:"error,omitempty"`
-	FilesTotal int          `json:"files_total"`
-	FilesDone  int          `json:"files_done"`
-	Candidates int64        `json:"candidates"`
-	Decrypted  int          `json:"decrypted"`
-	Results    []FileResult `json:"results,omitempty"`
-	SpecYAML   string       `json:"spec_yaml,omitempty"` // the (sanitized) spec the job ran
+	ID          string       `json:"id"`
+	State       JobState     `json:"state"`
+	CreatedAt   int64        `json:"created_at"` // unix ms
+	StartedAt   int64        `json:"started_at,omitempty"`
+	EndedAt     int64        `json:"ended_at,omitempty"`
+	Files       []string     `json:"files"`
+	Error       string       `json:"error,omitempty"`
+	FilesTotal  int          `json:"files_total"`
+	FilesDone   int          `json:"files_done"`
+	Candidates  int64        `json:"candidates"`
+	Keyspace    int64        `json:"keyspace"` // finite total when known (determinate bar), else -1
+	Decrypted   int          `json:"decrypted"`
+	Distributed bool         `json:"distributed,omitempty"`
+	Results     []FileResult `json:"results,omitempty"`
+	SpecYAML    string       `json:"spec_yaml,omitempty"` // the (sanitized) spec the job ran
 }
 
 // Job is a single recovery run over one or more uploaded files. Its mutable
@@ -89,12 +94,14 @@ type Job struct {
 	Files     []string
 	Error     string
 
-	FilesTotal int
-	FilesDone  int
-	Candidates int64
-	Decrypted  int
-	Results    []FileResult
-	SpecYAML   string
+	FilesTotal  int
+	FilesDone   int
+	Candidates  int64
+	Keyspace    int64
+	Decrypted   int
+	Distributed bool
+	Results     []FileResult
+	SpecYAML    string
 
 	mu      sync.Mutex
 	spec    *jobspec.Spec
@@ -116,8 +123,8 @@ func (j *Job) snapshot() JobView {
 		ID: j.ID, State: j.State, CreatedAt: j.CreatedAt, StartedAt: j.StartedAt,
 		EndedAt: j.EndedAt, Files: append([]string(nil), j.Files...), Error: j.Error,
 		FilesTotal: j.FilesTotal, FilesDone: j.FilesDone, Candidates: atomic.LoadInt64(&j.Candidates),
-		Decrypted: j.Decrypted, Results: append([]FileResult(nil), j.Results...),
-		SpecYAML: j.SpecYAML,
+		Keyspace: j.Keyspace, Decrypted: j.Decrypted, Distributed: j.Distributed,
+		Results: append([]FileResult(nil), j.Results...), SpecYAML: j.SpecYAML,
 	}
 }
 
@@ -314,9 +321,6 @@ func (m *Manager) run(j *Job) {
 	}
 
 	var found int64
-	opts.OnProgress = func(p xcrack.Progress) {
-		j.emit(Event{Type: "progress", File: p.Path, Candidates: p.CandidatesTried})
-	}
 	opts.OnFound = func(f xcrack.Found) {
 		atomic.AddInt64(&found, 1)
 		ev := Event{Type: "found", File: f.Path, Format: f.Format}
@@ -332,38 +336,88 @@ func (m *Manager) run(j *Job) {
 		return
 	}
 
-	pool := xcrack.NewPool(opts)
-	defer pool.Close()
+	// Progress state: the candidate counter and latest-term the recorder feeds,
+	// plus the finite keyspace for a determinate bar (only for a single
+	// finite-keyspace target, mirroring the CLI's --progress).
+	ps := &progressState{keyspace: -1}
+	if len(names) == 1 {
+		ps.keyspace = asm.Keyspace(names[0])
+	}
+	j.mu.Lock()
+	j.Keyspace = ps.keyspace
+	j.mu.Unlock()
 
-	results := make([]FileResult, len(sources))
-	jobsC := opts.FileConcurrency
-	if jobsC < 1 {
-		jobsC = 1
-	}
-	sem := make(chan struct{}, jobsC)
-	var wg sync.WaitGroup
-	for i := range sources {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(i int) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			results[i] = m.processOne(ctx, j, pool, asm, names[i], sources[i])
-			j.mu.Lock()
-			j.FilesDone++
-			if results[i].Report != nil {
-				atomic.AddInt64(&j.Candidates, results[i].Report.Stats.CandidatesTried)
+	// Live progress ticker: surface the candidate count, keyspace percentage and
+	// the latest candidate (only when secrets are exposed) a couple of times a
+	// second, independent of how often the engine reports per-node progress.
+	stopTick := make(chan struct{})
+	var tickWG sync.WaitGroup
+	tickWG.Add(1)
+	go func() {
+		defer tickWG.Done()
+		tk := time.NewTicker(500 * time.Millisecond)
+		defer tk.Stop()
+		for {
+			select {
+			case <-stopTick:
+				return
+			case <-tk.C:
+				cand, last := ps.snapshot()
+				atomic.StoreInt64(&j.Candidates, cand)
+				j.mu.Lock()
+				done, total := j.FilesDone, j.FilesTotal
+				j.mu.Unlock()
+				ev := Event{Type: "progress", Candidates: cand, Keyspace: ps.keyspace, FilesDone: done, FilesTotal: total}
+				if m.cfg.ExposeSecrets {
+					ev.Latest = last
+				}
+				j.emit(ev)
 			}
-			done, total := j.FilesDone, j.FilesTotal
-			j.mu.Unlock()
-			j.emit(Event{Type: "file_done", File: names[i], FilesDone: done, FilesTotal: total})
-		}(i)
+		}
+	}()
+	stopProgress := func() { close(stopTick); tickWG.Wait() }
+
+	distributed := len(spec.Cluster.Servers) > 0
+	j.mu.Lock()
+	j.Distributed = distributed
+	j.mu.Unlock()
+
+	var results []FileResult
+	if distributed {
+		results = m.runDistributed(ctx, j, spec, asm, names, sources, ps, &found)
+	} else {
+		pool := xcrack.NewPool(opts)
+		defer pool.Close()
+		results = make([]FileResult, len(sources))
+		jobsC := opts.FileConcurrency
+		if jobsC < 1 {
+			jobsC = 1
+		}
+		sem := make(chan struct{}, jobsC)
+		var wg sync.WaitGroup
+		for i := range sources {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				results[i] = m.processOne(ctx, j, pool, asm, names[i], sources[i], ps)
+				j.mu.Lock()
+				j.FilesDone++
+				done, total := j.FilesDone, j.FilesTotal
+				j.mu.Unlock()
+				j.emit(Event{Type: "file_done", File: names[i], FilesDone: done, FilesTotal: total})
+			}(i)
+		}
+		wg.Wait()
 	}
-	wg.Wait()
+
+	stopProgress()
 
 	j.mu.Lock()
 	j.Results = results
 	j.Decrypted = int(atomic.LoadInt64(&found))
+	j.Candidates = ps.candidates.Load()
 	j.mu.Unlock()
 
 	if ctx.Err() != nil {
@@ -374,15 +428,54 @@ func (m *Manager) run(j *Job) {
 	j.emit(Event{Type: "done"})
 }
 
+// progressState is the live counter/latest-candidate a recorder feeds and the
+// ticker reads. keyspace is the finite total (for a determinate bar) or -1.
+type progressState struct {
+	candidates atomic.Int64
+	last       atomic.Pointer[string]
+	keyspace   int64
+}
+
+func (ps *progressState) record(b []byte) {
+	ps.candidates.Add(1)
+	s := string(b)
+	ps.last.Store(&s)
+}
+
+func (ps *progressState) snapshot() (cand int64, last string) {
+	cand = ps.candidates.Load()
+	if p := ps.last.Load(); p != nil {
+		last = *p
+	}
+	return cand, last
+}
+
+// recorder wraps a candidate source to record the count and latest value pulled,
+// so the UI can show throughput and the most recent term tested.
+type recorder struct {
+	src candidates.Source
+	ps  *progressState
+}
+
+func (r *recorder) Next() ([]byte, error) {
+	b, err := r.src.Next()
+	if err == nil {
+		r.ps.record(b)
+	}
+	return b, err
+}
+func (r *recorder) Len() int64   { return r.src.Len() }
+func (r *recorder) Reset() error { return r.src.Reset() }
+
 // processOne cracks a single file and writes any decrypted tree under the job's
 // output directory. It never returns an error; a failure is recorded on the
 // FileResult so the other files still run.
-func (m *Manager) processOne(ctx context.Context, j *Job, pool *xcrack.Pool, asm *jobspec.Assembler, name, path string) FileResult {
+func (m *Manager) processOne(ctx context.Context, j *Job, pool *xcrack.Pool, asm *jobspec.Assembler, name, path string, ps *progressState) FileResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FileResult{Name: name, Error: fmt.Sprintf("read: %v", err)}
 	}
-	src := asm.Candidates(name)
+	src := &recorder{src: asm.Candidates(name), ps: ps}
 	res, err := pool.Process(ctx, byteReaderAt(data), int64(len(data)), src)
 	if err != nil {
 		if ctx.Err() != nil {
