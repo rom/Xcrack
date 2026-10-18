@@ -344,3 +344,67 @@ fleet as batches, so any CLI attack works distributed without the server needing
 a flag for it. The server stays a fast, stateless **verify/KDF worker**; the
 client owns candidate generation. This keeps the three forms at parity while the
 wire protocol stays simple. See [`USERMANUAL.md` §4](USERMANUAL.md#5-distributed-environments).
+
+---
+
+## Part 3 — The Web API (`xcrack-web` / `pkg/webui`)
+
+`xcrack-web` serves a browser GUI backed by a JSON/SSE API. Unlike the `xcrackd`
+REST worker (a stateless verify/KDF node), this API drives **whole jobs**: it
+accepts uploaded files plus a `jobspec.Spec` (the config YAML), runs the full
+engine — every candidate source the config can express — and streams progress
+and results. It is the delivery surface for an interactive, single-user (or
+proxied) recovery console; see [`USERMANUAL.md` §10](USERMANUAL.md#10-web-gui-xcrack-web).
+
+### Running the server
+
+```sh
+bin/xcrack-web                  # http://127.0.0.1:8899 (localhost)
+bin/xcrack-web --addr :9000     # all interfaces (ships no auth — see §10.7)
+```
+
+### Endpoints
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| `GET` | `/api/v1/meta` | capabilities (version, GPU/TPM build), supported formats, a starter spec |
+| `POST` | `/api/v1/config/validate` | strict-parse + validate a YAML spec (`{valid, error}`) |
+| `POST` | `/api/v1/config/format` | re-emit a spec tidied (`{yaml}`) |
+| `POST` | `/api/v1/identify` | detect format/encryption of uploaded files (no cracking) |
+| `POST` | `/api/v1/jobs` | create a job (multipart: `spec` + `source` files + `aux` files) |
+| `GET` | `/api/v1/jobs` / `/api/v1/jobs/{id}` | list jobs / one job's state + results |
+| `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
+| `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
+| `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
+| `GET` | `/api/v1/stats` | aggregate counters across jobs |
+| `GET` | `/api/v1/docs` / `/api/v1/docs/{name}` | in-app documentation listing / Markdown |
+
+### Submitting a job
+
+A job is `multipart/form-data`:
+
+- `spec` — the job configuration as YAML (or JSON; it is parsed as YAML). This
+  is a `jobspec.Spec` — the schema in [`config/README.md`](../config/README.md).
+- `source` — one or more parts: the files to recover.
+- `aux` — zero or more parts: wordlists / breach corpora / combinator / hcmask
+  inputs the spec references by **base name**.
+
+```sh
+curl -sS -X POST http://127.0.0.1:8899/api/v1/jobs \
+  -F 'spec={"candidates":{"use_default_list":false,"wordlists":["rockyou.txt"]}}' \
+  -F 'source=@secret.docx' \
+  -F 'aux=@rockyou.txt'
+# => {"id":"…"};  then GET /api/v1/jobs/{id} or stream /events
+```
+
+### Security & parity
+
+The backend builds engine `Options` and the per-file candidate source from the
+spec through `pkg/jobspec` — the same assembler the CLI uses — so the GUI reaches
+the full attack toolkit directly (no client-side orchestration needed, unlike
+the REST worker). It ships no authentication (localhost is single-user; a shared
+instance needs a proxy + TLS). A submitted spec may reference only uploaded files
+(file-path fields are resolved within the job's upload area and anything
+escaping is rejected) unless `--allow-server-paths` is set; output destinations
+in a spec are ignored. Recovered passwords appear in responses/events only when
+`--expose-secrets` is on.

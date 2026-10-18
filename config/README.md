@@ -43,7 +43,10 @@ xcrack --config config/basic.yaml -w samples/wordlist.txt samples/zipcrypto.zip
 ## Complete config-key reference
 
 Every key below is optional; omit a block to take its defaults. CLI flags and
-environment variables override the config.
+environment variables override the config. This is the one canonical schema: the
+`xcrack --config` flag, the embeddable library (`pkg/jobspec`), and the
+`xcrack-web` advanced-mode editor all consume it, so a capability expressible
+here is reachable from every surface.
 
 ### `concurrency:`
 | Key | Type | Meaning |
@@ -54,6 +57,7 @@ environment variables override the config.
 | `batch_size` | int | candidates per internal batch (channel amortization) |
 | `throttle` | int | CPU duty-cycle percent (1–100; lower = gentler) |
 | `dual_pipeline` | bool | race the CPU search and the `--gpu` sweep over one shared keyspace per file (first to find wins; needs `--gpu`) |
+| `gpu` | bool | offload the shared PBKDF2 sweep to an OpenCL device (needs a `-tags opencl` build on GPU hardware; pure-Go falls back to the CPU) |
 
 ### `limits:`
 | Key | Type | Meaning |
@@ -85,7 +89,18 @@ environment variables override the config.
 | `adaptive` | bool | corpus-wide password reuse across files (`--adaptive`) |
 | `cost_queue` | bool | attack weakest/fastest files first (`--cost-queue`) |
 | `markov` | bool | Markov best-first generation (`--markov`) |
+| `markov_pos` | bool | position-aware (2D) Markov model (`--markov-pos`) |
+| `markov_max` | int | cap on Markov guesses (0 = 1,000,000) |
+| `markov_threshold` | int | per-position branching cap (0 = 15; `--markov-threshold`) |
 | `order` | string | `markov` to reorder wordlists likeliest-first (`--order`) |
+| `order_max` | int | max wordlist entries buffered for reordering (0 = 1,000,000) |
+| `pcfg` | bool | PCFG probability-order generation (`--pcfg`) |
+| `pcfg_max` | int | cap on PCFG guesses (0 = 100,000) |
+| `increment` | string | expand each mask over `MIN:MAX` tokens, shortest first (`--increment`) |
+| `combinator` | `{left, right, sep}` | combinator attack: every left word + every right word, joined by `sep` |
+| `loopback` | bool | re-mangle cached/pot passwords through the rules (`--loopback`) |
+| `find_all` | bool | keep searching every encrypted node even if some stay locked |
+| `spray_years` | []int | years used in spray patterns (default current/previous) |
 | `shard` | string | `I/N` keyspace stride for this worker (`--shard`) |
 
 ### `candidates:`
@@ -97,6 +112,9 @@ environment variables override the config.
 | `breach_min_count` | int64 | drop breach entries seen fewer than N times |
 | `use_default_list` | bool | include the built-in common-password list (default true) |
 | `swedish` | bool | also try the built-in Swedish-targeted list |
+| `password_files` | []string | files of candidate passwords (one per line), tried first |
+| `min_length` / `max_length` | int | skip candidates outside this character length (0 = no bound) |
+| `encoding` | string | transcode candidates before testing: `utf-8` (default) \| `latin1` \| `utf-16le` \| `utf-16be` |
 
 ### `patterns:`
 | Key | Type | Meaning |
@@ -105,6 +123,13 @@ environment variables override the config.
 | `rules` | []string | hashcat mangling-rule lines |
 | `custom_charsets` | map | `"1".."4"` → charset string for `?1..?4` |
 | `hcmask` | []string | hashcat `.hcmask` files (per-line masks; `--hcmask`) |
+| `generate_rules` | int | generate N reproducible random mangling rules (`--generate-rules`) |
+| `generate_rules_seed` | int64 | seed for `generate_rules` (same seed → same rules) |
+
+### `input:`
+| Key | Type | Meaning |
+|-----|------|---------|
+| `as` | string | force a scheme for a magic-less file, e.g. `sqlcipher` (`--as`) |
 
 ### `output:`
 | Key | Type | Meaning |
@@ -120,6 +145,7 @@ environment variables override the config.
 | `syslog_tag` | string | syslog tag/ident (with `syslog`; default: program name) |
 | `audit_log_password` | bool | include the recovered password in the "file cracked" audit entry (default off: the trail stays secrets-free) |
 | `extract_suffix` | string | per-source extracted-tree directory suffix under `--out` (default `.extracted`; single path segment, no `/` or `..`) |
+| `cache_encryption` | string | encrypt the found-password cache at rest: `` / `none` (plaintext, default) or `tpm` (seal the key to the host TPM; needs a `-tags tpm` build) |
 
 ### `budget:`
 | Key | Type | Meaning |

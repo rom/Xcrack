@@ -14,6 +14,30 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
+### Added
+- **Web GUI (`xcrack-web`).** A new single binary serves a browser front-end to
+  the engine plus a JSON/SSE API (`pkg/webui`): drag-and-drop uploads, an
+  easy-mode form and an **advanced mode** with an IDE-style YAML configuration
+  editor (CodeMirror), a statistics dashboard with live throughput graphs
+  (uPlot), decrypted-output download, and the full documentation rendered
+  in-app. It runs locally (localhost, a single-user console) or as a service
+  (TLS + reverse-proxy auth, like `xcrackd`). A submitted job may reference only
+  the files uploaded with it unless `--allow-server-paths` is set.
+- **One canonical job schema (`pkg/jobspec`).** The CLI `--config`, the
+  embeddable library and the web editor now share a single `Spec` type and the
+  one assembler that turns it into engine options + candidate sources, so a
+  capability expressible in the YAML is reachable from every surface. The schema
+  is extended to cover options that used to be CLI-flag-only (combinator,
+  increment, PCFG/Markov tuning, min/max length, encoding, loopback, spray
+  years, generate-rules, force-format, password files, GPU).
+- **Optional TPM-sealed found-password cache (`-tags tpm`).** The found-password
+  cache/potfile can be encrypted at rest with a key sealed to the host's TPM
+  (`--cache-encryption tpm` / `output.cache_encryption: tpm`), so the file is
+  useless if copied off the machine; tampering or a foreign key is detected and
+  rejected. The default pure-Go build excludes the TPM dependency and reports a
+  clear error if asked, keeping ADR 0001 intact. The plaintext cache is
+  unchanged and remains the default.
+
 ### Fixed / performance
 - **Thunder Tables usable by default + parallel lookup.** The shipped
   `thunder-gen` default chain length was `2^20`, which made a V1/R2 lookup cost
