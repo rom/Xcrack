@@ -188,9 +188,7 @@ func TestGenerateTableProgress(t *testing.T) {
 // error partway through a sub-table falls back to the CPU walk without
 // double-counting progress (final done must equal total, never exceed it).
 func TestGenerateTableChunkedChainComputer(t *testing.T) {
-	defer func(old int) { gpuChainChunk = old }(gpuChainChunk)
-	gpuChainChunk = 4 // tiny so a 16-chain sub-table takes several offload calls
-
+	// GPUChainBatch=4 forces a 16-chain sub-table into several offload calls.
 	// Success path: the ChainComputer is called in 4-chain chunks.
 	var calls int
 	cc := func(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
@@ -202,11 +200,11 @@ func TestGenerateTableChunkedChainComputer(t *testing.T) {
 		return out, nil
 	}
 	if _, err := GenerateTable(context.Background(), TableParams{
-		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: cc,
+		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: cc, GPUChainBatch: 4,
 	}); err != nil {
 		t.Fatalf("GenerateTable (chunked offload): %v", err)
 	}
-	if calls < 4 { // 16 chains / chunk 4 => 4 calls for the single sub-table
+	if calls < 4 { // 16 chains / batch 4 => 4 calls for the single sub-table
 		t.Fatalf("ChainComputer called %d time(s), want >= 4 (not chunked)", calls)
 	}
 
@@ -222,7 +220,7 @@ func TestGenerateTableChunkedChainComputer(t *testing.T) {
 	}
 	var gotTotal, maxDone uint64
 	if _, err := GenerateTable(context.Background(), TableParams{
-		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: ferr,
+		KeyspaceBits: 8, ChainLen: 4, Chains: 16, Tables: 1, Chain: ferr, GPUChainBatch: 4,
 		Progress: func(done, total uint64) {
 			gotTotal = total
 			if done > maxDone {
@@ -237,6 +235,20 @@ func TestGenerateTableChunkedChainComputer(t *testing.T) {
 	}
 	if maxDone != gotTotal {
 		t.Fatalf("final done = %d, want %d (partial offload count not rolled back)", maxDone, gotTotal)
+	}
+}
+
+// TestGPUBatchSize checks the auto batch shrinks as ChainLen grows and that an
+// explicit override wins.
+func TestGPUBatchSize(t *testing.T) {
+	if got := gpuBatchSize(4096, 0); got != gpuChainOpBudget/4096 {
+		t.Fatalf("auto batch for chainLen 4096 = %d, want %d", got, gpuChainOpBudget/4096)
+	}
+	if got := gpuBatchSize(1<<30, 0); got != 1 {
+		t.Fatalf("auto batch for a huge chainLen = %d, want 1 (floor)", got)
+	}
+	if got := gpuBatchSize(256, 99); got != 99 {
+		t.Fatalf("override batch = %d, want 99", got)
 	}
 }
 

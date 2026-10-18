@@ -34,6 +34,7 @@ func runThunderGen(args []string) int {
 	tables := fs_.Int("tables", 4, "independent sub-tables (more => higher coverage)")
 	workers := fs_.Int("workers", 0, "generation workers (0 = all cores)")
 	gpu := fs_.Bool("gpu", false, "offload chain generation to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
+	gpuBatch := fs_.Int("gpu-batch", 0, "chains per GPU submission with --gpu (0 = auto, sized to stay under the device's compute watchdog); lower it if a run hits a GPU 'ring timeout'/'context lost' (also via XCRACK_GPU_CHAIN_BATCH)")
 	progressF := fs_.String("progress", "", "periodic progress to stderr: 'N%' every N percent (N=1,5,10,25), or 'N<hour|day>' every N hours/days (e.g. 5%, 2hour, 1day)")
 	dryRun := fs_.Bool("dry-run", false, "print the generation plan (work, size, time estimate) and exit")
 	if err := fs_.Parse(args); err != nil {
@@ -93,6 +94,17 @@ func runThunderGen(args []string) int {
 	// chain is byte-identical to the CPU walk, so the table is inverted by the same
 	// CPU lookup; GenerateTable falls back to the CPU per sub-table if the device
 	// errors, so a GPU hiccup never corrupts the table.
+	// Resolve the per-submission GPU batch: the flag wins, else XCRACK_GPU_CHAIN_BATCH,
+	// else 0 (GenerateTable sizes it automatically from --length).
+	gpuBatchN := *gpuBatch
+	if gpuBatchN == 0 {
+		if v := os.Getenv("XCRACK_GPU_CHAIN_BATCH"); v != "" {
+			if n, err := strconv.Atoi(v); err == nil && n > 0 {
+				gpuBatchN = n
+			}
+		}
+	}
+
 	var chain pdf.ChainComputer
 	if *gpu {
 		if acc, derr := accel.Detect(); derr != nil {
@@ -115,6 +127,11 @@ func runThunderGen(args []string) int {
 					for _, d := range acc.Devices() {
 						fmt.Fprintf(os.Stderr, "  offloading chains to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
 					}
+					if gpuBatchN > 0 {
+						fmt.Fprintf(os.Stderr, "  GPU submission batch: %d chains/call (--gpu-batch)\n", gpuBatchN)
+					} else {
+						fmt.Fprintln(os.Stderr, "  GPU submission batch: auto (lower --gpu-batch if you hit a 'ring timeout'/'context lost')")
+					}
 				}
 			}
 		}
@@ -122,7 +139,7 @@ func runThunderGen(args []string) int {
 
 	started := time.Now()
 	params := pdf.TableParams{
-		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers, Chain: chain,
+		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers, Chain: chain, GPUChainBatch: gpuBatchN,
 	}
 	if prog != nil {
 		prog.start = started
