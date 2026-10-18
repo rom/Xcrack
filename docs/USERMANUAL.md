@@ -354,6 +354,69 @@ PuTTY v3), scrypt (age, Ethereum, PBES2), bcrypt (OpenSSH), and SQLCipher
 **No GPU of your own?** Use path A/B on a rented box, or offload to hashcat/John
 with `hashline` / `export-challenge` (section 2).
 
+### D. Building the optional tiers (Linux)
+
+Two build tags select the optional features, and the same recipe applies to all
+three binaries (`xcrack`, `xcrackd`, `xcrack-web`):
+
+- **`opencl`** — the GPU tier. The one cgo exception to the pure-Go default
+  (ADR 0001): it `#include <CL/cl.h>` and links `-lOpenCL`, so it needs
+  `CGO_ENABLED=1`, a C compiler, and the OpenCL headers + ICD loader.
+- **`tpm`** — the TPM-sealed found-password cache ([§11.6](#116-encrypting-the-found-password-cache-tpm)).
+  Pure Go: **no extra packages**, just add the tag.
+
+Both are inert unless you ask for them at runtime (`--gpu`,
+`--cache-encryption tpm`), so a tagged binary still runs fine on a host without a
+GPU or TPM — it logs why and falls back.
+
+**Fedora prerequisites** (only for the `opencl` tag):
+
+```sh
+# C toolchain + OpenCL loader and headers
+sudo dnf install gcc ocl-icd-devel opencl-headers clinfo
+
+# plus a runtime ICD for your hardware — pick what matches the box:
+sudo dnf install pocl                              # CPU OpenCL: no GPU needed, ideal for testing
+# AMD:    sudo dnf install rocm-opencl             # (or mesa-libOpenCL for rusticl/clover)
+# NVIDIA: sudo dnf install xorg-x11-drv-nvidia-cuda   # from RPM Fusion; provides libnvidia-opencl
+# Intel:  sudo dnf install intel-compute-runtime   # (Copr on some releases)
+
+clinfo | grep -E 'Platform Name|Device Name'       # confirm a device is visible
+```
+
+(On Debian/Ubuntu the loader/headers are `ocl-icd-opencl-dev opencl-headers`;
+on openSUSE `ocl-icd-devel opencl-headers`. The tag and build commands are the
+same.)
+
+**Build all three with both tiers:**
+
+```sh
+CGO_ENABLED=1 go build -tags "opencl tpm" -o bin/xcrackd    ./xcrack/cmd/xcrackd
+CGO_ENABLED=1 go build -tags "opencl tpm" -o bin/xcrack     ./xcrack/cmd/xcrack
+CGO_ENABLED=1 go build -tags "opencl tpm" -o bin/xcrack-web ./xcrack/cmd/xcrack-web
+```
+
+Use a single tag (`-tags opencl` or `-tags tpm`) for just one tier. `CGO_ENABLED=1`
+is required only when `opencl` is in the list; a `tpm`-only build needs no C
+toolchain and no packages:
+
+```sh
+go build -tags tpm -o bin/xcrackd ./xcrack/cmd/xcrackd   # TPM only, still pure Go
+```
+
+**Verify the tiers compiled in:**
+
+```sh
+bin/xcrackd -gpu-selftest        # runs the OpenCL kernel self-test, then exits
+bin/xcrack office-keyattack --help   # --gpu is effective only in a -tags opencl build
+```
+
+A pure-Go binary logs *"rebuild with -tags opencl"* when you pass `--gpu` — the
+quick way to tell whether the tag took. Pick a specific device with
+`XCRACK_GPU_DEVICE=<name-or-vendor-substring>`. For the `tpm` tier's runtime
+requirements (a TPM 2.0 device and access to `/dev/tpmrm0`), see
+[§11.6](#116-encrypting-the-found-password-cache-tpm).
+
 ---
 
 ## 5. Distributed environments
@@ -1178,6 +1241,9 @@ fails to unseal/authenticate and is rejected (the run aborts rather than
 silently discarding your cache). TPM support is compiled in only with
 `-tags tpm`; the default pure-Go build reports a clear error if you ask for it,
 so you are never left believing the cache is protected when it is not. A
-plaintext cache remains the default and is unchanged.
+plaintext cache remains the default and is unchanged. See
+[§4.D](#d-building-the-optional-tiers-linux) for how to build the `tpm` tier (it
+needs no extra packages) and the runtime device access it expects:
+`/dev/tpmrm0`, typically group `tss`.
 
 > Authorized use only: operate on files you own or are permitted to access.
