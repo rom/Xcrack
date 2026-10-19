@@ -240,14 +240,14 @@ func TestGenerateTableChunkedChainComputer(t *testing.T) {
 	}
 }
 
-// TestGPUBatchSize checks the auto batch shrinks as ChainLen grows and that an
-// explicit override wins.
+// TestGPUBatchSize checks the auto batch is the (occupancy-sized, ChainLen-
+// independent) default and that an explicit override wins.
 func TestGPUBatchSize(t *testing.T) {
-	if got := gpuBatchSize(4096, 0); got != gpuChainOpBudget/4096 {
-		t.Fatalf("auto batch for chainLen 4096 = %d, want %d", got, gpuChainOpBudget/4096)
+	if got := gpuBatchSize(4096, 0); got != defaultGPUChainBatch {
+		t.Fatalf("auto batch for chainLen 4096 = %d, want %d", got, defaultGPUChainBatch)
 	}
-	if got := gpuBatchSize(1<<30, 0); got != 1 {
-		t.Fatalf("auto batch for a huge chainLen = %d, want 1 (floor)", got)
+	if got := gpuBatchSize(1<<30, 0); got != defaultGPUChainBatch {
+		t.Fatalf("auto batch is not ChainLen-independent: %d, want %d", got, defaultGPUChainBatch)
 	}
 	if got := gpuBatchSize(256, 99); got != 99 {
 		t.Fatalf("override batch = %d, want 99", got)

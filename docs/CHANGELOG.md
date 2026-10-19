@@ -85,6 +85,25 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   unchanged and remains the default.
 
 ### Fixed / performance
+- **`thunder-gen --gpu` column-batched chain kernel (occupancy).** The GPU
+  thunder-chain walk previously ran one work-item per chain over the *whole*
+  chain length in a single dispatch, which forced a dilemma on integrated GPUs:
+  a long dispatch trips the compute watchdog ("ring timeout" / "context lost" →
+  GPU reset), so the chain count per submission had to be capped low enough that
+  `chains × ChainLen` stayed under the watchdog — which left the device's lanes
+  under-occupied and the iGPU no faster than the CPU. The kernel is now
+  **column-batched**: each device holds its chains as a device-resident bank of
+  running keys and advances them only a few columns per dispatch, so the host can
+  launch the *full* chain width of work-items (high occupancy) while each
+  submission's op-work stays under the watchdog regardless of `ChainLen`. The two
+  knobs are now separated: `--gpu-batch N` / `XCRACK_GPU_CHAIN_BATCH` sizes how
+  many chains are offloaded per call (occupancy; a wide default keeps the lanes
+  full), and the new **`XCRACK_GPU_OP_BUDGET`** bounds a single submission's
+  work-items × columns (default `2^24`) — lower it if a device still trips its
+  watchdog, raise it for more throughput headroom. The column sweep is
+  byte-identical to the single-dispatch walk and the pure-Go reference, validated
+  by the GPU-vs-CPU self-test and the `thunder-gen` GPU integration test
+  (including the multi-column resume path).
 - **`thunder-gen` plan estimates are honest for small `--bits`.** The plan's
   "chain work", wall-clock and on-disk-size lines counted the full `--chains`
   per sub-table even when the key space is smaller, over-stating a `--bits 24`

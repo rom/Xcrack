@@ -282,25 +282,27 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 	return t, nil
 }
 
-// gpuChainOpBudget bounds the image-op work of one offloaded GPU submission
-// (chains-per-call × ChainLen). A single submission must finish well under the
-// device's compute watchdog, or the driver resets the queue mid-dispatch (a
-// "ring timeout" / "context lost", seen on integrated GPUs); this keeps the auto
-// batch small enough regardless of ChainLen. Each submission is a fresh enqueue,
-// so overhead (tens of µs) is negligible against a multi-hour table.
-const gpuChainOpBudget = 1 << 22 // ~4.2M image ops per submission
+// defaultGPUChainBatch is how many chains to offload per Chain call when the
+// caller gives no override. It is deliberately large and independent of ChainLen:
+// the GPU backend column-batches each submission so a single dispatch stays under
+// the device's compute watchdog regardless of ChainLen (see
+// accel.PDFThunderChain / XCRACK_GPU_OP_BUDGET), which frees this knob to serve
+// its real purpose — occupancy. A wide batch keeps an integrated GPU's lanes full
+// (the old watchdog-driven cap of a few thousand chains starved them, leaving the
+// iGPU no faster than the CPU). It is clamped down to the sub-table size by the
+// caller, and the per-call host readback is 8 bytes × batch.
+const defaultGPUChainBatch = 1 << 20 // up to ~1M chains per offload (8 MiB readback)
 
 // gpuBatchSize is how many chains to offload per Chain call: the caller's
-// override when > 0, else gpuChainOpBudget/chainLen (at least 1).
+// override when > 0, else defaultGPUChainBatch. The result is independent of
+// chainLen (the backend column-batches each submission to stay under the device
+// watchdog); chainLen is accepted so callers need not special-case the override.
 func gpuBatchSize(chainLen, override int) int {
+	_ = chainLen
 	if override > 0 {
 		return override
 	}
-	n := gpuChainOpBudget / chainLen
-	if n < 1 {
-		n = 1
-	}
-	return n
+	return defaultGPUChainBatch
 }
 
 // generateSub builds one sub-table. Chain i starts at index i (distinct,

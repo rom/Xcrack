@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"hash"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -258,7 +259,7 @@ func Detect() (Accelerator, error) {
 	a.vbaSHA1 = vbKerns
 
 	// PDF R2 thunder-table rainbow-chain generator (PDFThunderChainer).
-	pcProg, pcKerns, berr := buildKernels(ctx, devs, pdfChainSrc, "pdf_thunderchain")
+	pcProg, pcKerns, berr := buildKernels(ctx, devs, pdfChainSrc, "pdf_thunderchain_step")
 	if berr != nil {
 		a.Close()
 		return nil, berr
@@ -1120,8 +1121,10 @@ func (a *clAccel) saltedSHA1One(dev int, passwords [][]byte, salt []byte) ([][]b
 // it splits the start-index range [startIdx, startIdx+count) into contiguous
 // pieces, one per device (each with its own queue and kernel object), that write
 // into disjoint, in-order regions of the output, so the concatenated result is
-// identical to the single-device walk. Chains are swept in chunks to bound the
-// output buffer.
+// identical to the single-device walk. Each device walks its chains as a
+// device-resident bank advanced a few columns per submission (see
+// pdfThunderChainOne) so a single dispatch stays under the compute watchdog while
+// keeping occupancy high.
 func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count uint64) ([]uint64, error) {
 	if n == 0 || (n&(n-1)) != 0 || chainLen <= 0 || count == 0 {
 		return nil, ErrUnsupported
@@ -1170,10 +1173,37 @@ func (a *clAccel) PDFThunderChain(n uint64, chainLen int, seed, startIdx, count 
 	return out, nil
 }
 
+// gpuChainOpBudget bounds the op-work (work-items × columns) of a single GPU
+// chain-step submission. One submission must finish well under the device's
+// compute watchdog, or the driver resets the queue mid-dispatch (a "ring timeout"
+// / "context lost", seen on integrated GPUs). The column-batched kernel lets us
+// hold this budget constant while running the full chain width of work-items, so
+// occupancy no longer trades off against chainLen. Tunable per device via
+// XCRACK_GPU_OP_BUDGET (0 / unparseable keeps the default).
+const gpuChainOpBudget = uint64(1) << 24 // ~16.8M column-ops per submission
+
+func gpuChainOpBudgetEnv() uint64 {
+	if s := os.Getenv("XCRACK_GPU_OP_BUDGET"); s != "" {
+		if v, err := strconv.ParseUint(s, 0, 64); err == nil && v > 0 {
+			return v
+		}
+	}
+	return gpuChainOpBudget
+}
+
 // pdfThunderChainOne computes endpoints for the contiguous start-index range
 // [startIdx, startIdx+len(out)) on a single device (its own queue + kernel
-// object), filling out in order. Chains are swept in chunks to bound each
-// enqueue's output buffer.
+// object), filling out in order.
+//
+// The chains run as a device-resident bank of running keys (stateBuf): the
+// column-batched kernel is dispatched once per column batch over the full width
+// of work-items, advancing every chain a few columns per submission, and the
+// endpoints are read back only once at the end. Columns-per-submission is sized
+// so op-work (work-items × columns) stays at the watchdog budget regardless of
+// chainLen, and each submission is drained (clFinish) before the next so the
+// driver cannot fuse them into one over-long dispatch. A large count is itself
+// swept in buffer-bounded sub-chunks (also kept at/under the budget so a
+// single-column submission stays safe).
 func (a *clAccel) pdfThunderChainOne(dev int, mask uint64, chainLen int, seed, startIdx uint64, out []uint64) error {
 	count := uint64(len(out))
 	if count == 0 {
@@ -1181,38 +1211,78 @@ func (a *clAccel) pdfThunderChainOne(dev int, mask uint64, chainLen int, seed, s
 	}
 	kern := a.pdfChain[dev]
 	queue := a.queues[dev]
-	const chunk = uint64(1) << 20 // endpoints per enqueue (8 MiB out buffer)
+	opBudget := gpuChainOpBudgetEnv()
+
+	// Sub-chunk the chain bank to bound the device/host state buffer, and keep
+	// each sub-chunk at/under the op budget so even a single-column submission
+	// (colBatch == 1, i.e. a very large bank) cannot exceed it.
+	countChunk := uint64(1) << 23 // 64 MiB state buffer
+	if countChunk > opBudget {
+		countChunk = opBudget
+	}
+
 	var errc C.cl_int
 	cMask := C.cl_ulong(mask)
-	cChainLen := C.cl_uint(chainLen)
 	cSeed := C.cl_ulong(seed)
-	for base := uint64(0); base < count; base += chunk {
-		nn := chunk
+	for base := uint64(0); base < count; base += countChunk {
+		nn := countChunk
 		if base+nn > count {
 			nn = count - base
 		}
-		outBuf := C.clCreateBuffer(a.ctx, C.CL_MEM_WRITE_ONLY, C.size_t(nn*8), nil, &errc)
+		stateBuf := C.clCreateBuffer(a.ctx, C.CL_MEM_READ_WRITE, C.size_t(nn*8), nil, &errc)
 		if errc != C.CL_SUCCESS {
-			return fmt.Errorf("accel: clCreateBuffer(thunderchain): %d", int(errc))
+			return fmt.Errorf("accel: clCreateBuffer(thunderchain state): %d", int(errc))
+		}
+		// Columns advanced per submission: as many as the op budget allows, at
+		// least 1, never past chainLen.
+		colBatch := opBudget / nn
+		if colBatch < 1 {
+			colBatch = 1
+		}
+		if colBatch > uint64(chainLen) {
+			colBatch = uint64(chainLen)
 		}
 		cStart := C.cl_ulong(startIdx + base)
 		cN := C.cl_uint(nn)
-		C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(cMask)), unsafe.Pointer(&cMask))
-		C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cChainLen)), unsafe.Pointer(&cChainLen))
-		C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(cSeed)), unsafe.Pointer(&cSeed))
-		C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(cStart)), unsafe.Pointer(&cStart))
-		C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
-		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(outBuf)), unsafe.Pointer(&outBuf))
 		global := C.size_t(nn)
-		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
-			C.clReleaseMemObject(outBuf)
-			return fmt.Errorf("accel: clEnqueueNDRangeKernel(thunderchain): %d", int(r))
+		if err := a.pdfThunderChainSweep(queue, kern, stateBuf, cMask, cSeed, cStart, cN, global, chainLen, colBatch); err != nil {
+			C.clReleaseMemObject(stateBuf)
+			return err
 		}
-		if r := C.clEnqueueReadBuffer(queue, outBuf, C.CL_TRUE, 0, C.size_t(nn*8), unsafe.Pointer(&out[base]), 0, nil, nil); r != C.CL_SUCCESS {
-			C.clReleaseMemObject(outBuf)
+		if r := C.clEnqueueReadBuffer(queue, stateBuf, C.CL_TRUE, 0, C.size_t(nn*8), unsafe.Pointer(&out[base]), 0, nil, nil); r != C.CL_SUCCESS {
+			C.clReleaseMemObject(stateBuf)
 			return fmt.Errorf("accel: clEnqueueReadBuffer(thunderchain): %d", int(r))
 		}
-		C.clReleaseMemObject(outBuf)
+		C.clReleaseMemObject(stateBuf)
+	}
+	return nil
+}
+
+// pdfThunderChainSweep dispatches the column-batched kernel over [0, chainLen) in
+// colBatch-column submissions against a device-resident state bank, draining each
+// submission before the next so a single dispatch always stays under the watchdog.
+func (a *clAccel) pdfThunderChainSweep(queue C.cl_command_queue, kern C.cl_kernel, stateBuf C.cl_mem,
+	cMask, cSeed, cStart C.cl_ulong, cN C.cl_uint, global C.size_t, chainLen int, colBatch uint64) error {
+	for col0 := uint64(0); col0 < uint64(chainLen); col0 += colBatch {
+		cols := colBatch
+		if col0+cols > uint64(chainLen) {
+			cols = uint64(chainLen) - col0
+		}
+		cCol0 := C.cl_uint(col0)
+		cCols := C.cl_uint(cols)
+		C.clSetKernelArg(kern, 0, C.size_t(unsafe.Sizeof(cMask)), unsafe.Pointer(&cMask))
+		C.clSetKernelArg(kern, 1, C.size_t(unsafe.Sizeof(cSeed)), unsafe.Pointer(&cSeed))
+		C.clSetKernelArg(kern, 2, C.size_t(unsafe.Sizeof(cStart)), unsafe.Pointer(&cStart))
+		C.clSetKernelArg(kern, 3, C.size_t(unsafe.Sizeof(cCol0)), unsafe.Pointer(&cCol0))
+		C.clSetKernelArg(kern, 4, C.size_t(unsafe.Sizeof(cCols)), unsafe.Pointer(&cCols))
+		C.clSetKernelArg(kern, 5, C.size_t(unsafe.Sizeof(cN)), unsafe.Pointer(&cN))
+		C.clSetKernelArg(kern, 6, C.size_t(unsafe.Sizeof(stateBuf)), unsafe.Pointer(&stateBuf))
+		if r := C.clEnqueueNDRangeKernel(queue, kern, 1, nil, &global, nil, 0, nil, nil); r != C.CL_SUCCESS {
+			return fmt.Errorf("accel: clEnqueueNDRangeKernel(thunderchain): %d", int(r))
+		}
+		if r := C.clFinish(queue); r != C.CL_SUCCESS {
+			return fmt.Errorf("accel: clFinish(thunderchain): %d", int(r))
+		}
 	}
 	return nil
 }
