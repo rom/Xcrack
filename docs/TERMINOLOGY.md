@@ -47,7 +47,7 @@ The core vocabulary of Xcrack's recursive-decomposition engine (see
 | **Fast-reject** | An even cheaper 1–2 byte check tried *before* the KDF runs, to discard most wrong guesses; the authoritative verifier is always re-run on anything it passes, so it can never cause a false positive. |
 | **File jobs** | The number of files cracked concurrently, each with its own candidate stream (`--file-jobs`); output stays in argument order. |
 | **Format** | A plugin that recognizes one file type. May be `Encrypted` (has a KDF/verifier), a `Container` (unpacks to entries), `Explodable` (a document decomposable into parts), `Accelerable` (exposes a batchable KDF for the GPU), or several at once. |
-| **Hint** | A per-file signal tried early — an embedded one (iWork `.iwph`, a ZIP comment) or a supplied `--hint STR`. |
+| **Hint** | A per-file signal tried early — a file's embedded password hint (iWork `.iwph`, a ZIP comment), enabled with `--hint`. |
 | **Keyspace** | The number of candidates a configured attack will produce; reported by `--keyspace`. |
 | **Leaf** | A node that is neither encrypted nor a container: real content handed back to the caller. |
 | **Loopback** | Re-feeding already-recovered passwords back through the rule engine as fresh candidates (`--loopback`), a hashcat idiom. |
@@ -87,7 +87,7 @@ How a password becomes a key, and the hashing that underlies it. See
 | **PRF** (Pseudo-Random Function) | The keyed function a KDF iterates (for PBKDF2, an HMAC); the engine's `AccelKDF` carries a PRF selector so the right GPU kernel is chosen. |
 | **RIPEMD-160** | A legacy 160-bit hash (TrueCrypt/VeraCrypt header KDF option, some wallets). |
 | **S2K** (String-to-Key) | OpenPGP's password-to-key conversion; the iterated-salted mode (`gpg -c`) is a cheap iterated hash. |
-| **Salt** | Random per-file (or per-entry) bytes mixed into the KDF so the same password yields different keys and precomputed tables don't apply. A KDF missing a salt (PDF R5, §5) is much weaker. |
+| **Salt** | Random per-file (or per-entry) bytes mixed into the KDF so the same password yields different keys and precomputed tables don't apply. A KDF missing a salt (PDF V1/R2, §5) is much weaker. |
 | **scrypt** | A memory-hard KDF parameterized by `N, r, p` (age, Ethereum keystore, some PBES2). Like Argon2, deliberately CPU-bound for a cracker. |
 | **Spin / iteration count** | The number of KDF repetitions (Office agile's ~100 000 iterated-hash **spin**, PBKDF2's iteration count); always *read from the file*, never assumed. |
 | **Start key / pre-hash** | A format-specific hash applied to the password *before* the main KDF (ODF's SHA-256/SHA-1 start key); carried per-candidate on the CPU via `AccelKDF.PreHash` when the main spin is offloaded. |
@@ -108,7 +108,7 @@ The bulk ciphers and the modes/MACs wrapped around them.
 | **CBC** (Cipher Block Chaining) | A block-cipher mode where each block is XORed with the previous ciphertext; needs an IV and padding. |
 | **CFB** (Cipher Feedback) | A self-synchronizing stream mode (OpenPGP's SEIPD packet). *Not to be confused with CFB the compound-file container — see §4.* |
 | **ChaCha20-Poly1305** | The AEAD stream cipher + MAC used by `age`. |
-| **CTR** (Counter) | A mode that turns a block cipher into a stream cipher by encrypting a counter (WinZip-AES, PDF AESV3). |
+| **CTR** (Counter) | A mode that turns a block cipher into a stream cipher by encrypting a counter (WinZip-AES, OpenSSH aes256-ctr). |
 | **ECB** (Electronic Codebook) | The mode-less block mode (each block independent); used inside OOXML standard and the AES-KDF stretch, not for bulk data. |
 | **GCM** (Galois/Counter Mode) | An AEAD mode: CTR encryption plus an authentication tag (ODF 1.3's authenticated variant). |
 | **IV / nonce** | Initialization Vector / number-used-once — the non-secret per-message value a mode needs; reuse under one key is what breaks ZipCrypto cross-entry and the Office keystream-reuse weakness. |
@@ -193,7 +193,7 @@ authoritative, per-format treatment is [`CRACKING.md`](CRACKING.md) §3.
 | **Oracle** | The independent, trusted implementation (a real CLI, a published vector) a scheme's output is checked against. |
 | **PCFG** | Probabilistic Context-Free Grammar — Weir et al.'s structure-learned candidate generation (`--pcfg`). |
 | **PRINCE** | PRobability INfinite Chained Elements — Jens Steube's chained-word generator. |
-| **Rainbow table** | A time-memory-trade-off lookup table of hash→preimage chains (Oechslin 2003); the precompute route to instant recovery (Ophcrack for LM, Elcomsoft "Thunder Tables" for 40-bit Office) — roadmap for Xcrack's 40-bit sweeps. |
+| **Rainbow table** | A time-memory-trade-off lookup table of hash→preimage chains (Oechslin 2003); the precompute route to instant recovery (Ophcrack for LM, Elcomsoft "Thunder Tables" for 40-bit Office) — shipped for Xcrack's PDF V1/R2 sweep (`thunder-gen` / `pdf-keyattack --table`). |
 | **Reduced known-plaintext** (Stay 2001) | Michael Stay's reduction of the ZipCrypto KPA to as little as 2–3 known bytes in many cases — documented, not built (Xcrack needs the keys, not the password, and ~12 bytes of compressed plaintext is nearly always available). |
 | **Rule** | A per-word transform (append, capitalize, leet-substitute, …) in the hashcat rule language; Xcrack implements the full function + reject set. |
 | **Single crack mode** | John the Ripper's fast first pass that mangles the username/GECOS fields; Xcrack's analogue is the context/hint candidates. |
