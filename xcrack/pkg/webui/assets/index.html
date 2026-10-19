@@ -16,6 +16,7 @@
     <button data-tab="crack" class="active">Crack</button>
     <button data-tab="history">History</button>
     <button data-tab="recovered">Recovered</button>
+    <button data-tab="library">Library</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
@@ -51,6 +52,7 @@
         <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
         <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
         <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
+        <div class="field"><label>Library wordlists <small>(names from the Library tab, one per line)</small></label><textarea id="lib_names" rows="2" placeholder="rockyou.txt"></textarea></div>
         <div class="field"><label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label><textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea></div>
         <details class="mask-builder"><summary>Mask builder</summary>
           <div class="mb-row">
@@ -196,6 +198,8 @@
             <div class="field"><label>Server name</label><input type="text" id="tls_server_name"></div>
           </div>
           <label><input type="checkbox" id="tls_insecure"> Skip server cert verification (INSECURE)</label>
+          <div class="row"><button type="button" id="cluster-check" class="mini">Check server health</button></div>
+          <div id="cluster-health"></div>
         </details>
 
         <details><summary>Auxiliary files</summary>
@@ -224,7 +228,11 @@
       <div id="latest-term" class="latest"></div>
       <h3>Results</h3>
       <div id="results"></div>
-      <h3>Live log</h3>
+      <div class="log-head">
+        <h3>Live log</h3>
+        <label class="check"><input type="checkbox" id="log-autoscroll" checked> autoscroll</label>
+        <button type="button" id="log-copy" class="mini">copy</button>
+      </div>
       <pre id="log" class="log"></pre>
     </div>
   </section>
@@ -253,6 +261,19 @@
       </div>
       <p class="hint">The server's found-password vault (potfile). Every recovered password is kept here and fed back into new jobs' loopback pass, so a reused or previously found password is caught fast. On a multi-user instance the vault is disabled to avoid leaking passwords between users.</p>
       <div id="vault-list"></div>
+    </div>
+  </section>
+
+  <!-- LIBRARY (server-side wordlists) ----------------------------------- -->
+  <section id="tab-library" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Wordlist library</h2>
+        <button type="button" id="lib-refresh" class="mini">Refresh</button>
+      </div>
+      <p class="hint">Dictionaries saved on the server and reused by name across jobs — no re-upload. In the Crack form's <em>Library wordlists</em> field, list the names you want a job to use.</p>
+      <div class="field"><label>Upload a wordlist to the library</label><input type="file" id="lib-upload" multiple></div>
+      <div id="lib-list"></div>
     </div>
   </section>
 
@@ -353,6 +374,7 @@
 
   <!-- STATISTICS -------------------------------------------------------- -->
   <section id="tab-stats" class="tab">
+    <div class="card" id="sys-info"><h2>System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
     <div class="grid stats-grid" id="stat-cards"></div>
     <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
     <div class="grid">

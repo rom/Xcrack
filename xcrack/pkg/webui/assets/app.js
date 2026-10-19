@@ -49,6 +49,7 @@ async function boot() {
   wireHistory();
   wireMaskBuilder();
   wireWizard();
+  wirePhase5();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
@@ -123,6 +124,7 @@ function wireTabs() {
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
       if (btn.dataset.tab === "history") refreshHistory();
       if (btn.dataset.tab === "recovered") refreshVault();
+      if (btn.dataset.tab === "library") refreshLibrary();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
     });
   });
@@ -389,6 +391,7 @@ async function runJob() {
   for (const f of pickedSources) fd.append("source", f);
   for (const f of $("wordlists").files) fd.append("aux", f);
   for (const f of $("aux").files) fd.append("aux", f);
+  if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
   $("latest-term").textContent = ""; resetBar();
   Charts.reset();
@@ -492,7 +495,11 @@ function resetBar() {
 }
 function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-function appendLog(s) { const log = $("log"); log.textContent += s + "\n"; log.scrollTop = log.scrollHeight; }
+function appendLog(s) {
+  const log = $("log"); log.textContent += s + "\n";
+  const as = $("log-autoscroll");
+  if (!as || as.checked) log.scrollTop = log.scrollHeight;
+}
 
 async function finishRun(state) {
   if (evtSource) { evtSource.close(); evtSource = null; }
@@ -609,6 +616,92 @@ async function refreshVault() {
   host.append(ol);
 }
 
+// ---- Phase 5: library, cluster health, log controls ------------------------
+function wirePhase5() {
+  $("lib-refresh").addEventListener("click", refreshLibrary);
+  $("lib-upload").addEventListener("change", uploadLibrary);
+  const cc = $("cluster-check"); if (cc) cc.addEventListener("click", clusterHealth);
+  const lc = $("log-copy"); if (lc) lc.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("log").textContent); toast("Log copied."); } catch { toast("Copy failed."); }
+  });
+}
+
+async function refreshLibrary() {
+  const host = $("lib-list");
+  let v;
+  try { v = await (await fetch(api("/library"))).json(); }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the library." })); return; }
+  host.textContent = "";
+  const wls = v.wordlists || [];
+  if (!wls.length) { host.append(el("p", { className: "hint", textContent: "No wordlists yet — upload one above." })); return; }
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "name" }), el("th", { textContent: "size" }), el("th", { textContent: "" })]));
+  for (const e of wls) {
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: e.name })]),
+      el("td", { textContent: fmtBytes(e.size) }),
+      el("td", {}, [
+        el("button", { type: "button", className: "mini", textContent: "preview", onclick: () => previewLibrary(e.name) }),
+        el("button", { type: "button", className: "mini", textContent: "use", onclick: () => useLibrary(e.name) }),
+        el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteLibrary(e.name) }),
+      ]),
+    ]));
+  }
+  host.append(tbl);
+}
+async function uploadLibrary() {
+  const input = $("lib-upload");
+  if (!input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append("file", f);
+  try {
+    const r = await fetch(api("/library"), { method: "POST", body: fd });
+    toast(r.ok ? "Uploaded to library." : "Upload failed: " + ((await r.json().catch(() => ({}))).error || r.status));
+  } catch (e) { toast("Upload failed: " + e); }
+  input.value = "";
+  refreshLibrary();
+}
+async function previewLibrary(name) {
+  let v;
+  try { v = await (await fetch(api("/library/" + encodeURIComponent(name) + "/preview"))).json(); } catch { return; }
+  $("preview-title").textContent = name;
+  $("preview-meta").textContent = `first ${(v.lines || []).length} line(s)`;
+  $("preview-body").textContent = (v.lines || []).join("\n");
+  $("preview-modal").hidden = false;
+}
+async function deleteLibrary(name) {
+  if (!confirm("Delete library wordlist " + name + "?")) return;
+  try { await fetch(api("/library/" + encodeURIComponent(name)), { method: "DELETE" }); } catch {}
+  refreshLibrary();
+}
+function useLibrary(name) {
+  const ta = $("lib_names");
+  const have = ta.value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!have.includes(name)) ta.value = (ta.value.trim() ? ta.value.replace(/\n+$/, "") + "\n" : "") + name;
+  toast(name + " added to the Crack form's library list.");
+}
+
+async function clusterHealth() {
+  const out = $("cluster-health"); out.textContent = "Checking…";
+  const body = new URLSearchParams(); body.set("servers", $("servers").value);
+  let v;
+  try { v = await (await fetch(api("/cluster/health"), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body })).json(); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (v.error) { out.textContent = "✕ " + v.error; return; }
+  out.textContent = "";
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "server" }), el("th", { textContent: "status" }), el("th", { textContent: "ms" })]));
+  for (const s of v.servers || []) {
+    const label = s.ok ? "up" : (s.error ? "down" : "HTTP " + s.status);
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: s.url })]),
+      el("td", {}, [el("span", { className: "badge " + (s.ok ? "on" : "off"), textContent: label })]),
+      el("td", { textContent: String(s.latency_ms || 0) }),
+    ]));
+  }
+  out.append(tbl);
+}
+
 async function deleteHistoryJob(id) {
   if (!confirm("Delete this job and its working files?")) return;
   try { await fetch(api("/jobs/" + id), { method: "DELETE" }); } catch {}
@@ -681,8 +774,24 @@ const Charts = {
   },
 };
 
+// renderSysInfo fills the Statistics "System & acceleration" card from /meta.
+function renderSysInfo() {
+  const host = $("sys-body"); if (!host) return;
+  host.textContent = "";
+  host.append(el("p", {}, ["Version: ", el("code", { textContent: META.version || "?" })]));
+  const tag = (t, on) => el("span", { className: "badge " + (on ? "on" : "off"), textContent: t });
+  host.append(el("p", {}, [
+    tag(META.gpu_available ? "GPU tier available" : "GPU tier not built", !!META.gpu_available),
+    tag(META.tpm_build ? "TPM build" : "no TPM build", !!META.tpm_build),
+  ]));
+  host.append(el("p", { className: "hint", textContent: META.gpu_available
+    ? "Jobs can request the GPU tier (Advanced → GPU); dual-pipeline races the CPU and GPU over one keyspace."
+    : "This build is CPU-only; rebuild with -tags opencl for the GPU tier." }));
+}
+
 // ---- statistics -------------------------------------------------------------
 async function refreshStats() {
+  renderSysInfo();
   let s; try { s = await (await fetch(api("/stats"))).json(); } catch { return; }
   const cards = [["Jobs", s.jobs_total], ["Active", s.jobs_active], ["Finished", s.jobs_finished],
     ["Files processed", s.files_processed], ["Candidates tried", (s.candidates_tried || 0).toLocaleString()],

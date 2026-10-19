@@ -213,6 +213,7 @@ type Manager struct {
 	mu    sync.Mutex
 	jobs  map[string]*Job
 	vault *securecache.Store // found-password vault (potfile)
+	sem   chan struct{}      // job-concurrency limiter (nil = unlimited)
 	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
 }
 
@@ -251,6 +252,9 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
 	m := &Manager{cfg: cfg, jobs: map[string]*Job{}}
+	if cfg.MaxConcurrentJobs > 0 {
+		m.sem = make(chan struct{}, cfg.MaxConcurrentJobs)
+	}
 	// The found-password vault (potfile). A sealed vault that cannot be opened
 	// (bad key / tampering) is a hard error rather than a silent fresh start.
 	vault, err := securecache.Open(filepath.Join(cfg.WorkDir, "potfile"), cfg.Sealer)
@@ -508,6 +512,18 @@ func (m *Manager) run(j *Job) {
 	names := append([]string(nil), j.Files...)
 	j.mu.Unlock()
 	defer cancel()
+
+	// Honor the job-concurrency cap: block (staying "queued") until a slot frees,
+	// unless the job is canceled while waiting.
+	if m.sem != nil {
+		select {
+		case m.sem <- struct{}{}:
+			defer func() { <-m.sem }()
+		case <-ctx.Done():
+			j.setState(StateCanceled)
+			return
+		}
+	}
 
 	j.setState(StateRunning)
 

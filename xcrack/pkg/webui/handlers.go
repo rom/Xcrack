@@ -142,6 +142,14 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// Pull in any referenced server-side library wordlists (by name) so the spec
+	// can reference them exactly like an uploaded aux file.
+	if libNames := splitList(r.FormValue("library")); len(libNames) > 0 {
+		if err := s.copyLibraryInto(libNames, filepath.Join(job.dir, "aux")); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
+			return
+		}
+	}
 	// Save the source files (the recovery targets).
 	var names, paths []string
 	for _, fh := range sources {

@@ -70,6 +70,11 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}/download", p(s.handleDownload))
 	mux.HandleFunc("GET /api/v1/stats", p(s.handleStats))
 	mux.HandleFunc("GET /api/v1/vault", p(s.handleVault))
+	mux.HandleFunc("GET /api/v1/library", p(s.handleLibraryList))
+	mux.HandleFunc("POST /api/v1/library", p(s.handleLibraryUpload))
+	mux.HandleFunc("GET /api/v1/library/{name}/preview", p(s.handleLibraryPreview))
+	mux.HandleFunc("DELETE /api/v1/library/{name}", p(s.handleLibraryDelete))
+	mux.HandleFunc("POST /api/v1/cluster/health", p(s.handleClusterHealth))
 	mux.HandleFunc("GET /api/v1/docs", p(s.handleListDocs))
 	mux.HandleFunc("GET /api/v1/docs/{name}", p(s.handleGetDoc))
 	// Specialist, non-cracking tools (the CLI's subcommands), synchronous.

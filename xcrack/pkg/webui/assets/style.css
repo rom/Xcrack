@@ -181,3 +181,8 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 .mb-mask { display: inline-block; min-height: 20px; padding: 4px 8px; border: 1px dashed var(--line); border-radius: 6px; font-family: var(--mono); word-break: break-all; }
 .modal-actions { margin-top: 16px; text-align: right; }
 .modal-box fieldset.generators { margin: 10px 0; }
+
+/* --- library + log controls (Phase 5) --- */
+.log-head { display: flex; align-items: center; gap: 14px; }
+.log-head h3 { margin-right: auto; }
+#sys-body p { margin: 6px 0; }

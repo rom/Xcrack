@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — wordlist library, job-concurrency cap, cluster health & status.**
+  `xcrack-web` gains several operator features: a **wordlist library** (a new
+  **Library** tab — upload dictionaries once, reused by name across jobs via the
+  Crack form's *Library wordlists* field, with preview/delete;
+  `GET/POST/DELETE /api/v1/library`); a **job-concurrency cap** (`--max-jobs N`,
+  default unlimited) so jobs beyond the cap stay **queued** until a slot frees; a
+  **cluster health check** (`POST /api/v1/cluster/health`, gated behind
+  `--allow-server-paths`) that pings each configured `xcrackd` server's health
+  endpoint and reports up/down + latency in the Distributed panel; a **System &
+  acceleration** card on the Statistics tab (GPU-tier / TPM-build / version); and
+  **live-log controls** (autoscroll toggle + copy).
 - **Web GUI — attack wizard, mask builder, rule tester & ETA.** `xcrack-web`
   gains guidance for building an attack: a **wizard** ("what do you know about
   the password?" — known prefix/suffix, length range, character types, personal/

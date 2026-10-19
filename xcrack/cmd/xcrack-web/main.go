@@ -42,6 +42,7 @@ func run() int {
 		workDir       = flag.String("work-dir", "", "root for per-job working directories (default: <temp>/xcrack-web)")
 		docsDir       = flag.String("docs-dir", "", "directory of Markdown docs to serve in the app (default: auto-detect ./docs)")
 		maxUpload     = flag.Int64("max-upload", 512<<20, "maximum job-submission size in bytes")
+		maxJobs       = flag.Int("max-jobs", 0, "maximum jobs running at once (0 = unlimited); extra jobs stay queued")
 		exposeSecrets = flag.Bool("expose-secrets", true, "show recovered passwords in the UI and event stream (turn OFF for a shared/public instance)")
 		allowPaths    = flag.Bool("allow-server-paths", false, "allow a submitted spec to reference server-side file paths, not just uploaded files (trusted local instance only)")
 		open          = flag.Bool("print-url", true, "print the URL to open on startup")
@@ -68,15 +69,16 @@ func run() int {
 	clientSecret := os.Getenv("XCRACK_WEB_OIDC_CLIENT_SECRET")
 
 	cfg := webui.Config{
-		WorkDir:          *workDir,
-		DocsDir:          resolveDocsDir(*docsDir),
-		MaxUploadBytes:   *maxUpload,
-		ExposeSecrets:    *exposeSecrets,
-		AllowServerPaths: *allowPaths,
-		GPUAvailable:     accel.Built(),
-		TPMBuild:         securecache.TPMBuilt,
-		Version:          version,
-		Accelerator:      gpuAccelerator(logger),
+		WorkDir:           *workDir,
+		DocsDir:           resolveDocsDir(*docsDir),
+		MaxUploadBytes:    *maxUpload,
+		MaxConcurrentJobs: *maxJobs,
+		ExposeSecrets:     *exposeSecrets,
+		AllowServerPaths:  *allowPaths,
+		GPUAvailable:      accel.Built(),
+		TPMBuild:          securecache.TPMBuilt,
+		Version:           version,
+		Accelerator:       gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
 			Enabled:      *oidcIssuer != "",
 			Issuer:       *oidcIssuer,

@@ -19,6 +19,9 @@ type Config struct {
 	DocsDir string
 	// MaxUploadBytes bounds a single job-submission request body. Default 512 MiB.
 	MaxUploadBytes int64
+	// MaxConcurrentJobs caps how many jobs run at once; jobs beyond the cap stay
+	// queued until a slot frees. 0 (default) means unlimited.
+	MaxConcurrentJobs int
 	// ExposeSecrets lets recovered passwords appear in the API responses and the
 	// live event stream. The web UI is the user's own recovery console, so a
 	// localhost instance wants this on; a shared/public instance may turn it off
