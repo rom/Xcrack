@@ -14,6 +14,9 @@
   <div class="brand">🔓 <span>Xcrack</span></div>
   <nav id="tabs">
     <button data-tab="crack" class="active">Crack</button>
+    <button data-tab="history">History</button>
+    <button data-tab="recovered">Recovered</button>
+    <button data-tab="library">Library</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
@@ -22,7 +25,18 @@
   <div class="spacer"></div>
   <label class="modeswitch" title="Reveal every engine option in the Crack form"><input type="checkbox" id="advanced"> Advanced</label>
   <span id="meta-badges"></span>
+  <span id="user-area"></span>
 </header>
+
+<div id="banners"></div>
+
+<div id="login-gate" class="login-gate" hidden>
+  <div class="login-box">
+    <div class="brand">🔓 <span>Xcrack</span></div>
+    <p>This console requires you to sign in.</p>
+    <button type="button" id="login-btn" class="primary">Sign in</button>
+  </div>
+</div>
 
 <main>
   <!-- CRACK ------------------------------------------------------------- -->
@@ -40,7 +54,22 @@
         <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
         <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
         <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
+        <div class="field"><label>Library wordlists <small>(names from the Library tab, one per line)</small></label><textarea id="lib_names" rows="2" placeholder="rockyou.txt"></textarea></div>
         <div class="field"><label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label><textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea></div>
+        <details class="mask-builder"><summary>Mask builder</summary>
+          <div class="mb-row">
+            <button type="button" class="mb-tok" data-tok="?l">?l a–z</button>
+            <button type="button" class="mb-tok" data-tok="?u">?u A–Z</button>
+            <button type="button" class="mb-tok" data-tok="?d">?d 0–9</button>
+            <button type="button" class="mb-tok" data-tok="?s">?s sym</button>
+            <button type="button" class="mb-tok" data-tok="?a">?a all</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="backspace">⌫</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="clear">clear</button>
+          </div>
+          <div class="mb-field"><code id="mb-mask" class="mb-mask">(empty)</code></div>
+          <div class="hint" id="mb-keyspace">keyspace: 1</div>
+          <button type="button" id="mb-insert" class="mini">Insert into masks ↑</button>
+        </details>
         <div class="field"><label>Mangling rules <small>(hashcat syntax, one per line)</small></label><textarea id="rules" rows="2" placeholder="c&#10;$1"></textarea></div>
         <fieldset class="generators">
           <legend>Generators</legend>
@@ -171,6 +200,8 @@
             <div class="field"><label>Server name</label><input type="text" id="tls_server_name"></div>
           </div>
           <label><input type="checkbox" id="tls_insecure"> Skip server cert verification (INSECURE)</label>
+          <div class="row"><button type="button" id="cluster-check" class="mini">Check server health</button></div>
+          <div id="cluster-health"></div>
         </details>
 
         <details><summary>Auxiliary files</summary>
@@ -182,6 +213,7 @@
     </div>
 
     <div class="runbar">
+      <button type="button" id="wizard-open">✨ Wizard</button>
       <button id="run" class="primary">▶ Run</button>
       <button id="cancel" disabled>■ Cancel</button>
       <span id="run-status"></span>
@@ -198,8 +230,52 @@
       <div id="latest-term" class="latest"></div>
       <h3>Results</h3>
       <div id="results"></div>
-      <h3>Live log</h3>
+      <div class="log-head">
+        <h3>Live log</h3>
+        <label class="check"><input type="checkbox" id="log-autoscroll" checked> autoscroll</label>
+        <button type="button" id="log-copy" class="mini">copy</button>
+      </div>
       <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- HISTORY ----------------------------------------------------------- -->
+  <section id="tab-history" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Job history</h2>
+        <div class="history-actions">
+          <label class="check"><input type="checkbox" id="notify-toggle"> Notify me when a job finishes</label>
+          <button type="button" id="history-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Every run is saved under the server's work directory and survives a restart. Open one to review its results or re-download its output; delete removes it and its working files.</p>
+      <div id="history-list"></div>
+    </div>
+  </section>
+
+  <!-- RECOVERED (potfile vault) ----------------------------------------- -->
+  <section id="tab-recovered" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Recovered passwords</h2>
+        <button type="button" id="vault-refresh" class="mini">Refresh</button>
+      </div>
+      <p class="hint">The server's found-password vault (potfile). Every recovered password is kept here and fed back into new jobs' loopback pass, so a reused or previously found password is caught fast. On a multi-user instance the vault is disabled to avoid leaking passwords between users.</p>
+      <div id="vault-list"></div>
+    </div>
+  </section>
+
+  <!-- LIBRARY (server-side wordlists) ----------------------------------- -->
+  <section id="tab-library" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Wordlist library</h2>
+        <button type="button" id="lib-refresh" class="mini">Refresh</button>
+      </div>
+      <p class="hint">Dictionaries saved on the server and reused by name across jobs — no re-upload. In the Crack form's <em>Library wordlists</em> field, list the names you want a job to use.</p>
+      <div class="field"><label>Upload a wordlist to the library</label><input type="file" id="lib-upload" multiple></div>
+      <div id="lib-list"></div>
     </div>
   </section>
 
@@ -272,6 +348,15 @@
       </div>
 
       <div class="card tool">
+        <h3>Rule tester</h3>
+        <p class="hint">See what hashcat-style mangling rules do to a sample word — the exact transforms a run would try.</p>
+        <div class="field"><label>Sample word</label><input type="text" id="rt-word" placeholder="password"></div>
+        <div class="field"><label>Rules <small>(one per line)</small></label><textarea id="rt-rules" rows="3" placeholder="c&#10;$1&#10;sa@"></textarea></div>
+        <button class="tool-run primary" id="rt-run">Test</button>
+        <div class="tool-out" data-out="rule-test"></div>
+      </div>
+
+      <div class="card tool">
         <h3>Long-running attacks → CLI command</h3>
         <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs best run on the CLI / distributed tier. Pick one, set the options, and copy the exact command.</p>
         <div class="field"><label>Operation</label>
@@ -291,6 +376,7 @@
 
   <!-- STATISTICS -------------------------------------------------------- -->
   <section id="tab-stats" class="tab">
+    <div class="card" id="sys-info"><h2>System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
     <div class="grid stats-grid" id="stat-cards"></div>
     <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
     <div class="grid">
@@ -336,6 +422,8 @@
           <button type="button" id="yaml-validate">Validate</button>
           <button type="button" id="yaml-format">Format</button>
           <button type="button" id="yaml-from-form">↤ From form</button>
+          <button type="button" id="yaml-import">Import…</button>
+          <button type="button" id="yaml-share">🔗 Copy link</button>
           <span id="yaml-status"></span>
         </div>
         <div id="editor-host"><textarea id="yaml" spellcheck="false" rows="24"></textarea></div>
@@ -343,6 +431,47 @@
     </div>
   </section>
 </main>
+
+<div id="palette-modal" class="modal" hidden>
+  <div class="modal-box palette-box">
+    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" class="palette-list"></ul>
+  </div>
+</div>
+
+<div id="import-modal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><strong>Import configuration</strong><button type="button" id="import-close" class="x">✕</button></div>
+    <p class="hint">Paste a job configuration (YAML or JSON) shared with you. It is validated, loaded into the editor, and the next run uses it verbatim.</p>
+    <textarea id="import-text" rows="10" spellcheck="false" placeholder="candidates:&#10;  use_default_list: true"></textarea>
+    <div class="modal-actions"><button type="button" id="import-do" class="primary">Import</button></div>
+  </div>
+</div>
+
+<div id="wizard-modal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><strong>Attack wizard</strong><button type="button" id="wizard-close" class="x">✕</button></div>
+    <p class="hint">Tell the wizard what you know; it fills the Crack form. Nothing runs until you press Run.</p>
+    <div class="row">
+      <div class="field"><label>Known start (prefix)</label><input type="text" id="wz-prefix" placeholder="Acme"></div>
+      <div class="field"><label>Known end (suffix)</label><input type="text" id="wz-suffix" placeholder="!"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Min length</label><input type="number" id="wz-min" min="0" value="6"></div>
+      <div class="field"><label>Max length</label><input type="number" id="wz-max" min="0" value="10"></div>
+    </div>
+    <fieldset class="generators">
+      <legend>Character types</legend>
+      <label><input type="checkbox" id="wz-l" checked> lowercase</label>
+      <label><input type="checkbox" id="wz-u"> UPPERCASE</label>
+      <label><input type="checkbox" id="wz-d" checked> digits</label>
+      <label><input type="checkbox" id="wz-s"> symbols</label>
+    </fieldset>
+    <div class="field"><label>Personal / org words <small>(comma-separated: names, company, pet…)</small></label><input type="text" id="wz-tokens" placeholder="acme,rex,anna"></div>
+    <label class="check"><input type="checkbox" id="wz-brute"> Also brute-force the character types over the length range (can be huge)</label>
+    <div class="modal-actions"><button type="button" id="wizard-build" class="primary">Build the attack</button></div>
+  </div>
+</div>
 
 <div id="preview-modal" class="modal" hidden>
   <div class="modal-box">

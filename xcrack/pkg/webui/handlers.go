@@ -127,6 +127,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	owner, _ := s.currentUser(r)
+
 	job, err := s.mgr.newJob()
 	if err != nil {
 		writeErr(w, http.StatusInternalServerError, "could not allocate job")
@@ -137,6 +139,14 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	for _, fh := range r.MultipartForm.File["aux"] {
 		if _, err := savePart(fh, filepath.Join(job.dir, "aux")); err != nil {
 			writeErr(w, http.StatusBadRequest, "aux upload: "+err.Error())
+			return
+		}
+	}
+	// Pull in any referenced server-side library wordlists (by name) so the spec
+	// can reference them exactly like an uploaded aux file.
+	if libNames := splitList(r.FormValue("library")); len(libNames) > 0 {
+		if err := s.copyLibraryInto(libNames, filepath.Join(job.dir, "aux")); err != nil {
+			writeErr(w, http.StatusBadRequest, err.Error())
 			return
 		}
 	}
@@ -176,6 +186,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	job.sources = paths
 	job.FilesTotal = len(paths)
 	job.SpecYAML = string(yamlOut)
+	job.Owner = owner.Subject
 	job.mu.Unlock()
 
 	s.mgr.start(job)
@@ -183,19 +194,66 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"jobs": s.mgr.list()})
+	u, _ := s.currentUser(r)
+	all := s.mgr.list()
+	jobs := make([]JobView, 0, len(all))
+	for _, v := range all {
+		if s.canAccess(u, v.Owner) {
+			jobs = append(jobs, v)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"jobs": jobs})
 }
 
 func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
-	job := s.mgr.get(r.PathValue("id"))
+	job := s.jobForRequest(w, r)
 	if job == nil {
-		writeErr(w, http.StatusNotFound, "no such job")
 		return
 	}
 	writeJSON(w, http.StatusOK, job.snapshot())
 }
 
+// handleDeleteJob removes a job from the history and deletes its working
+// directory (canceling it first if it is still running).
+func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	if s.jobForRequest(w, r) == nil {
+		return
+	}
+	s.mgr.remove(r.PathValue("id"))
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+// handleRerun starts a fresh job from an existing (finished or interrupted) job's
+// saved spec and uploaded files — a GUI "resume" that needs no re-upload.
+func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
+	old := s.jobForRequest(w, r)
+	if old == nil {
+		return
+	}
+	owner, _ := s.currentUser(r)
+	nj, err := s.mgr.rerun(old, owner.Subject)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": nj.ID})
+}
+
+// handleVault lists the found-password vault (potfile). It is a single-user,
+// secrets-exposed feature; otherwise it reports disabled.
+func (s *Server) handleVault(w http.ResponseWriter, r *http.Request) {
+	if !s.mgr.vaultActive() {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	enc, pws := s.mgr.vaultView()
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "encrypted": enc, "count": len(pws), "passwords": pws})
+}
+
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
+	if s.jobForRequest(w, r) == nil {
+		return
+	}
 	if !s.mgr.cancel(r.PathValue("id")) {
 		writeErr(w, http.StatusNotFound, "no such job (or already finished)")
 		return
@@ -203,12 +261,28 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
 }
 
-// handleJobEvents streams a job's events as Server-Sent Events: the history so
-// far, then live updates until the job ends or the client disconnects.
-func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
+// jobForRequest returns the job named by the {id} path value only if it exists
+// and the request's user may access it; otherwise it writes a 404 (hiding a job
+// that exists but belongs to another user) and returns nil.
+func (s *Server) jobForRequest(w http.ResponseWriter, r *http.Request) *Job {
 	job := s.mgr.get(r.PathValue("id"))
 	if job == nil {
 		writeErr(w, http.StatusNotFound, "no such job")
+		return nil
+	}
+	u, _ := s.currentUser(r)
+	if !s.canAccess(u, job.ownerID()) {
+		writeErr(w, http.StatusNotFound, "no such job")
+		return nil
+	}
+	return job
+}
+
+// handleJobEvents streams a job's events as Server-Sent Events: the history so
+// far, then live updates until the job ends or the client disconnects.
+func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
+	job := s.jobForRequest(w, r)
+	if job == nil {
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -251,9 +325,8 @@ func (s *Server) handleJobEvents(w http.ResponseWriter, r *http.Request) {
 
 // handleDownload streams the job's extracted output tree as a zip archive.
 func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
-	job := s.mgr.get(r.PathValue("id"))
+	job := s.jobForRequest(w, r)
 	if job == nil {
-		writeErr(w, http.StatusNotFound, "no such job")
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
@@ -267,7 +340,14 @@ func (s *Server) handleDownload(w http.ResponseWriter, r *http.Request) {
 // handleStats reports aggregate counters across all jobs for the dashboard,
 // plus per-format/algorithm throughput and a recovered-password top list.
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
-	jobs := s.mgr.list()
+	u, _ := s.currentUser(r)
+	all := s.mgr.list()
+	jobs := make([]JobView, 0, len(all))
+	for _, v := range all {
+		if s.canAccess(u, v.Owner) {
+			jobs = append(jobs, v)
+		}
+	}
 	var running, done int
 	var candidates int64
 	var decrypted, locked, files int

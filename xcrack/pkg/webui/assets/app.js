@@ -46,11 +46,65 @@ async function boot() {
   wireEditorButtons();
   wirePreview();
   wireTools();
+  wireHistory();
+  wireMaskBuilder();
+  wireWizard();
+  wirePhase5();
+  wireImport();
+  wirePalette();
   applyHelp();
+  $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
   renderBadges();
+  renderBanners();
+  const gated = await applyAuthGate();
   Editor.set(META.starter_spec || "");
-  loadDocs();
+  applySharedConfig();
+  if (!gated) loadDocs();
+}
+
+// ---- Phase 6: trust banners -------------------------------------------------
+function renderBanners() {
+  const host = $("banners"); if (!host) return;
+  host.textContent = "";
+  if (META.tls === false) {
+    host.append(banner("warn", "⚠ No TLS — serve over HTTPS (--tls-cert/--tls-key) before exposing this console beyond localhost."));
+  }
+  if (META.expose_secrets === false) {
+    host.append(banner("info", "🔒 Password display is off on this server (--expose-secrets=false)."));
+  }
+}
+function banner(kind, text) {
+  const b = el("div", { className: "banner banner-" + kind }, [
+    el("span", { textContent: text }),
+    el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() }),
+  ]);
+  return b;
+}
+
+// ---- auth gate --------------------------------------------------------------
+// When the server runs with OIDC auth enabled and this browser is not signed in,
+// cover the app with a login prompt; otherwise show the signed-in user + logout.
+async function applyAuthGate() {
+  let me = {};
+  try { me = await (await fetch(api("/me"))).json(); } catch {}
+  if (me.auth_enabled && !me.authenticated) {
+    $("login-gate").hidden = false;
+    return true;
+  }
+  $("login-gate").hidden = true;
+  renderUser(me);
+  return false;
+}
+function renderUser(me) {
+  const area = $("user-area"); area.textContent = "";
+  if (!me || !me.auth_enabled || !me.user) return;
+  const who = me.user.email || me.user.name || me.user.subject || "signed in";
+  area.append(el("span", { className: "user-chip", textContent: "👤 " + who + (me.user.admin ? " (admin)" : "") }));
+  area.append(el("button", {
+    type: "button", className: "mini", textContent: "Logout",
+    onclick: async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); },
+  }));
 }
 
 function renderBadges() {
@@ -91,6 +145,9 @@ function wireTabs() {
       btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
+      if (btn.dataset.tab === "history") refreshHistory();
+      if (btn.dataset.tab === "recovered") refreshVault();
+      if (btn.dataset.tab === "library") refreshLibrary();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
     });
   });
@@ -340,7 +397,96 @@ function wireEditorButtons() {
     const res = await fetch(api("/config/format"), { method: "POST", body: JSON.stringify(formToSpec()) });
     if (res.ok) { Editor.set((await res.json()).yaml); setYamlStatus("from form", true); $("yaml-authoritative").checked = true; }
   });
+  $("yaml-share").addEventListener("click", copyShareLink);
 }
+
+// ---- Phase 6: shareable config links + import ------------------------------
+function b64urlEncode(s) { return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function b64urlDecode(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); try { return decodeURIComponent(escape(atob(s))); } catch { return ""; } }
+
+async function copyShareLink() {
+  let text = $("yaml-authoritative").checked ? Editor.get() : JSON.stringify(formToSpec());
+  try { const r = await fetch(api("/config/format"), { method: "POST", body: text }); if (r.ok) text = (await r.json()).yaml; } catch {}
+  const url = location.origin + location.pathname + "#cfg=" + b64urlEncode(text);
+  try { await navigator.clipboard.writeText(url); toast("Shareable link copied."); }
+  catch { location.hash = "cfg=" + b64urlEncode(text); toast("Link placed in the address bar."); }
+}
+function applySharedConfig() {
+  const m = /[#&]cfg=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  const text = b64urlDecode(m[1]);
+  if (!text) return;
+  Editor.set(text);
+  $("yaml-authoritative").checked = true;
+  toast("Loaded a shared configuration — review it in Configuration, then Run.");
+}
+
+function wireImport() {
+  $("yaml-import").addEventListener("click", () => { $("import-modal").hidden = false; $("import-text").focus(); });
+  $("import-close").addEventListener("click", () => { $("import-modal").hidden = true; });
+  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) $("import-modal").hidden = true; });
+  $("import-do").addEventListener("click", doImport);
+}
+async function doImport() {
+  const text = $("import-text").value.trim();
+  if (!text) { toast("Paste a configuration first."); return; }
+  try {
+    const r = await (await fetch(api("/config/validate"), { method: "POST", body: text })).json();
+    if (!r.valid) { toast("Invalid configuration: " + r.error); return; }
+  } catch { toast("Could not validate the configuration."); return; }
+  Editor.set(text);
+  $("yaml-authoritative").checked = true;
+  $("import-modal").hidden = true;
+  document.querySelector('#tabs button[data-tab="config"]').click();
+  toast("Imported — the next run uses this configuration.");
+}
+
+// ---- Phase 6: command palette ----------------------------------------------
+const PALETTE = [
+  { label: "Go to Crack", run: () => gotoTab("crack") },
+  { label: "Go to History", run: () => gotoTab("history") },
+  { label: "Go to Recovered", run: () => gotoTab("recovered") },
+  { label: "Go to Library", run: () => gotoTab("library") },
+  { label: "Go to Tools", run: () => gotoTab("tools") },
+  { label: "Go to Statistics", run: () => gotoTab("stats") },
+  { label: "Go to Docs", run: () => gotoTab("docs") },
+  { label: "Go to Configuration", run: () => gotoTab("config") },
+  { label: "Run job", run: () => $("run").click() },
+  { label: "Cancel job", run: () => $("cancel").click() },
+  { label: "Open attack wizard", run: () => $("wizard-open").click() },
+  { label: "Validate configuration", run: () => { gotoTab("config"); $("yaml-validate").click(); } },
+  { label: "Copy shareable link", run: copyShareLink },
+  { label: "Import configuration", run: () => $("yaml-import").click() },
+  { label: "Toggle advanced options", run: () => { const c = $("advanced"); c.checked = !c.checked; document.body.classList.toggle("adv", c.checked); } },
+];
+function gotoTab(name) { document.querySelector(`#tabs button[data-tab="${name}"]`).click(); }
+
+let paletteIdx = 0, paletteItems = [];
+function wirePalette() {
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); $("run").click(); }
+  });
+  const inp = $("palette-input");
+  inp.addEventListener("input", renderPalette);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") $("palette-modal").hidden = true;
+    else if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); paletteIdx = Math.max(0, paletteIdx - 1); highlightPalette(); }
+    else if (e.key === "Enter") { e.preventDefault(); runPalette(paletteIdx); }
+  });
+  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) $("palette-modal").hidden = true; });
+}
+function openPalette() { $("palette-modal").hidden = false; $("palette-input").value = ""; paletteIdx = 0; renderPalette(); $("palette-input").focus(); }
+function renderPalette() {
+  const q = $("palette-input").value.toLowerCase();
+  paletteItems = PALETTE.filter((a) => a.label.toLowerCase().includes(q));
+  if (paletteIdx >= paletteItems.length) paletteIdx = 0;
+  const ul = $("palette-list"); ul.textContent = "";
+  paletteItems.forEach((a, i) => ul.append(el("li", { className: i === paletteIdx ? "sel" : "", textContent: a.label, onclick: () => runPalette(i) })));
+}
+function highlightPalette() { [...$("palette-list").children].forEach((li, i) => li.classList.toggle("sel", i === paletteIdx)); }
+function runPalette(i) { $("palette-modal").hidden = true; const a = paletteItems[i]; if (a) a.run(); }
 function setYamlStatus(msg, ok) { const s = $("yaml-status"); s.textContent = msg; s.className = ok ? "ok" : "err"; }
 
 // ---- run / events -----------------------------------------------------------
@@ -351,11 +497,13 @@ function wireRun() {
 
 async function runJob() {
   if (pickedSources.length === 0) { setRunStatus("Choose at least one file first.", true); return; }
+  if (notifyEnabled()) requestNotifyPermission();
   const fd = new FormData();
   fd.append("spec", specForRun());
   for (const f of pickedSources) fd.append("source", f);
   for (const f of $("wordlists").files) fd.append("aux", f);
   for (const f of $("aux").files) fd.append("aux", f);
+  if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
   $("latest-term").textContent = ""; resetBar();
   Charts.reset();
@@ -391,6 +539,16 @@ function fmtDur(ms) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return (h ? h + "h " : "") + (h || m ? m + "m " : "") + sec + "s";
 }
+// fmtETA renders a remaining-seconds estimate, collapsing very long spans to a
+// coarse human phrase instead of an absurd hour count.
+function fmtETA(sec) {
+  const yr = 365 * 86400;
+  if (!isFinite(sec) || sec < 0) return "—";
+  if (sec > 100 * yr) return "centuries";
+  if (sec > yr) return (sec / yr).toFixed(1) + " yr";
+  if (sec > 2 * 86400) return (sec / 86400).toFixed(1) + " d";
+  return fmtDur(sec * 1000);
+}
 
 function streamEvents(id) {
   if (evtSource) evtSource.close();
@@ -402,7 +560,10 @@ function streamEvents(id) {
 function handleEvent(e) {
   switch (e.type) {
     case "log": appendLog(`[${e.level || "info"}] ${e.message}`); break;
-    case "found": appendLog(`🔓 FOUND ${e.file} (${e.format || "?"})` + (e.password ? ` → ${e.password}` : "")); break;
+    case "found":
+      appendLog(`🔓 FOUND ${e.file} (${e.format || "?"})` + (e.password ? ` → ${e.password}` : ""));
+      notify("Xcrack: password found", e.file + (e.password ? " → " + e.password : ""));
+      break;
     case "progress":
       if (e.keyspace !== undefined) jobKeyspace = e.keyspace;
       updateProgress(e.candidates || 0, e.latest || "");
@@ -423,12 +584,19 @@ function updateProgress(candidates, latest) {
     const pct = Math.min(100, candidates / jobKeyspace * 100);
     bar.classList.remove("indeterminate");
     fill.style.width = pct.toFixed(1) + "%";
-    $("progress-text").textContent = `${candidates.toLocaleString()} / ${jobKeyspace.toLocaleString()} (${pct.toFixed(1)}%) · ${rate.toLocaleString()}/s`;
+    let line = `${candidates.toLocaleString()} / ${jobKeyspace.toLocaleString()} (${pct.toFixed(1)}%) · ${rate.toLocaleString()}/s`;
+    const remain = rate > 0 ? (jobKeyspace - candidates) / rate : -1;
+    if (remain > 0) {
+      line += " · ETA " + fmtETA(remain);
+      if (remain > 365 * 86400) line += " — impractically long at this rate; a wordlist + rules will likely beat brute force";
+    }
+    $("progress-text").textContent = line;
   } else {
     bar.classList.add("indeterminate");
     fill.style.width = "100%";
     $("progress-text").textContent = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
   }
+  if (evtSource) setTitleProgress(jobKeyspace > 0 ? Math.min(100, candidates / jobKeyspace * 100) : -1);
   if (latest) $("latest-term").innerHTML = "latest: <code>" + escapeHTML(latest) + "</code>";
   const srcLabel = $("run-source");
   srcLabel.textContent = latest ? "testing: " + latest : "";
@@ -439,7 +607,11 @@ function resetBar() {
 }
 function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
-function appendLog(s) { const log = $("log"); log.textContent += s + "\n"; log.scrollTop = log.scrollHeight; }
+function appendLog(s) {
+  const log = $("log"); log.textContent += s + "\n";
+  const as = $("log-autoscroll");
+  if (!as || as.checked) log.scrollTop = log.scrollHeight;
+}
 
 async function finishRun(state) {
   if (evtSource) { evtSource.close(); evtSource = null; }
@@ -451,6 +623,10 @@ async function finishRun(state) {
   if (job.ended_at && job.started_at) $("job-elapsed").textContent = fmtDur(job.ended_at - job.started_at);
   updateProgress(job.candidates || 0, "");
   renderResults(job);
+  const ok = state === "done";
+  notify(ok ? "Xcrack: job finished" : "Xcrack: job " + state, (job.files || []).join(", "));
+  flashTitle(ok ? "✓" : "✕");
+  if ($("tab-history").classList.contains("active")) refreshHistory();
 }
 
 function renderResults(job) {
@@ -479,6 +655,221 @@ function renderNode(n) {
 }
 function setRunStatus(msg, err) { const s = $("run-status"); s.textContent = msg; s.className = err ? "err" : ""; }
 
+// ---- history ----------------------------------------------------------------
+function wireHistory() {
+  $("history-refresh").addEventListener("click", refreshHistory);
+  $("vault-refresh").addEventListener("click", refreshVault);
+  const nt = $("notify-toggle");
+  try { nt.checked = localStorage.getItem("xcrack-notify") === "1"; } catch {}
+  nt.addEventListener("change", () => {
+    try { localStorage.setItem("xcrack-notify", nt.checked ? "1" : "0"); } catch {}
+    if (nt.checked) requestNotifyPermission();
+  });
+}
+
+const STATE_LABEL = { done: "done", error: "error", canceled: "canceled", interrupted: "interrupted", running: "running", queued: "queued" };
+
+async function refreshHistory() {
+  const host = $("history-list");
+  let jobs;
+  try { jobs = (await (await fetch(api("/jobs"))).json()).jobs || []; }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load history." })); return; }
+  host.textContent = "";
+  if (!jobs.length) { host.append(el("p", { className: "hint", textContent: "No jobs yet — run one from the Crack tab." })); return; }
+  const tbl = el("table", { className: "history-table" });
+  tbl.append(el("tr", {}, ["", "Files", "State", "Decrypted", "Candidates", "Created", ""].map((h) => el("th", { textContent: h }))));
+  for (const j of jobs) {
+    const files = (j.files || []).join(", ") || "—";
+    const hasOutput = !j.distributed && (j.results || []).some((r) => r.report);
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("button", { type: "button", className: "mini", textContent: "open", onclick: () => openHistoryJob(j.id) })]),
+      el("td", { className: "h-files", title: files, textContent: files }),
+      el("td", {}, [el("span", { className: "badge s-state-" + j.state, textContent: STATE_LABEL[j.state] || j.state })]),
+      el("td", { textContent: String(j.decrypted || 0) }),
+      el("td", { textContent: (j.candidates || 0).toLocaleString() }),
+      el("td", { textContent: j.created_at ? new Date(j.created_at).toLocaleString() : "—" }),
+      el("td", {}, [
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
+        el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
+        el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
+      ]),
+    ]));
+  }
+  host.append(tbl);
+}
+
+// rerunJob starts a fresh job from a saved one's spec + uploads (no re-upload)
+// and opens it. The GUI "resume" for an interrupted or finished run.
+async function rerunJob(id) {
+  let res;
+  try { res = await fetch(api("/jobs/" + id + "/rerun"), { method: "POST" }); }
+  catch (e) { toast("Re-run failed: " + e); return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); toast("Re-run failed: " + (e.error || res.status)); return; }
+  const { id: nid } = await res.json();
+  toast("Re-running…");
+  openHistoryJob(nid);
+}
+
+// ---- recovered-password vault (potfile) ------------------------------------
+async function refreshVault() {
+  const host = $("vault-list");
+  let v;
+  try { v = await (await fetch(api("/vault"))).json(); }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the vault." })); return; }
+  host.textContent = "";
+  if (!v.enabled) {
+    host.append(el("p", { className: "hint", textContent: "The vault is available only on a single-user instance with password display enabled." }));
+    return;
+  }
+  host.append(el("p", { className: "hint", textContent: `${(v.count || 0).toLocaleString()} recovered password(s) · ${v.encrypted ? "sealed to the host TPM at rest" : "plaintext at rest"}` }));
+  if (!v.count) { host.append(el("p", { className: "hint", textContent: "No passwords recovered yet." })); return; }
+  const ol = el("ol", { className: "toplist" });
+  for (const pw of v.passwords || []) ol.append(el("li", {}, [el("code", { textContent: pw })]));
+  host.append(ol);
+}
+
+// ---- Phase 5: library, cluster health, log controls ------------------------
+function wirePhase5() {
+  $("lib-refresh").addEventListener("click", refreshLibrary);
+  $("lib-upload").addEventListener("change", uploadLibrary);
+  const cc = $("cluster-check"); if (cc) cc.addEventListener("click", clusterHealth);
+  const lc = $("log-copy"); if (lc) lc.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText($("log").textContent); toast("Log copied."); } catch { toast("Copy failed."); }
+  });
+}
+
+async function refreshLibrary() {
+  const host = $("lib-list");
+  let v;
+  try { v = await (await fetch(api("/library"))).json(); }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the library." })); return; }
+  host.textContent = "";
+  const wls = v.wordlists || [];
+  if (!wls.length) { host.append(el("p", { className: "hint", textContent: "No wordlists yet — upload one above." })); return; }
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "name" }), el("th", { textContent: "size" }), el("th", { textContent: "" })]));
+  for (const e of wls) {
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: e.name })]),
+      el("td", { textContent: fmtBytes(e.size) }),
+      el("td", {}, [
+        el("button", { type: "button", className: "mini", textContent: "preview", onclick: () => previewLibrary(e.name) }),
+        el("button", { type: "button", className: "mini", textContent: "use", onclick: () => useLibrary(e.name) }),
+        el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteLibrary(e.name) }),
+      ]),
+    ]));
+  }
+  host.append(tbl);
+}
+async function uploadLibrary() {
+  const input = $("lib-upload");
+  if (!input.files.length) return;
+  const fd = new FormData();
+  for (const f of input.files) fd.append("file", f);
+  try {
+    const r = await fetch(api("/library"), { method: "POST", body: fd });
+    toast(r.ok ? "Uploaded to library." : "Upload failed: " + ((await r.json().catch(() => ({}))).error || r.status));
+  } catch (e) { toast("Upload failed: " + e); }
+  input.value = "";
+  refreshLibrary();
+}
+async function previewLibrary(name) {
+  let v;
+  try { v = await (await fetch(api("/library/" + encodeURIComponent(name) + "/preview"))).json(); } catch { return; }
+  $("preview-title").textContent = name;
+  $("preview-meta").textContent = `first ${(v.lines || []).length} line(s)`;
+  $("preview-body").textContent = (v.lines || []).join("\n");
+  $("preview-modal").hidden = false;
+}
+async function deleteLibrary(name) {
+  if (!confirm("Delete library wordlist " + name + "?")) return;
+  try { await fetch(api("/library/" + encodeURIComponent(name)), { method: "DELETE" }); } catch {}
+  refreshLibrary();
+}
+function useLibrary(name) {
+  const ta = $("lib_names");
+  const have = ta.value.split("\n").map((s) => s.trim()).filter(Boolean);
+  if (!have.includes(name)) ta.value = (ta.value.trim() ? ta.value.replace(/\n+$/, "") + "\n" : "") + name;
+  toast(name + " added to the Crack form's library list.");
+}
+
+async function clusterHealth() {
+  const out = $("cluster-health"); out.textContent = "Checking…";
+  const body = new URLSearchParams(); body.set("servers", $("servers").value);
+  let v;
+  try { v = await (await fetch(api("/cluster/health"), { method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" }, body })).json(); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (v.error) { out.textContent = "✕ " + v.error; return; }
+  out.textContent = "";
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "server" }), el("th", { textContent: "status" }), el("th", { textContent: "ms" })]));
+  for (const s of v.servers || []) {
+    const label = s.ok ? "up" : (s.error ? "down" : "HTTP " + s.status);
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: s.url })]),
+      el("td", {}, [el("span", { className: "badge " + (s.ok ? "on" : "off"), textContent: label })]),
+      el("td", { textContent: String(s.latency_ms || 0) }),
+    ]));
+  }
+  out.append(tbl);
+}
+
+async function deleteHistoryJob(id) {
+  if (!confirm("Delete this job and its working files?")) return;
+  try { await fetch(api("/jobs/" + id), { method: "DELETE" }); } catch {}
+  if (currentJob === id) { currentJob = null; if (evtSource) { evtSource.close(); evtSource = null; } }
+  refreshHistory();
+}
+
+// openHistoryJob loads a saved (or still-running) job into the Crack tab's
+// results panel: resume the live stream if it is still running, else render the
+// stored snapshot.
+async function openHistoryJob(id) {
+  let job;
+  try { job = await (await fetch(api("/jobs/" + id))).json(); } catch { return; }
+  document.querySelector('#tabs button[data-tab="crack"]').click();
+  currentJob = id;
+  $("results-card").hidden = false;
+  $("log").textContent = ""; $("latest-term").textContent = "";
+  jobKeyspace = job.keyspace ?? -1;
+  jobStart = job.started_at || job.created_at || Date.now();
+  $("job-started").textContent = jobStart ? new Date(jobStart).toLocaleString() : "—";
+  if (job.state === "running" || job.state === "queued") {
+    setRunStatus("Running…"); $("run").disabled = true; $("cancel").disabled = false;
+    startElapsed(); streamEvents(id);
+    return;
+  }
+  stopElapsed(); $("run").disabled = false; $("cancel").disabled = true;
+  $("job-elapsed").textContent = (job.ended_at && job.started_at) ? fmtDur(job.ended_at - job.started_at) : "—";
+  resetBar(); updateProgress(job.candidates || 0, "");
+  const label = { done: "✓ Done", canceled: "Canceled", interrupted: "Interrupted" }[job.state] || "Error";
+  setRunStatus(label, job.state !== "done");
+  renderResults(job);
+}
+
+// ---- notifications / toast --------------------------------------------------
+function notifyEnabled() { try { return localStorage.getItem("xcrack-notify") === "1"; } catch { return false; } }
+function requestNotifyPermission() {
+  if ("Notification" in window && Notification.permission === "default") { try { Notification.requestPermission(); } catch {} }
+}
+function notify(title, body) {
+  toast(title + (body ? " — " + body : ""));
+  if (!notifyEnabled() || !("Notification" in window) || Notification.permission !== "granted") return;
+  try { new Notification(title, { body }); } catch {}
+}
+let toastTimer = null;
+function toast(msg) {
+  let t = $("toast");
+  if (!t) { t = el("div", { id: "toast", className: "toast" }); document.body.append(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+// setTitleProgress reflects a live run in the browser tab so a backgrounded tab
+// is a glanceable progress bar; flashTitle marks a just-finished run briefly.
+function setTitleProgress(pct) { document.title = (pct >= 0 ? Math.floor(pct) + "% · " : "⋯ ") + "Xcrack"; }
+function flashTitle(mark) { document.title = mark + " Xcrack"; setTimeout(() => { if (!evtSource) document.title = "Xcrack"; }, 8000); }
+
 // ---- charts -----------------------------------------------------------------
 const Charts = {
   plot: null, data: [[0], [0]], t0: 0,
@@ -495,8 +886,24 @@ const Charts = {
   },
 };
 
+// renderSysInfo fills the Statistics "System & acceleration" card from /meta.
+function renderSysInfo() {
+  const host = $("sys-body"); if (!host) return;
+  host.textContent = "";
+  host.append(el("p", {}, ["Version: ", el("code", { textContent: META.version || "?" })]));
+  const tag = (t, on) => el("span", { className: "badge " + (on ? "on" : "off"), textContent: t });
+  host.append(el("p", {}, [
+    tag(META.gpu_available ? "GPU tier available" : "GPU tier not built", !!META.gpu_available),
+    tag(META.tpm_build ? "TPM build" : "no TPM build", !!META.tpm_build),
+  ]));
+  host.append(el("p", { className: "hint", textContent: META.gpu_available
+    ? "Jobs can request the GPU tier (Advanced → GPU); dual-pipeline races the CPU and GPU over one keyspace."
+    : "This build is CPU-only; rebuild with -tags opencl for the GPU tier." }));
+}
+
 // ---- statistics -------------------------------------------------------------
 async function refreshStats() {
+  renderSysInfo();
   let s; try { s = await (await fetch(api("/stats"))).json(); } catch { return; }
   const cards = [["Jobs", s.jobs_total], ["Active", s.jobs_active], ["Finished", s.jobs_finished],
     ["Files processed", s.files_processed], ["Candidates tried", (s.candidates_tried || 0).toLocaleString()],
@@ -567,7 +974,99 @@ function wireTools() {
   $("export-challenge-run").addEventListener("click", exportChallenge);
   $("pdf-table-run").addEventListener("click", pdfTable);
   $("wl-run").addEventListener("click", wordlistTool);
+  $("rt-run").addEventListener("click", ruleTest);
   wireCLI();
+}
+
+// ruleTest shows what mangling rules do to a sample word (engine rule compiler).
+async function ruleTest() {
+  const out = toolOut("rule-test");
+  const word = $("rt-word").value;
+  if (!word) { out.textContent = "Enter a sample word."; return; }
+  out.textContent = "Testing…";
+  const fd = new FormData(); fd.append("word", word); fd.append("rules", $("rt-rules").value);
+  let res;
+  try { res = await fetch(api("/tools/rule-test"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  const j = await res.json();
+  out.textContent = "";
+  const results = j.results || [];
+  if (!results.length) { out.append(el("p", { className: "hint", textContent: "No rules to apply." })); return; }
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "rule" }), el("th", { textContent: "→ output" })]));
+  for (const r of results) {
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: r.rule })]),
+      el("td", {}, r.kept ? [el("code", { textContent: r.output })] : [el("span", { className: "hint", textContent: "(rejected)" })]),
+    ]));
+  }
+  out.append(tbl);
+}
+
+// ---- mask builder -----------------------------------------------------------
+function wireMaskBuilder() {
+  const mask = [];
+  const sizes = { "?l": 26, "?u": 26, "?d": 10, "?s": 33, "?a": 95 };
+  const render = () => {
+    $("mb-mask").textContent = mask.length ? mask.join("") : "(empty)";
+    let ks = 1n;
+    for (const t of mask) ks *= BigInt(sizes[t] || 1);
+    $("mb-keyspace").textContent = mask.length ? `keyspace: ${ks.toLocaleString()} (${mask.length} chars)` : "keyspace: 1";
+  };
+  document.querySelectorAll(".mb-tok").forEach((b) => b.addEventListener("click", () => {
+    const t = b.dataset.tok;
+    if (t === "clear") mask.length = 0;
+    else if (t === "backspace") mask.pop();
+    else mask.push(t);
+    render();
+  }));
+  $("mb-insert").addEventListener("click", () => {
+    if (!mask.length) return;
+    const ta = $("masks");
+    ta.value = (ta.value.trim() ? ta.value.replace(/\n+$/, "") + "\n" : "") + mask.join("");
+  });
+  render();
+}
+
+// ---- attack wizard ----------------------------------------------------------
+function wireWizard() {
+  const modal = $("wizard-modal");
+  $("wizard-open").addEventListener("click", () => { modal.hidden = false; });
+  $("wizard-close").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+  $("wizard-build").addEventListener("click", buildFromWizard);
+}
+function buildFromWizard() {
+  const prefix = $("wz-prefix").value.trim(), suffix = $("wz-suffix").value.trim();
+  const min = +$("wz-min").value || 0, max = +$("wz-max").value || 0;
+  const tokens = $("wz-tokens").value.trim();
+  // Sensible first passes.
+  $("use_default").checked = true;
+  $("markov").checked = true;
+  // Known parts → explicit guesses tried first.
+  const guesses = [];
+  if (prefix) guesses.push(prefix);
+  if (suffix) guesses.push(suffix);
+  if (prefix && suffix) guesses.push(prefix + suffix);
+  if (guesses.length) $("passwords").value = guesses.join("\n");
+  if (min) $("min_length").value = min;
+  if (max) $("max_length").value = max;
+  // Personal / org words → spray set + name/sibling context.
+  if (tokens) { $("spray").checked = true; $("spray_tokens").value = tokens; $("context").checked = true; }
+  // Optional brute force over the chosen classes and length range.
+  if ($("wz-brute").checked) {
+    const cls = ($("wz-l").checked ? "?l" : "") + ($("wz-u").checked ? "?u" : "") + ($("wz-d").checked ? "?d" : "") + ($("wz-s").checked ? "?s" : "");
+    if (cls) {
+      $("cc1").value = cls;
+      const len = max || min || 8;
+      $("masks").value = "?1".repeat(len);
+      if (min && max) $("increment").value = min + ":" + max;
+    }
+  }
+  if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
+  $("wizard-modal").hidden = true;
+  toast("Wizard filled the Crack form — review the options and press Run.");
 }
 
 const toolOut = (name) => document.querySelector(`.tool-out[data-out="${name}"]`);

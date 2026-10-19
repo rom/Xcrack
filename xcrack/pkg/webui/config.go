@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/rom/xcrack/pkg/jobspec"
+	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/xcrack"
 )
 
@@ -18,6 +19,9 @@ type Config struct {
 	DocsDir string
 	// MaxUploadBytes bounds a single job-submission request body. Default 512 MiB.
 	MaxUploadBytes int64
+	// MaxConcurrentJobs caps how many jobs run at once; jobs beyond the cap stay
+	// queued until a slot frees. 0 (default) means unlimited.
+	MaxConcurrentJobs int
 	// ExposeSecrets lets recovered passwords appear in the API responses and the
 	// live event stream. The web UI is the user's own recovery console, so a
 	// localhost instance wants this on; a shared/public instance may turn it off
@@ -40,6 +44,41 @@ type Config struct {
 	TPMBuild bool
 	// Version is reported to the UI.
 	Version string
+	// TLS reports (for the UI) whether the server is served over HTTPS, so the
+	// console can warn when an unencrypted instance might be exposed.
+	TLS bool
+	// Auth enables multi-user access via OIDC. Its zero value keeps the
+	// single-user console (no login, no per-user ownership) unchanged.
+	Auth AuthConfig
+	// Sealer, if set, seals the found-password vault (potfile) at rest — the
+	// binary provides a TPM sealer so the webui package stays free of the TPM
+	// build tag. Nil keeps a plaintext vault.
+	Sealer securecache.Sealer
+}
+
+// AuthConfig turns the console into a multi-user application fronted by an OIDC
+// identity provider. When Enabled is false (the default) there is no login and
+// every request is the implicit local owner — a localhost instance is unchanged.
+type AuthConfig struct {
+	// Enabled turns on login + per-user job ownership.
+	Enabled bool
+	// Issuer is the OIDC issuer URL (its /.well-known/openid-configuration is
+	// fetched at startup). Required when Enabled.
+	Issuer string
+	// ClientID / ClientSecret identify this app to the provider.
+	ClientID     string
+	ClientSecret string
+	// RedirectURL is this server's own /auth/callback URL, registered with the
+	// provider (e.g. https://host:8443/auth/callback).
+	RedirectURL string
+	// Scopes requested at login; defaults to openid, email, profile.
+	Scopes []string
+	// Admins lists subjects or email addresses allowed to see and manage every
+	// user's jobs (not just their own).
+	Admins []string
+	// CookieSecure sets the Secure flag on the session cookie. Default true; set
+	// false only for plain-HTTP local testing.
+	CookieSecure bool
 }
 
 // applyDefaults fills unset fields with their defaults. It is idempotent and

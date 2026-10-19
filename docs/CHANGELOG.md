@@ -15,6 +15,82 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — UX polish: command palette, shareable configs, trust banners.**
+  `xcrack-web` gains a round of usability work. A **command palette**
+  (<kbd>⌘/Ctrl-K</kbd>) jumps to any tab and triggers common actions by name;
+  <kbd>⌘/Ctrl-Enter</kbd> validates-and-runs from anywhere. **Shareable config
+  links** let the Configuration tab copy the current spec into a URL fragment
+  (base64url, so the spec never leaves the browser or hits the server log) that
+  reopens pre-filled, and an **Import…** button loads a spec from a pasted or
+  uploaded YAML/JSON file (validated through `/api/v1/config/validate` before it
+  is applied). **Trust banners** warn, from the bootstrap `meta` (`tls`,
+  `auth_enabled`), when a console that exposes secrets is reachable over plain
+  HTTP without auth — a nudge to add TLS or turn on OIDC before sharing. The
+  layout is now **responsive**, usable down to a phone-width screen. (`Config`
+  gains `TLS`; `meta` reports `tls` and `auth_enabled`.)
+- **Web GUI — wordlist library, job-concurrency cap, cluster health & status.**
+  `xcrack-web` gains several operator features: a **wordlist library** (a new
+  **Library** tab — upload dictionaries once, reused by name across jobs via the
+  Crack form's *Library wordlists* field, with preview/delete;
+  `GET/POST/DELETE /api/v1/library`); a **job-concurrency cap** (`--max-jobs N`,
+  default unlimited) so jobs beyond the cap stay **queued** until a slot frees; a
+  **cluster health check** (`POST /api/v1/cluster/health`, gated behind
+  `--allow-server-paths`) that pings each configured `xcrackd` server's health
+  endpoint and reports up/down + latency in the Distributed panel; a **System &
+  acceleration** card on the Statistics tab (GPU-tier / TPM-build / version); and
+  **live-log controls** (autoscroll toggle + copy).
+- **Web GUI — attack wizard, mask builder, rule tester & ETA.** `xcrack-web`
+  gains guidance for building an attack: a **wizard** ("what do you know about
+  the password?" — known prefix/suffix, length range, character types, personal/
+  org words) that fills the Crack form (explicit guesses, length limits, spray +
+  context, and an optional brute-force mask with increment); a **mask builder**
+  with a live keyspace counter that inserts `?l?u?d?s?a` masks; a **rule tester**
+  (`POST /api/v1/tools/rule-test`) that shows, per rule, what the engine's real
+  hashcat-rule compiler does to a sample word (output or rejection); and a live
+  **ETA** on determinate runs (keyspace ÷ current rate) with an honest nudge that
+  an impractically long brute force is better served by a wordlist + rules.
+- **Web GUI — recovered-password vault & job re-run.** `xcrack-web` now keeps a
+  server-side found-password vault (potfile) under its work directory: every
+  recovered password is stored and fed back into new jobs' loopback pass, so a
+  reused or previously found password is caught fast. A new **Recovered** tab
+  lists the vault (with whether it is plaintext or TPM-sealed at rest — the
+  binary can supply a sealer via `Config.Sealer`). The vault is a single-user,
+  `--expose-secrets` feature and is disabled when multi-user auth is on, so it
+  never leaks passwords between users. Each History row also gains **re-run**:
+  `POST /api/v1/jobs/{id}/rerun` starts a fresh job from a finished or
+  interrupted job's saved spec and already-uploaded files — a GUI "resume" that
+  needs no re-upload (`GET /api/v1/vault` is new).
+- **Web GUI — optional multi-user access via OIDC.** `xcrack-web` can now front
+  the console with an OpenID Connect identity provider, turning the single-user
+  tool into a shared service. It is **off by default** — a localhost instance is
+  unchanged — and enabled with `--auth-oidc-issuer` (plus `--auth-oidc-client-id`,
+  `--auth-redirect-url`, and the client secret in `XCRACK_WEB_OIDC_CLIENT_SECRET`).
+  Login uses the Authorization Code flow with PKCE; a verified session is held in
+  an HttpOnly, SameSite=Lax, Secure cookie (relax with `--auth-cookie-insecure`
+  for plain-HTTP testing). Each job is **owned by its creator**: the job list,
+  detail, event stream, download, cancel and delete are scoped to the owner, and
+  a non-owner's access to someone else's job is a 404 (its existence is hidden).
+  `--auth-admins` (subjects or emails) may see and manage every user's jobs. The
+  statistics are likewise per-user. The SPA shows a sign-in gate when required and
+  a user chip + logout when signed in. New endpoints: `GET /api/v1/me`,
+  `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout`. (Adds the pure-Go
+  `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` dependencies; the
+  default build stays cgo-free.)
+- **Web GUI — job history, durability & completion notifications.** `xcrack-web`
+  now persists every job to its working directory (`job.json`, written
+  atomically as the job progresses), so the job list survives a server restart
+  instead of living only in memory. A new **History** tab lists past and running
+  jobs (state, files, decrypted count, candidates, created time); **open** reloads
+  one into the results panel — resuming the live stream if it is still running,
+  or showing the saved snapshot and re-download link if it finished — and
+  **delete** removes a job and its working files (canceling it first, and
+  draining the runner so cleanup never races it). A job still queued/running when
+  the server restarted reloads as **interrupted** rather than a perpetual
+  "running". An opt-in **"notify me when a job finishes"** toggle raises a browser
+  notification (and an in-page toast) on completion or a recovered password, and
+  a running job's progress now shows in the browser **tab title** so a
+  backgrounded tab is a glanceable progress bar. (`DELETE /api/v1/jobs/{id}` is
+  new; `GET /api/v1/jobs` now spans restarts.)
 - **`thunder-gen` checkpoint/resume.** Table generation now writes each
   sub-table to `--out` as it finishes (flushed to disk), so a long run is no
   longer all-or-nothing: if it is interrupted (Ctrl-C), crashes, or the GPU

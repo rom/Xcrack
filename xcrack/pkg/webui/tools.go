@@ -17,6 +17,7 @@ import (
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto"
 	"github.com/rom/xcrypto/hashline"
+	"github.com/rom/xcrypto/pattern"
 	"github.com/rom/xcrypto/scheme/pdf"
 	xvba "github.com/rom/xcrypto/scheme/vbaproject"
 	"github.com/rom/xfileformats"
@@ -232,6 +233,49 @@ func (s *Server) handleToolExportChallenge(w http.ResponseWriter, r *http.Reques
 // handleToolWordlist applies the wordlist utilities (length filter, dedupe,
 // sort/sort-length, split) to the uploaded files (or a "text" form field) and
 // returns the result as text/plain, or a zip when split > 0.
+// handleToolRuleTest applies hashcat-style mangling rules to a sample word and
+// returns, per rule, the transformed output (or that the rule rejected the
+// word) — the GUI rule tester, using the engine's real rule compiler so what it
+// shows is exactly what a run would try.
+func (s *Server) handleToolRuleTest(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseMultipartForm(1 << 20); err != nil {
+		writeErr(w, http.StatusBadRequest, "could not parse request")
+		return
+	}
+	word := r.FormValue("word")
+	if word == "" {
+		writeErr(w, http.StatusBadRequest, "a sample word is required")
+		return
+	}
+	var lines []string
+	for _, ln := range strings.Split(r.FormValue("rules"), "\n") {
+		ln = strings.TrimRight(ln, "\r")
+		if strings.TrimSpace(ln) != "" {
+			lines = append(lines, ln)
+		}
+	}
+	rs, err := pattern.CompileRules(lines)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	type ruleOut struct {
+		Rule   string `json:"rule"`
+		Output string `json:"output,omitempty"`
+		Kept   bool   `json:"kept"`
+	}
+	dbg := rs.ApplyDebug([]byte(word))
+	out := make([]ruleOut, 0, len(dbg))
+	for _, d := range dbg {
+		ro := ruleOut{Rule: d.Rule, Kept: d.Kept}
+		if d.Kept {
+			ro.Output = string(d.Output)
+		}
+		out = append(out, ro)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"word": word, "results": out})
+}
+
 func (s *Server) handleToolWordlist(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, s.cfg.MaxUploadBytes)
 	if err := r.ParseMultipartForm(16 << 20); err != nil {
