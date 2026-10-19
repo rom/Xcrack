@@ -189,6 +189,13 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   already explores every node by default.
 
 ### Fixed / performance
+- **`xcrack-web` single-user mode no longer shows a login gate.** The full-screen
+  login overlay (`.login-gate`) was styled `display:flex` with no `[hidden]`
+  rule, so the `hidden` attribute — and the `hidden=true` the SPA sets in
+  single-user mode and once signed in — was overridden and the gate covered the
+  app anyway, prompting a sign-in whose button hit `/auth/login` and returned
+  `authentication is not configured`. Added the `.login-gate[hidden]` guard (as
+  `.modal[hidden]` already has) and a regression test over the embedded asset.
 - **`xcrack-web` drains in-flight jobs on shutdown (fixes a flaky test).** A job
   runs in a background goroutine that outlives its `202 Accepted` response, so
   nothing waited for it: on `SIGINT`/`SIGTERM` the server stopped HTTP but
