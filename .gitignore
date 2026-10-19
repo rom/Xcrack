@@ -27,3 +27,7 @@ coverage.*
 .idea/
 .vscode/
 *.swp
+
+# Stray CLI binaries built at the module root (use `make build`, which writes to bin/).
+/xcrack/xcrack-web
+/xcrack/xcrackd
