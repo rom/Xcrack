@@ -201,7 +201,7 @@ strides on separate hosts), or a fleet of `xcrackd` servers via
 fleet run resumes with `--cluster-session FILE` (skips candidates already tried).
 
 **Can I offload to hashcat/John or a GPU box?** Yes — `xcrack hashline` emits
-`$office$`/`$pdf$`/`$zip2$`/`$dmg$` lines, and `xcrack export-challenge` emits a
+`$office$`/`$pdf$`/`$zip2$` lines, and `xcrack export-challenge` emits a
 portable JSON challenge; re-import the recovered password with `--resume-from`.
 The server tier also has an in-process OpenCL GPU option (`xcrackd --gpu`).
 
@@ -441,7 +441,7 @@ devices concurrently, with a startup batch-size autotune. `XCRACK_GPU_DEVICE`
 AMD GPUs and Ryzen APUs run through the OpenCL ICD.
 
 **No GPU but want the speed elsewhere?** Offload instead: `xcrack hashline` emits
-`$office$`/`$pdf$`/`$zip2$`/`$dmg$` lines for hashcat/John, and `xcrack
+`$office$`/`$pdf$`/`$zip2$` lines for hashcat/John, and `xcrack
 export-challenge` + `--resume-from` round-trips a portable challenge to any
 external cracker.
 
@@ -625,8 +625,8 @@ None of these decrypt anything.
 
 **It says "not encrypted or unsupported" — now what?** Confirm the format with
 `xcrack identify FILE`. For a magic-less format (e.g. SQLCipher) force it with
-`--as sqlcipher`. For an `.accdb` (Access ACE) run a password search; for a Jet
-`.mdb` use `xcrack access-recover`.
+`--as sqlcipher`. An `.accdb` (Access ACE) is identified only — recovery is out
+of scope in this build; for a Jet `.mdb` use `xcrack access-recover`.
 
 **A run seems stuck.** The KDF may simply be expensive (see *KDFs* above). Use
 `--estimate` to see the expected time, `--progress` for a live rate/ETA, and

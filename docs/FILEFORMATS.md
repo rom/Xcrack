@@ -36,7 +36,7 @@ appears in challenges, JSON output, and the `identify` command.
 | [Microsoft Office](#microsoft-office) | OOXML (`.docx/.xlsx/.pptx`), legacy binary (`.doc/.xls/.ppt`), Office family (Publisher/Visio/Project when encrypted), VBA project password, Access detection | 🔓 📦 |
 | [Other documents](#other-documents) | PDF, OpenDocument (ODF), Apple iWork | 🔓 📦 |
 | [Passphrase & messaging](#passphrase--messaging) | age, symmetric OpenPGP | 🔓 |
-| [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass | 🔑 |
+| [Keys & credential stores](#keys--credential-stores) | OpenSSH, PEM/PKCS#8, JKS, PKCS#12, PuTTY `.ppk`, SQLCipher, KeePass, Ethereum keystore wallet | 🔑 |
 | [Disk images](#disk-images) | Apple encrypted DMG (via `dmg2john` `$dmg$` line) | 🔓 |
 
 ---
@@ -139,13 +139,15 @@ private keys or database body are surfaced as-is, not reconstructed.
 | **PKCS#12** `.p12/.pfx` | ASN.1 `PFX` SEQUENCE | `pkcs12` — password recovery via the PFX `MacData` MAC (independent of the bag encryption) | PKCS#12 KDF (RFC 7292 B.2), **SHA-1 or SHA-256** | the `MacData` HMAC | OpenSSL (modern SHA-256/AES **and** legacy SHA-1/3DES) |
 | **PuTTY `.ppk`** | `PuTTY-User-Key-File-` | `putty-v3-argon2id` / `putty-v3-argon2i` (v3) and `putty-v2-sha1` (v2) | v3: **Argon2id / Argon2i**; v2: SHA-1 | the `Private-MAC` after decrypting the private section | `puttygen` |
 | **SQLCipher** | *(no magic — target explicitly)* | `sqlcipher4` (PBKDF2-HMAC-**SHA-512** × 256 000) and `sqlcipher3` (PBKDF2-HMAC-**SHA-1** × 64 000) | PBKDF2 → HMAC subkey | the page-1 HMAC | `sqlcipher` CLI |
-| **KeePass** `.kdbx` (KDBX4) | `9AA2D903 B54BFB67`, major version 4 | `keepass-kdbx4-argon2d` (default), `-argon2id`, `-aeskdf` | **Argon2d** / Argon2id / legacy AES-KDF | the header **HMAC-SHA256** | `pykeepass`; the in-tree Argon2d is checked against the reference `argon2` CLI |
+| **KeePass** `.kdbx` (KDBX4 & legacy KDBX3.1) | `9AA2D903 B54BFB67` (KDBX major version 3 or 4) | `keepass-kdbx4-argon2d` (default), `-argon2id`, `-aeskdf`; `keepass-kdbx3-aeskdf` (legacy) | **Argon2d** / Argon2id / legacy AES-KDF | KDBX4: the header **HMAC-SHA256**; KDBX3.1: AES-CBC **stream-start bytes** | `pykeepass`; the in-tree Argon2d is checked against the reference `argon2` CLI |
+| **Ethereum keystore** (`UTC--…` wallet JSON) | Web3 Secret Storage v3 JSON markers (`crypto`/`ciphertext`/`kdf`; no binary magic) | `ethkeystore-scrypt` and `ethkeystore-pbkdf2` — passphrase recovery via the keystore MAC | scrypt **or** PBKDF2-HMAC-SHA256 | the **Keccak-256 MAC** (`Keccak-256(key[16:32] ‖ ciphertext)`) | geth / MyEtherWallet published vectors + pycryptodome |
 
 **SQLCipher** databases have no cleartext magic, so the engine cannot
 auto-detect them; force the scheme from the CLI with `xcrack --as sqlcipher FILE`
-(or target the scheme via the library API). **KeePass** KDBX **3.x** uses a
-different (stream-start-bytes) verifier and is reported unsupported; KDBX4 is the
-handled version.
+(or target the scheme via the library API). **KeePass** KDBX **3.1**
+(AES-256-CBC) uses a different (stream-start-bytes) verifier
+(`keepass-kdbx3-aeskdf`) and is also handled; other KDBX3 ciphers are reported
+unsupported, and KDBX4 is the default version.
 
 **In-tree Argon2.** KeePass KDBX4 defaults to **Argon2d**, which
 `golang.org/x/crypto/argon2` does not expose (only Argon2i/Argon2id). Xcrack

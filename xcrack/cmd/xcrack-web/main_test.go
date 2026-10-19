@@ -41,6 +41,33 @@ func TestResolveDocsDir(t *testing.T) {
 	}
 }
 
+func TestResolveAuthMode(t *testing.T) {
+	cases := []struct {
+		name                             string
+		mode, issuer, client, redir, adm string
+		wantEnabled, wantErr             bool
+	}{
+		{name: "single default", mode: "single", wantEnabled: false},
+		{name: "single rejects issuer", mode: "single", issuer: "https://idp", wantErr: true},
+		{name: "single rejects admins", mode: "single", adm: "a@b", wantErr: true},
+		{name: "multi full config", mode: "multi", issuer: "https://idp", client: "cid", redir: "https://host/auth/callback", wantEnabled: true},
+		{name: "multi needs issuer", mode: "multi", wantEnabled: true, wantErr: true},
+		{name: "multi needs client+redirect", mode: "multi", issuer: "https://idp", wantEnabled: true, wantErr: true},
+		{name: "unknown mode", mode: "both", wantErr: true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			enabled, err := resolveAuthMode(c.mode, c.issuer, c.client, c.redir, c.adm)
+			if (err != nil) != c.wantErr {
+				t.Fatalf("err = %v, wantErr = %v", err, c.wantErr)
+			}
+			if enabled != c.wantEnabled {
+				t.Errorf("enabled = %v, want %v", enabled, c.wantEnabled)
+			}
+		})
+	}
+}
+
 func TestGPUAcceleratorPureGo(t *testing.T) {
 	// In the default (pure-Go) build the hook must report ok=false so jobs run on
 	// the CPU rather than failing.

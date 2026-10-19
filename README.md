@@ -12,9 +12,12 @@ forms over one engine:
 - **HTTP service** (`xcrackd`) — a backend a thin client (an Impex kiosk or
   DataLock appliance) calls, optionally fronting a separate GPU/OpenCL tier.
 - **Web GUI** (`xcrack-web`) — a browser front-end exposing the full feature set
-  through a graphical interface (easy + advanced modes, an IDE-style config
-  editor, live statistics, uploads/downloads, in-app docs); runs locally or as a
-  service. See [`docs/USERMANUAL.md` §10](docs/USERMANUAL.md#10-web-gui-xcrack-web).
+  through a graphical interface (easy + advanced modes, an attack wizard, an
+  IDE-style config editor, job history, a recovered-password vault, a wordlist
+  library, live statistics, uploads/downloads, in-app docs). Runs as a
+  single-user console (`--mode single`, the default) or a multi-user service
+  with per-user job ownership behind OIDC (`--mode multi`). See
+  [`docs/USERMANUAL.md` §10](docs/USERMANUAL.md#10-web-gui-xcrack-web).
 
 👉 **New here? Read [`docs/USAGE.md`](docs/USAGE.md)** for commands, flags, and
 many worked examples.

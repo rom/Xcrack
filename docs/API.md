@@ -99,7 +99,7 @@ layers, stop at the first match, `NumCPU` workers). Every field:
 | `NoRecurse bool` | recurse | disable container decomposition |
 | `NoPromote bool` | promote | disable password promotion to inner layers |
 | `CorpusPromotion bool` | off | promote recovered passwords across *every* file in a run, most-successful first |
-| `FindAll bool` | — | keep searching after the first match |
+| `FindAll bool` | — | **reserved — not yet active** (the engine ignores it today); intended to keep searching after the first match |
 | `ExplodeDocuments bool` | off | decompose documents into their internal parts |
 | `ContextCandidates bool` | off | seed guesses from the node name and plaintext sibling entries |
 | `HintCandidates bool` | off | seed guesses from an embedded password hint (iWork `.iwph`, ZIP comment) |
@@ -353,30 +353,48 @@ wire protocol stays simple. See [`USERMANUAL.md` §4](USERMANUAL.md#5-distribute
 REST worker (a stateless verify/KDF node), this API drives **whole jobs**: it
 accepts uploaded files plus a `jobspec.Spec` (the config YAML), runs the full
 engine — every candidate source the config can express — and streams progress
-and results. It is the delivery surface for an interactive, single-user (or
-proxied) recovery console; see [`USERMANUAL.md` §10](USERMANUAL.md#10-web-gui-xcrack-web).
+and results. It is the delivery surface for an interactive recovery console,
+running single-user (the default) or multi-user with per-user job ownership
+behind OIDC; see [`USERMANUAL.md` §10](USERMANUAL.md#10-web-gui-xcrack-web).
 
 ### Running the server
 
 ```sh
-bin/xcrack-web                  # http://127.0.0.1:8899 (localhost)
-bin/xcrack-web --addr :9000     # all interfaces (ships no auth — see §10.8)
+bin/xcrack-web                          # http://127.0.0.1:8899 (localhost, single-user)
+bin/xcrack-web --addr :9000             # all interfaces (single-user ships no auth — see §10.13)
+bin/xcrack-web --mode multi \           # multi-user: per-user jobs behind OIDC (see §10.2)
+  --auth-oidc-issuer https://idp/ --auth-oidc-client-id xcrack-web \
+  --auth-redirect-url https://host/auth/callback   # secret in $XCRACK_WEB_OIDC_CLIENT_SECRET
 ```
+
+In multi-user mode the API endpoints below (except `/healthz`, `/meta`, `/me`
+and `/auth/*`) require a signed-in session and are scoped to the owner.
 
 ### Endpoints
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `GET` | `/api/v1/meta` | capabilities (version, GPU/TPM build), supported formats, a starter spec |
+| `GET` | `/api/v1/healthz` | liveness probe |
+| `GET` | `/api/v1/meta` | capabilities (version, GPU/TPM build, TLS, whether auth is on), supported formats, a starter spec |
+| `GET` | `/api/v1/me` | the signed-in user (or the implicit local owner in single-user mode) |
+| `GET` | `/auth/login` / `GET /auth/callback` / `POST /auth/logout` | OIDC sign-in / provider redirect / sign-out (multi-user mode) |
 | `POST` | `/api/v1/config/validate` | strict-parse + validate a YAML spec (`{valid, error}`) |
 | `POST` | `/api/v1/config/format` | re-emit a spec tidied (`{yaml}`) |
 | `POST` | `/api/v1/identify` | detect format/encryption of uploaded files (no cracking) |
 | `POST` | `/api/v1/jobs` | create a job (multipart: `spec` + `source` files + `aux` files) |
 | `GET` | `/api/v1/jobs` / `/api/v1/jobs/{id}` | list jobs / one job's state + results |
+| `DELETE` | `/api/v1/jobs/{id}` | remove a finished job from the history |
 | `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
 | `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
+| `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
 | `GET` | `/api/v1/stats` | aggregate counters across jobs |
+| `GET` | `/api/v1/vault` | the recovered-password vault (single-user, `--expose-secrets`; off under multi-user) |
+| `GET`/`POST` | `/api/v1/library` | list / upload reusable wordlists |
+| `GET` | `/api/v1/library/{name}/preview` | first lines of a library wordlist |
+| `DELETE` | `/api/v1/library/{name}` | delete a library wordlist |
+| `POST` | `/api/v1/cluster/health` | ping configured `xcrackd` servers (`--allow-server-paths`) |
+| `POST` | `/api/v1/tools/{hashline,vba-recover,access-recover,export-challenge,wordlist,rule-test,pdf-keyattack-table}` | specialist, mostly-stateless tools (see §10.9) |
 | `GET` | `/api/v1/docs` / `/api/v1/docs/{name}` | in-app documentation listing / Markdown |
 
 ### Submitting a job
