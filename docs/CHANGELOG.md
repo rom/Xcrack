@@ -15,6 +15,21 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — job history, durability & completion notifications.** `xcrack-web`
+  now persists every job to its working directory (`job.json`, written
+  atomically as the job progresses), so the job list survives a server restart
+  instead of living only in memory. A new **History** tab lists past and running
+  jobs (state, files, decrypted count, candidates, created time); **open** reloads
+  one into the results panel — resuming the live stream if it is still running,
+  or showing the saved snapshot and re-download link if it finished — and
+  **delete** removes a job and its working files (canceling it first, and
+  draining the runner so cleanup never races it). A job still queued/running when
+  the server restarted reloads as **interrupted** rather than a perpetual
+  "running". An opt-in **"notify me when a job finishes"** toggle raises a browser
+  notification (and an in-page toast) on completion or a recovered password, and
+  a running job's progress now shows in the browser **tab title** so a
+  backgrounded tab is a glanceable progress bar. (`DELETE /api/v1/jobs/{id}` is
+  new; `GET /api/v1/jobs` now spans restarts.)
 - **`thunder-gen` checkpoint/resume.** Table generation now writes each
   sub-table to `--out` as it finishes (flushed to disk), so a long run is no
   longer all-or-nothing: if it is interrupted (Ctrl-C), crashes, or the GPU

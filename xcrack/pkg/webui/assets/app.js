@@ -46,6 +46,7 @@ async function boot() {
   wireEditorButtons();
   wirePreview();
   wireTools();
+  wireHistory();
   applyHelp();
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
   renderBadges();
@@ -91,6 +92,7 @@ function wireTabs() {
       btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
+      if (btn.dataset.tab === "history") refreshHistory();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
     });
   });
@@ -351,6 +353,7 @@ function wireRun() {
 
 async function runJob() {
   if (pickedSources.length === 0) { setRunStatus("Choose at least one file first.", true); return; }
+  if (notifyEnabled()) requestNotifyPermission();
   const fd = new FormData();
   fd.append("spec", specForRun());
   for (const f of pickedSources) fd.append("source", f);
@@ -402,7 +405,10 @@ function streamEvents(id) {
 function handleEvent(e) {
   switch (e.type) {
     case "log": appendLog(`[${e.level || "info"}] ${e.message}`); break;
-    case "found": appendLog(`🔓 FOUND ${e.file} (${e.format || "?"})` + (e.password ? ` → ${e.password}` : "")); break;
+    case "found":
+      appendLog(`🔓 FOUND ${e.file} (${e.format || "?"})` + (e.password ? ` → ${e.password}` : ""));
+      notify("Xcrack: password found", e.file + (e.password ? " → " + e.password : ""));
+      break;
     case "progress":
       if (e.keyspace !== undefined) jobKeyspace = e.keyspace;
       updateProgress(e.candidates || 0, e.latest || "");
@@ -429,6 +435,7 @@ function updateProgress(candidates, latest) {
     fill.style.width = "100%";
     $("progress-text").textContent = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
   }
+  if (evtSource) setTitleProgress(jobKeyspace > 0 ? Math.min(100, candidates / jobKeyspace * 100) : -1);
   if (latest) $("latest-term").innerHTML = "latest: <code>" + escapeHTML(latest) + "</code>";
   const srcLabel = $("run-source");
   srcLabel.textContent = latest ? "testing: " + latest : "";
@@ -451,6 +458,10 @@ async function finishRun(state) {
   if (job.ended_at && job.started_at) $("job-elapsed").textContent = fmtDur(job.ended_at - job.started_at);
   updateProgress(job.candidates || 0, "");
   renderResults(job);
+  const ok = state === "done";
+  notify(ok ? "Xcrack: job finished" : "Xcrack: job " + state, (job.files || []).join(", "));
+  flashTitle(ok ? "✓" : "✕");
+  if ($("tab-history").classList.contains("active")) refreshHistory();
 }
 
 function renderResults(job) {
@@ -478,6 +489,103 @@ function renderNode(n) {
   return el("ul", { className: "tree" }, [li]);
 }
 function setRunStatus(msg, err) { const s = $("run-status"); s.textContent = msg; s.className = err ? "err" : ""; }
+
+// ---- history ----------------------------------------------------------------
+function wireHistory() {
+  $("history-refresh").addEventListener("click", refreshHistory);
+  const nt = $("notify-toggle");
+  try { nt.checked = localStorage.getItem("xcrack-notify") === "1"; } catch {}
+  nt.addEventListener("change", () => {
+    try { localStorage.setItem("xcrack-notify", nt.checked ? "1" : "0"); } catch {}
+    if (nt.checked) requestNotifyPermission();
+  });
+}
+
+const STATE_LABEL = { done: "done", error: "error", canceled: "canceled", interrupted: "interrupted", running: "running", queued: "queued" };
+
+async function refreshHistory() {
+  const host = $("history-list");
+  let jobs;
+  try { jobs = (await (await fetch(api("/jobs"))).json()).jobs || []; }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load history." })); return; }
+  host.textContent = "";
+  if (!jobs.length) { host.append(el("p", { className: "hint", textContent: "No jobs yet — run one from the Crack tab." })); return; }
+  const tbl = el("table", { className: "history-table" });
+  tbl.append(el("tr", {}, ["", "Files", "State", "Decrypted", "Candidates", "Created", ""].map((h) => el("th", { textContent: h }))));
+  for (const j of jobs) {
+    const files = (j.files || []).join(", ") || "—";
+    const hasOutput = !j.distributed && (j.results || []).some((r) => r.report);
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("button", { type: "button", className: "mini", textContent: "open", onclick: () => openHistoryJob(j.id) })]),
+      el("td", { className: "h-files", title: files, textContent: files }),
+      el("td", {}, [el("span", { className: "badge s-state-" + j.state, textContent: STATE_LABEL[j.state] || j.state })]),
+      el("td", { textContent: String(j.decrypted || 0) }),
+      el("td", { textContent: (j.candidates || 0).toLocaleString() }),
+      el("td", { textContent: j.created_at ? new Date(j.created_at).toLocaleString() : "—" }),
+      el("td", {}, [
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
+        el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
+      ]),
+    ]));
+  }
+  host.append(tbl);
+}
+
+async function deleteHistoryJob(id) {
+  if (!confirm("Delete this job and its working files?")) return;
+  try { await fetch(api("/jobs/" + id), { method: "DELETE" }); } catch {}
+  if (currentJob === id) { currentJob = null; if (evtSource) { evtSource.close(); evtSource = null; } }
+  refreshHistory();
+}
+
+// openHistoryJob loads a saved (or still-running) job into the Crack tab's
+// results panel: resume the live stream if it is still running, else render the
+// stored snapshot.
+async function openHistoryJob(id) {
+  let job;
+  try { job = await (await fetch(api("/jobs/" + id))).json(); } catch { return; }
+  document.querySelector('#tabs button[data-tab="crack"]').click();
+  currentJob = id;
+  $("results-card").hidden = false;
+  $("log").textContent = ""; $("latest-term").textContent = "";
+  jobKeyspace = job.keyspace ?? -1;
+  jobStart = job.started_at || job.created_at || Date.now();
+  $("job-started").textContent = jobStart ? new Date(jobStart).toLocaleString() : "—";
+  if (job.state === "running" || job.state === "queued") {
+    setRunStatus("Running…"); $("run").disabled = true; $("cancel").disabled = false;
+    startElapsed(); streamEvents(id);
+    return;
+  }
+  stopElapsed(); $("run").disabled = false; $("cancel").disabled = true;
+  $("job-elapsed").textContent = (job.ended_at && job.started_at) ? fmtDur(job.ended_at - job.started_at) : "—";
+  resetBar(); updateProgress(job.candidates || 0, "");
+  const label = { done: "✓ Done", canceled: "Canceled", interrupted: "Interrupted" }[job.state] || "Error";
+  setRunStatus(label, job.state !== "done");
+  renderResults(job);
+}
+
+// ---- notifications / toast --------------------------------------------------
+function notifyEnabled() { try { return localStorage.getItem("xcrack-notify") === "1"; } catch { return false; } }
+function requestNotifyPermission() {
+  if ("Notification" in window && Notification.permission === "default") { try { Notification.requestPermission(); } catch {} }
+}
+function notify(title, body) {
+  toast(title + (body ? " — " + body : ""));
+  if (!notifyEnabled() || !("Notification" in window) || Notification.permission !== "granted") return;
+  try { new Notification(title, { body }); } catch {}
+}
+let toastTimer = null;
+function toast(msg) {
+  let t = $("toast");
+  if (!t) { t = el("div", { id: "toast", className: "toast" }); document.body.append(t); }
+  t.textContent = msg; t.classList.add("show");
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
+}
+
+// setTitleProgress reflects a live run in the browser tab so a backgrounded tab
+// is a glanceable progress bar; flashTitle marks a just-finished run briefly.
+function setTitleProgress(pct) { document.title = (pct >= 0 ? Math.floor(pct) + "% · " : "⋯ ") + "Xcrack"; }
+function flashTitle(mark) { document.title = mark + " Xcrack"; setTimeout(() => { if (!evtSource) document.title = "Xcrack"; }, 8000); }
 
 // ---- charts -----------------------------------------------------------------
 const Charts = {

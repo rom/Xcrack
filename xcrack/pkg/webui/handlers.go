@@ -195,6 +195,16 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, job.snapshot())
 }
 
+// handleDeleteJob removes a job from the history and deletes its working
+// directory (canceling it first if it is still running).
+func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
+	if !s.mgr.remove(r.PathValue("id")) {
+		writeErr(w, http.StatusNotFound, "no such job")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	if !s.mgr.cancel(r.PathValue("id")) {
 		writeErr(w, http.StatusNotFound, "no such job (or already finished)")

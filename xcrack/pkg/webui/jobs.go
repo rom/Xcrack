@@ -33,7 +33,15 @@ const (
 	StateDone     JobState = "done"
 	StateError    JobState = "error"
 	StateCanceled JobState = "canceled"
+	// StateInterrupted marks a job whose runner goroutine died with a previous
+	// process (the server restarted mid-run). It is assigned on reload, never by a
+	// live runner, so a durable job is never shown as perpetually "running".
+	StateInterrupted JobState = "interrupted"
 )
+
+// closedChan is a pre-closed channel shared by reloaded (terminal) jobs as their
+// done signal, so a late SSE subscriber returns at once instead of blocking.
+var closedChan = func() chan struct{} { c := make(chan struct{}); close(c); return c }()
 
 // Event is one entry in a job's live event stream (delivered over SSE and kept
 // as history so a late subscriber can replay). It never carries decrypted
@@ -104,6 +112,7 @@ type Job struct {
 	SpecYAML    string
 
 	mu      sync.Mutex
+	mgr     *Manager // back-reference, for persistence on state change
 	spec    *jobspec.Spec
 	dir     string
 	sources []string // absolute paths of uploaded source files, index-aligned with Files
@@ -139,6 +148,9 @@ func (j *Job) setState(s JobState) {
 	}
 	j.mu.Unlock()
 	j.emit(Event{Type: "state", State: s})
+	if j.mgr != nil {
+		j.mgr.persist(j)
+	}
 }
 
 // emit records an event in history and fans it out to live subscribers without
@@ -196,13 +208,106 @@ type Manager struct {
 // defaultWorkDir is the per-user default root for job working directories.
 func defaultWorkDir() string { return filepath.Join(os.TempDir(), "xcrack-web") }
 
-// NewManager returns a job manager rooted at cfg.WorkDir.
+// NewManager returns a job manager rooted at cfg.WorkDir, repopulated with any
+// jobs persisted under it by a previous process (so history survives a restart).
 func NewManager(cfg Config) (*Manager, error) {
 	cfg.applyDefaults()
 	if err := os.MkdirAll(cfg.WorkDir, 0o700); err != nil {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
-	return &Manager{cfg: cfg, jobs: map[string]*Job{}}, nil
+	m := &Manager{cfg: cfg, jobs: map[string]*Job{}}
+	m.loadPersisted()
+	return m, nil
+}
+
+// persist writes the job's current view to <dir>/job.json atomically (temp +
+// rename), so the job survives a restart and a crashed run still leaves a
+// readable record. Best-effort: a persistence failure never breaks a run.
+func (m *Manager) persist(j *Job) {
+	if j.dir == "" {
+		return
+	}
+	b, err := json.Marshal(j.snapshot())
+	if err != nil {
+		return
+	}
+	tmp := filepath.Join(j.dir, "job.json.tmp")
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return
+	}
+	_ = os.Rename(tmp, filepath.Join(j.dir, "job.json"))
+}
+
+// loadPersisted repopulates the job set from job.json files under WorkDir. A job
+// whose persisted state was still queued/running lost its runner goroutine with
+// the previous process, so it is reloaded as interrupted rather than running.
+func (m *Manager) loadPersisted() {
+	entries, err := os.ReadDir(m.cfg.WorkDir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		dir := filepath.Join(m.cfg.WorkDir, e.Name())
+		b, err := os.ReadFile(filepath.Join(dir, "job.json"))
+		if err != nil {
+			continue
+		}
+		var v JobView
+		if err := json.Unmarshal(b, &v); err != nil || v.ID == "" {
+			continue
+		}
+		j := m.jobFromView(v, dir)
+		m.jobs[j.ID] = j
+	}
+}
+
+// jobFromView reconstructs a terminal Job from its persisted view: no runner, no
+// cancel, and an already-closed done channel. A job left queued/running by a
+// previous process becomes interrupted.
+func (m *Manager) jobFromView(v JobView, dir string) *Job {
+	state, errMsg := v.State, v.Error
+	if state == StateQueued || state == StateRunning {
+		state = StateInterrupted
+		if errMsg == "" {
+			errMsg = "interrupted (the server restarted while this job was running)"
+		}
+	}
+	return &Job{
+		ID: v.ID, State: state, CreatedAt: v.CreatedAt, StartedAt: v.StartedAt, EndedAt: v.EndedAt,
+		Files: v.Files, Error: errMsg, FilesTotal: v.FilesTotal, FilesDone: v.FilesDone,
+		Candidates: v.Candidates, Keyspace: v.Keyspace, Decrypted: v.Decrypted,
+		Distributed: v.Distributed, Results: v.Results, SpecYAML: v.SpecYAML,
+		dir: dir, done: closedChan, mgr: m,
+	}
+}
+
+// remove cancels the job if it is running (and waits for the runner to exit, so
+// RemoveAll does not race a writer), drops it from the set, and deletes its
+// working directory. Returns false if there is no such job.
+func (m *Manager) remove(id string) bool {
+	m.mu.Lock()
+	j := m.jobs[id]
+	if j == nil {
+		m.mu.Unlock()
+		return false
+	}
+	delete(m.jobs, id)
+	m.mu.Unlock()
+
+	j.mu.Lock()
+	c, dir, done := j.cancel, j.dir, j.done
+	j.mu.Unlock()
+	if c != nil {
+		c()
+		<-done // let the runner finish writing before we delete its directory
+	}
+	if dir != "" {
+		_ = os.RemoveAll(dir)
+	}
+	return true
 }
 
 // get returns the job with id, or nil.
@@ -248,12 +353,13 @@ func (m *Manager) newJob() (*Job, error) {
 		}
 	}
 	j := &Job{
-		ID: id, State: StateQueued, CreatedAt: nowMS(), dir: dir,
+		ID: id, State: StateQueued, CreatedAt: nowMS(), dir: dir, mgr: m,
 		done: make(chan struct{}), subs: map[int]chan Event{},
 	}
 	m.mu.Lock()
 	m.jobs[id] = j
 	m.mu.Unlock()
+	m.persist(j) // a durable record exists from creation, before the run starts
 	return j, nil
 }
 

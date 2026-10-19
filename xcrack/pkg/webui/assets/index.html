@@ -14,6 +14,7 @@
   <div class="brand">🔓 <span>Xcrack</span></div>
   <nav id="tabs">
     <button data-tab="crack" class="active">Crack</button>
+    <button data-tab="history">History</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
@@ -200,6 +201,21 @@
       <div id="results"></div>
       <h3>Live log</h3>
       <pre id="log" class="log"></pre>
+    </div>
+  </section>
+
+  <!-- HISTORY ----------------------------------------------------------- -->
+  <section id="tab-history" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Job history</h2>
+        <div class="history-actions">
+          <label class="check"><input type="checkbox" id="notify-toggle"> Notify me when a job finishes</label>
+          <button type="button" id="history-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <p class="hint">Every run is saved under the server's work directory and survives a restart. Open one to review its results or re-download its output; delete removes it and its working files.</p>
+      <div id="history-list"></div>
     </div>
   </section>
 
