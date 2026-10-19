@@ -15,53 +15,68 @@
 package webui
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 )
 
 // Server is the HTTP application: the SPA assets plus the JSON/SSE API.
 type Server struct {
-	cfg Config
-	mgr *Manager
-	mux *http.ServeMux
+	cfg  Config
+	mgr  *Manager
+	auth *authenticator
+	mux  *http.ServeMux
 }
 
-// NewServer builds the web application. It fails only if the work directory
-// cannot be created or the embedded assets cannot be opened.
+// NewServer builds the web application. It fails if the work directory cannot be
+// created, the embedded assets cannot be opened, or (when Config.Auth.Enabled)
+// OIDC discovery against the configured issuer fails.
 func NewServer(cfg Config) (*Server, error) {
 	cfg.applyDefaults()
 	mgr, err := NewManager(cfg)
 	if err != nil {
 		return nil, err
 	}
-	s := &Server{cfg: cfg, mgr: mgr}
+	auth, err := newAuthenticator(context.Background(), cfg.Auth)
+	if err != nil {
+		return nil, err
+	}
+	s := &Server{cfg: cfg, mgr: mgr, auth: auth}
 	assets, err := assetHandler()
 	if err != nil {
 		return nil, err
 	}
+	// p gates a route behind a valid session when auth is enabled (no-op otherwise).
+	p := s.protected
 	mux := http.NewServeMux()
+	// Open endpoints: health, capabilities, who-am-I, and the OIDC flow.
 	mux.HandleFunc("GET /api/v1/healthz", s.handleHealth)
 	mux.HandleFunc("GET /api/v1/meta", s.handleMeta)
-	mux.HandleFunc("POST /api/v1/config/validate", s.handleValidate)
-	mux.HandleFunc("POST /api/v1/config/format", s.handleFormat)
-	mux.HandleFunc("POST /api/v1/identify", s.handleIdentify)
-	mux.HandleFunc("POST /api/v1/jobs", s.handleCreateJob)
-	mux.HandleFunc("GET /api/v1/jobs", s.handleListJobs)
-	mux.HandleFunc("GET /api/v1/jobs/{id}", s.handleGetJob)
-	mux.HandleFunc("DELETE /api/v1/jobs/{id}", s.handleDeleteJob)
-	mux.HandleFunc("GET /api/v1/jobs/{id}/events", s.handleJobEvents)
-	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", s.handleCancelJob)
-	mux.HandleFunc("GET /api/v1/jobs/{id}/download", s.handleDownload)
-	mux.HandleFunc("GET /api/v1/stats", s.handleStats)
-	mux.HandleFunc("GET /api/v1/docs", s.handleListDocs)
-	mux.HandleFunc("GET /api/v1/docs/{name}", s.handleGetDoc)
+	mux.HandleFunc("GET /api/v1/me", s.handleMe)
+	mux.HandleFunc("GET /auth/login", s.handleLogin)
+	mux.HandleFunc("GET /auth/callback", s.handleCallback)
+	mux.HandleFunc("POST /auth/logout", s.handleLogout)
+	// Data + tool endpoints: gated when auth is on.
+	mux.HandleFunc("POST /api/v1/config/validate", p(s.handleValidate))
+	mux.HandleFunc("POST /api/v1/config/format", p(s.handleFormat))
+	mux.HandleFunc("POST /api/v1/identify", p(s.handleIdentify))
+	mux.HandleFunc("POST /api/v1/jobs", p(s.handleCreateJob))
+	mux.HandleFunc("GET /api/v1/jobs", p(s.handleListJobs))
+	mux.HandleFunc("GET /api/v1/jobs/{id}", p(s.handleGetJob))
+	mux.HandleFunc("DELETE /api/v1/jobs/{id}", p(s.handleDeleteJob))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/events", p(s.handleJobEvents))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", p(s.handleCancelJob))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/download", p(s.handleDownload))
+	mux.HandleFunc("GET /api/v1/stats", p(s.handleStats))
+	mux.HandleFunc("GET /api/v1/docs", p(s.handleListDocs))
+	mux.HandleFunc("GET /api/v1/docs/{name}", p(s.handleGetDoc))
 	// Specialist, non-cracking tools (the CLI's subcommands), synchronous.
-	mux.HandleFunc("POST /api/v1/tools/hashline", s.handleToolHashline)
-	mux.HandleFunc("POST /api/v1/tools/vba-recover", s.handleToolVBA)
-	mux.HandleFunc("POST /api/v1/tools/access-recover", s.handleToolAccess)
-	mux.HandleFunc("POST /api/v1/tools/export-challenge", s.handleToolExportChallenge)
-	mux.HandleFunc("POST /api/v1/tools/wordlist", s.handleToolWordlist)
-	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", s.handleToolPDFKeyTable)
+	mux.HandleFunc("POST /api/v1/tools/hashline", p(s.handleToolHashline))
+	mux.HandleFunc("POST /api/v1/tools/vba-recover", p(s.handleToolVBA))
+	mux.HandleFunc("POST /api/v1/tools/access-recover", p(s.handleToolAccess))
+	mux.HandleFunc("POST /api/v1/tools/export-challenge", p(s.handleToolExportChallenge))
+	mux.HandleFunc("POST /api/v1/tools/wordlist", p(s.handleToolWordlist))
+	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
 	mux.Handle("/", assets)
 	s.mux = mux
 	return s, nil

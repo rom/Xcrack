@@ -48,10 +48,37 @@ async function boot() {
   wireTools();
   wireHistory();
   applyHelp();
+  $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
   renderBadges();
+  const gated = await applyAuthGate();
   Editor.set(META.starter_spec || "");
-  loadDocs();
+  if (!gated) loadDocs();
+}
+
+// ---- auth gate --------------------------------------------------------------
+// When the server runs with OIDC auth enabled and this browser is not signed in,
+// cover the app with a login prompt; otherwise show the signed-in user + logout.
+async function applyAuthGate() {
+  let me = {};
+  try { me = await (await fetch(api("/me"))).json(); } catch {}
+  if (me.auth_enabled && !me.authenticated) {
+    $("login-gate").hidden = false;
+    return true;
+  }
+  $("login-gate").hidden = true;
+  renderUser(me);
+  return false;
+}
+function renderUser(me) {
+  const area = $("user-area"); area.textContent = "";
+  if (!me || !me.auth_enabled || !me.user) return;
+  const who = me.user.email || me.user.name || me.user.subject || "signed in";
+  area.append(el("span", { className: "user-chip", textContent: "👤 " + who + (me.user.admin ? " (admin)" : "") }));
+  area.append(el("button", {
+    type: "button", className: "mini", textContent: "Logout",
+    onclick: async () => { try { await fetch("/auth/logout", { method: "POST" }); } catch {} location.reload(); },
+  }));
 }
 
 function renderBadges() {

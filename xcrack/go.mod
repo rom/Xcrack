@@ -3,10 +3,12 @@ module github.com/rom/xcrack
 go 1.25.5
 
 require (
+	github.com/coreos/go-oidc/v3 v3.17.0
 	github.com/google/go-tpm v0.9.3
 	github.com/klauspost/compress v1.19.0
 	github.com/rom/xcrypto v0.0.0
 	github.com/rom/xfileformats v0.0.0
+	golang.org/x/oauth2 v0.34.0
 	gopkg.in/yaml.v3 v3.0.1
 )
 
@@ -15,6 +17,7 @@ require (
 	github.com/bodgit/plumbing v1.3.0 // indirect
 	github.com/bodgit/sevenzip v1.6.5 // indirect
 	github.com/bodgit/windows v1.0.1 // indirect
+	github.com/go-jose/go-jose/v4 v4.1.3 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/nwaples/rardecode/v2 v2.4.5 // indirect
 	github.com/pierrec/lz4/v4 v4.1.27 // indirect

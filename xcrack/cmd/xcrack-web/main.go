@@ -52,10 +52,20 @@ func run() int {
 		tlsMinVer   = flag.String("tls-min-version", "1.2", "minimum TLS version: 1.2 or 1.3")
 
 		shutdownGrace = flag.Duration("shutdown-grace", 10*time.Second, "graceful shutdown grace period")
+
+		oidcIssuer   = flag.String("auth-oidc-issuer", "", "enable multi-user login via this OIDC issuer URL (its /.well-known/openid-configuration is read at startup)")
+		oidcClientID = flag.String("auth-oidc-client-id", "", "OIDC client ID (required with --auth-oidc-issuer)")
+		oidcRedirect = flag.String("auth-redirect-url", "", "this server's own /auth/callback URL as registered with the provider, e.g. https://host:8899/auth/callback (required with --auth-oidc-issuer)")
+		authAdmins   = flag.String("auth-admins", "", "comma-separated subjects or emails allowed to see and manage every user's jobs")
+		cookieInsec  = flag.Bool("auth-cookie-insecure", false, "do not set the Secure flag on the session cookie (plain-HTTP local testing only)")
 	)
 	flag.Parse()
 
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	// The OIDC client secret comes from the environment, never argv (process
+	// arguments are world-readable on many systems).
+	clientSecret := os.Getenv("XCRACK_WEB_OIDC_CLIENT_SECRET")
 
 	cfg := webui.Config{
 		WorkDir:          *workDir,
@@ -67,6 +77,22 @@ func run() int {
 		TPMBuild:         securecache.TPMBuilt,
 		Version:          version,
 		Accelerator:      gpuAccelerator(logger),
+		Auth: webui.AuthConfig{
+			Enabled:      *oidcIssuer != "",
+			Issuer:       *oidcIssuer,
+			ClientID:     *oidcClientID,
+			ClientSecret: clientSecret,
+			RedirectURL:  *oidcRedirect,
+			Admins:       splitComma(*authAdmins),
+			CookieSecure: !*cookieInsec,
+		},
+	}
+	if cfg.Auth.Enabled {
+		if cfg.Auth.ClientID == "" || cfg.Auth.RedirectURL == "" {
+			fmt.Fprintln(os.Stderr, "xcrack-web: --auth-oidc-issuer requires --auth-oidc-client-id and --auth-redirect-url")
+			return 1
+		}
+		logger.Info("multi-user auth enabled", "issuer", cfg.Auth.Issuer, "admins", len(cfg.Auth.Admins))
 	}
 
 	srv, err := webui.NewServer(cfg)
@@ -151,6 +177,17 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// splitComma splits a comma-separated flag value into trimmed, non-empty parts.
+func splitComma(s string) []string {
+	var out []string
+	for _, p := range strings.Split(s, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 // gpuAccelerator returns the webui GPU hook. In a pure-Go build accel.Built() is

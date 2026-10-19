@@ -40,6 +40,34 @@ type Config struct {
 	TPMBuild bool
 	// Version is reported to the UI.
 	Version string
+	// Auth enables multi-user access via OIDC. Its zero value keeps the
+	// single-user console (no login, no per-user ownership) unchanged.
+	Auth AuthConfig
+}
+
+// AuthConfig turns the console into a multi-user application fronted by an OIDC
+// identity provider. When Enabled is false (the default) there is no login and
+// every request is the implicit local owner — a localhost instance is unchanged.
+type AuthConfig struct {
+	// Enabled turns on login + per-user job ownership.
+	Enabled bool
+	// Issuer is the OIDC issuer URL (its /.well-known/openid-configuration is
+	// fetched at startup). Required when Enabled.
+	Issuer string
+	// ClientID / ClientSecret identify this app to the provider.
+	ClientID     string
+	ClientSecret string
+	// RedirectURL is this server's own /auth/callback URL, registered with the
+	// provider (e.g. https://host:8443/auth/callback).
+	RedirectURL string
+	// Scopes requested at login; defaults to openid, email, profile.
+	Scopes []string
+	// Admins lists subjects or email addresses allowed to see and manage every
+	// user's jobs (not just their own).
+	Admins []string
+	// CookieSecure sets the Secure flag on the session cookie. Default true; set
+	// false only for plain-HTTP local testing.
+	CookieSecure bool
 }
 
 // applyDefaults fills unset fields with their defaults. It is idempotent and

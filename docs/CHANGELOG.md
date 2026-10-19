@@ -15,6 +15,22 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — optional multi-user access via OIDC.** `xcrack-web` can now front
+  the console with an OpenID Connect identity provider, turning the single-user
+  tool into a shared service. It is **off by default** — a localhost instance is
+  unchanged — and enabled with `--auth-oidc-issuer` (plus `--auth-oidc-client-id`,
+  `--auth-redirect-url`, and the client secret in `XCRACK_WEB_OIDC_CLIENT_SECRET`).
+  Login uses the Authorization Code flow with PKCE; a verified session is held in
+  an HttpOnly, SameSite=Lax, Secure cookie (relax with `--auth-cookie-insecure`
+  for plain-HTTP testing). Each job is **owned by its creator**: the job list,
+  detail, event stream, download, cancel and delete are scoped to the owner, and
+  a non-owner's access to someone else's job is a 404 (its existence is hidden).
+  `--auth-admins` (subjects or emails) may see and manage every user's jobs. The
+  statistics are likewise per-user. The SPA shows a sign-in gate when required and
+  a user chip + logout when signed in. New endpoints: `GET /api/v1/me`,
+  `GET /auth/login`, `GET /auth/callback`, `POST /auth/logout`. (Adds the pure-Go
+  `github.com/coreos/go-oidc/v3` and `golang.org/x/oauth2` dependencies; the
+  default build stays cgo-free.)
 - **Web GUI — job history, durability & completion notifications.** `xcrack-web`
   now persists every job to its working directory (`job.json`, written
   atomically as the job progresses), so the job list survives a server restart
