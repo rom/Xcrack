@@ -121,7 +121,6 @@ func runCrack(args []string) int {
 	explode := fs_.Bool("explode-documents", false, "decompose documents into internal parts")
 	noDefault := fs_.Bool("no-default-list", false, "disable the built-in common-password list")
 	swedishF := fs_.Bool("swedish", false, "also try the built-in Swedish-targeted wordlist (common Swedish words/names/places + typical mutations)")
-	findAll := fs_.Bool("find-all", false, "search every encrypted node even if some stay locked (default: on)")
 	contextF := fs_.Bool("context", false, "seed guesses from the file/entry name and plaintext harvested from plain sibling entries")
 	hintF := fs_.Bool("hint", false, "derive guesses from a file's embedded password hint (iWork .iwph, ZIP comment), tried first")
 	hintRulesF := fs_.String("hint-rules", "", "hashcat-style rule file applied to hint-derived words (implies --hint)")
@@ -253,7 +252,6 @@ func runCrack(args []string) int {
 	if cfg != nil && cfg.Search.Promote != nil {
 		opts.NoPromote = !*cfg.Search.Promote
 	}
-	opts.FindAll = *findAll
 	opts.CorpusPromotion = *adaptiveF || (cfg != nil && cfg.Search.Adaptive)
 	opts.ContextCandidates = *contextF || (cfg != nil && cfg.Search.Context)
 	opts.HintCandidates = *hintF || *hintRulesF != "" || (cfg != nil && (cfg.Search.Hint || len(cfg.Search.HintRules) > 0))
@@ -814,7 +812,6 @@ func runCrack(args []string) int {
 			Recurse:        !opts.NoRecurse,
 			Explode:        opts.ExplodeDocuments,
 			Promote:        !opts.NoPromote,
-			FindAll:        opts.FindAll,
 			Adaptive:       opts.CorpusPromotion,
 			Context:        opts.ContextCandidates,
 			Hint:           opts.HintCandidates,

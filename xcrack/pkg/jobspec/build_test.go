@@ -42,7 +42,6 @@ func TestBuildOptionsMapping(t *testing.T) {
 	s.Search.Promote = &no
 	s.Recursion.ExplodeDocuments = true
 	s.Search.Adaptive = true
-	s.Search.FindAll = true
 	s.Search.Context = true
 	s.Concurrency.Workers = 3
 	s.Concurrency.MaxProcs = 5
@@ -61,7 +60,7 @@ func TestBuildOptionsMapping(t *testing.T) {
 		t.Fatalf("BuildOptions: %v", err)
 	}
 	if !opts.NoRecurse || !opts.NoPromote || !opts.ExplodeDocuments ||
-		!opts.CorpusPromotion || !opts.FindAll || !opts.ContextCandidates {
+		!opts.CorpusPromotion || !opts.ContextCandidates {
 		t.Fatalf("toggle mapping wrong: %+v", opts)
 	}
 	if opts.Workers != 3 || opts.MaxProcs != 5 || opts.FileConcurrency != 2 ||

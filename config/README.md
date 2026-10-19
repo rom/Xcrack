@@ -99,7 +99,6 @@ here is reachable from every surface.
 | `increment` | string | expand each mask over `MIN:MAX` tokens, shortest first (`--increment`) |
 | `combinator` | `{left, right, sep}` | combinator attack: every left word + every right word, joined by `sep` |
 | `loopback` | bool | re-mangle cached/pot passwords through the rules (`--loopback`) |
-| `find_all` | bool | **reserved — not yet active.** Intended to keep searching every encrypted node even if some stay locked; accepted today but ignored by the engine (which already explores every node by default) |
 | `spray_years` | []int | years used in spray patterns (default current/previous) |
 | `shard` | string | `I/N` keyspace stride for this worker (`--shard`) |
 

@@ -22,8 +22,8 @@ type confView struct {
 	MaxDepth, MaxNodes                         int
 	MaxTotalBytes, MaxEntrySize, MaxCandidates int64
 
-	Recurse, Explode                          bool
-	Promote, FindAll, Adaptive, Context, Hint bool
+	Recurse, Explode                 bool
+	Promote, Adaptive, Context, Hint bool
 
 	UseDefaultList, Swedish  bool
 	Wordlists, Breach        []string
@@ -101,7 +101,6 @@ func (v confView) print(w io.Writer) {
 
 	fmt.Fprintln(w, "search:")
 	kv("promote-passwords", onOff(v.Promote))
-	kv("find-all", onOff(v.FindAll))
 	kv("adaptive", onOff(v.Adaptive))
 	kv("context", onOff(v.Context))
 	kv("hint", onOff(v.Hint))
