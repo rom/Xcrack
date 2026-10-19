@@ -163,7 +163,7 @@ xcrack <subcommand> …       a focused tool (below)
 | `export-challenge` | export an encrypted target as a portable challenge envelope |
 | `office-keyattack` | sweep the 40-bit RC4 key of a legacy `.doc/.xls/.ppt` (`--gpu`, `--shard`) |
 | `pdf-keyattack` | sweep the 40-bit RC4 key of a PDF V1/R2 (`--gpu`, `--table`, `--shard`) |
-| `thunder-gen` | build a precomputed "Thunder Table" (rainbow TMTO) for PDF R2 (`--gpu`; `--progress N%` or `N<hour\|day>` for periodic progress) |
+| `thunder-gen` | build a precomputed "Thunder Table" (rainbow TMTO) for PDF R2 (`--gpu`; `--progress N%` or `N<hour\|day>` for periodic progress; writes `--out` incrementally and **resumes** it if the same command is re-run after an interrupt/crash) |
 | `access-recover` | recover/strip an MS Access database password |
 | `vba-recover` | recover an Office VBA project password |
 | `wordlist` | wordlist utilities (dedupe, sort, length filter, …) |

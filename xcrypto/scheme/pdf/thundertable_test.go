@@ -6,6 +6,8 @@ import (
 	"encoding/binary"
 	"errors"
 	"math/rand"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/rom/xcrypto/prim"
@@ -249,6 +251,119 @@ func TestGPUBatchSize(t *testing.T) {
 	}
 	if got := gpuBatchSize(256, 99); got != 99 {
 		t.Fatalf("override batch = %d, want 99", got)
+	}
+}
+
+// TestGenerateTableResumeRoundTrip checks that writing to ResumeFile produces a
+// file byte-identical to WriteTo of the same table (the checkpoint format is the
+// final format) and that it loads back as a complete table.
+func TestGenerateTableResumeRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.thunder")
+	p := TableParams{KeyspaceBits: 12, ChainLen: 16, Chains: 256, Tables: 4, ResumeFile: path}
+	tb, err := GenerateTable(context.Background(), p)
+	if err != nil {
+		t.Fatalf("GenerateTable: %v", err)
+	}
+	var buf bytes.Buffer
+	if _, err := tb.WriteTo(&buf); err != nil {
+		t.Fatalf("WriteTo: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, buf.Bytes()) {
+		t.Fatalf("ResumeFile bytes (%d) != WriteTo bytes (%d)", len(got), buf.Len())
+	}
+	back, err := ReadTable(bytes.NewReader(got))
+	if err != nil {
+		t.Fatalf("ReadTable of ResumeFile: %v", err)
+	}
+	if back.Chains() != tb.Chains() || back.KeyspaceBits() != 12 || back.ChainLen() != 16 {
+		t.Fatalf("round-trip mismatch: chains %d/%d bits %d len %d", back.Chains(), tb.Chains(), back.KeyspaceBits(), back.ChainLen())
+	}
+}
+
+// TestGenerateTableResumeContinues simulates a crash mid-generation (header + 2
+// complete sub-tables + a truncated 3rd) and checks the next run loads the 2,
+// continues, and reproduces the full table.
+func TestGenerateTableResumeContinues(t *testing.T) {
+	p := TableParams{KeyspaceBits: 12, ChainLen: 16, Chains: 256, Tables: 4}
+	ref, err := GenerateTable(context.Background(), p) // deterministic reference
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refBuf bytes.Buffer
+	if _, err := ref.WriteTo(&refBuf); err != nil {
+		t.Fatal(err)
+	}
+	full := refBuf.Bytes()
+
+	// Byte offset just past the first two complete sub-table records.
+	off := int64(thunderHeaderLen)
+	for i := 0; i < 2; i++ {
+		off += int64(12 + 10*len(ref.subs[i].ends))
+	}
+	path := filepath.Join(t.TempDir(), "t.thunder")
+	if err := os.WriteFile(path, full[:off+5], 0o600); err != nil { // +5 = a truncated 3rd record
+		t.Fatal(err)
+	}
+
+	var done, total int
+	rp := p
+	rp.ResumeFile = path
+	rp.OnResume = func(d, tot int) { done, total = d, tot }
+	if _, err := GenerateTable(context.Background(), rp); err != nil {
+		t.Fatalf("resume GenerateTable: %v", err)
+	}
+	if done != 2 || total != 4 {
+		t.Fatalf("OnResume = (%d,%d), want (2,4)", done, total)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, full) {
+		t.Fatalf("resumed file (%d bytes) != full table (%d bytes)", len(got), len(full))
+	}
+}
+
+// TestGenerateTableResumeParamMismatch checks resuming into a file built with
+// different parameters is refused rather than silently corrupting it.
+func TestGenerateTableResumeParamMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.thunder")
+	p := TableParams{KeyspaceBits: 12, ChainLen: 16, Chains: 256, Tables: 2, ResumeFile: path}
+	if _, err := GenerateTable(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	p2 := p
+	p2.Tables = 4 // header says 2 sub-tables; must refuse
+	if _, err := GenerateTable(context.Background(), p2); err == nil {
+		t.Fatal("expected a parameter-mismatch error resuming with different --tables")
+	}
+}
+
+// TestGenerateTableResumeAlreadyComplete checks that re-running on a finished
+// file does nothing and leaves it unchanged.
+func TestGenerateTableResumeAlreadyComplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "t.thunder")
+	p := TableParams{KeyspaceBits: 12, ChainLen: 16, Chains: 256, Tables: 3, ResumeFile: path}
+	if _, err := GenerateTable(context.Background(), p); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := os.ReadFile(path)
+	var done, total int
+	p2 := p
+	p2.OnResume = func(d, tot int) { done, total = d, tot }
+	if _, err := GenerateTable(context.Background(), p2); err != nil {
+		t.Fatal(err)
+	}
+	if done != 3 || total != 3 {
+		t.Fatalf("OnResume = (%d,%d), want (3,3) for an already-complete file", done, total)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("already-complete resume rewrote the file")
 	}
 }
 

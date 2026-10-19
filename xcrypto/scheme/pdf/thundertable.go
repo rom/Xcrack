@@ -1,10 +1,13 @@
 package pdf
 
 import (
+	"bufio"
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
+	"os"
 	"runtime"
 	"sort"
 	"sync"
@@ -41,8 +44,9 @@ import (
 var ErrBadTable = errors.New("pdf: malformed thunder table")
 
 const (
-	thunderMagic   = "XTHUNDR1" // 8 bytes: format magic + version 1
-	thunderMaxBits = 40         // the file-key space is 2^40
+	thunderMagic      = "XTHUNDR1"         // 8 bytes: format magic + version 1
+	thunderMaxBits    = 40                 // the file-key space is 2^40
+	thunderSeedStride = 0x9E3779B97F4A7C15 // golden-ratio stride for per-sub-table seeds
 )
 
 // TableParams configures thunder-table generation.
@@ -82,6 +86,22 @@ type TableParams struct {
 	// finishes; the caller decides how often to actually surface an update. It
 	// must be cheap and must not block.
 	Progress func(done, total uint64)
+	// ResumeFile, when non-empty, makes GenerateTable write each completed
+	// sub-table to this file as it finishes (flushed to disk), and — if the file
+	// already holds sub-tables built with the same (KeyspaceBits, ChainLen,
+	// Tables) — continue after them rather than starting over. So an interrupted
+	// or crashed run resumes instead of restarting. A truncated trailing record
+	// from a mid-write crash is discarded. Once every sub-table is written the
+	// file is exactly what WriteTo produces (a complete, usable table), so no
+	// separate finalize step is needed. A file whose header does not match the
+	// requested parameters is an error, never a silent overwrite. Empty = the old
+	// in-memory behaviour (the caller writes the returned Table itself).
+	ResumeFile string
+	// OnResume, when set and ResumeFile already contained sub-tables, is called
+	// once before generation with how many of Tables were loaded, for a status
+	// message. doneSubTables == totalSubTables means the table was already
+	// complete and nothing is generated.
+	OnResume func(doneSubTables, totalSubTables int)
 }
 
 // ChainComputer computes rainbow-chain endpoints for the R2 key space: for each
@@ -221,16 +241,43 @@ func GenerateTable(ctx context.Context, p TableParams) (*Table, error) {
 	}
 
 	t := &Table{n: n, chainLen: p.ChainLen, subs: make([]subTable, p.Tables)}
-	for s := 0; s < p.Tables; s++ {
+
+	// Optional incremental output / resume: write each completed sub-table to
+	// ResumeFile and continue after any already present from an earlier run.
+	start := 0
+	var ckpt *os.File
+	if p.ResumeFile != "" {
+		pre, f, err := openResumeFile(p.ResumeFile, n, p.ChainLen, p.Tables)
+		if err != nil {
+			return nil, err
+		}
+		ckpt = f
+		defer ckpt.Close()
+		start = len(pre)
+		copy(t.subs, pre)
+		if doneCtr != nil && start > 0 {
+			doneCtr.Add(uint64(start) * perSub) // count resumed chains toward progress
+		}
+		if p.OnResume != nil {
+			p.OnResume(start, p.Tables)
+		}
+	}
+
+	for s := start; s < p.Tables; s++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		seed := uint64(s) * 0x9E3779B97F4A7C15 // golden-ratio stride per sub-table
+		seed := uint64(s) * thunderSeedStride // golden-ratio stride per sub-table
 		ends, err := generateSub(ctx, n, p.ChainLen, p.Chains, seed, workers, p.Chain, p.GPUChainBatch, doneCtr)
 		if err != nil {
 			return nil, err
 		}
 		t.subs[s] = ends
+		if ckpt != nil {
+			if err := appendSubRecord(ckpt, &ends); err != nil {
+				return nil, fmt.Errorf("pdf: thunder checkpoint write: %w", err)
+			}
+		}
 	}
 	return t, nil
 }
@@ -476,107 +523,218 @@ func r2VerifyFull(key5, u32 []byte) bool {
 	return prim.ConstantTimeEqual(out[:32], u32)
 }
 
+// --- on-disk format -----------------------------------------------------------
+// header: magic(8) | bits(1) | chainLen(4 LE) | nsub(4 LE)
+// record: seed(8 LE) | count(4 LE) | count × (start[5] | end[5])
+// Each record is independently parseable, so the file can be written — and
+// resumed — one sub-table at a time; a complete file is exactly what WriteTo
+// emits, readable by ReadTable.
+
+const thunderHeaderLen = 8 + 1 + 4 + 4 // 17
+
+func writeTableHeader(w io.Writer, n uint64, chainLen, nsub int) (int, error) {
+	var hdr [thunderHeaderLen]byte
+	copy(hdr[:8], thunderMagic)
+	hdr[8] = byte(bitsOf(n))
+	binary.LittleEndian.PutUint32(hdr[9:], uint32(chainLen))
+	binary.LittleEndian.PutUint32(hdr[13:], uint32(nsub))
+	return w.Write(hdr[:])
+}
+
+// readTableHeader parses the 17-byte header and returns the key space, chain
+// length and sub-table count. A bad magic, bits or count yields ErrBadTable.
+func readTableHeader(r io.Reader) (n uint64, chainLen, nsub int, err error) {
+	var hdr [thunderHeaderLen]byte
+	if _, e := io.ReadFull(r, hdr[:]); e != nil {
+		return 0, 0, 0, ErrBadTable
+	}
+	if string(hdr[:8]) != thunderMagic {
+		return 0, 0, 0, ErrBadTable
+	}
+	bits := int(hdr[8])
+	if bits < 1 || bits > thunderMaxBits {
+		return 0, 0, 0, ErrBadTable
+	}
+	chainLen = int(binary.LittleEndian.Uint32(hdr[9:]))
+	nsub = int(binary.LittleEndian.Uint32(hdr[13:]))
+	if chainLen < 1 || nsub < 1 || nsub > 1<<20 {
+		return 0, 0, 0, ErrBadTable
+	}
+	return uint64(1) << uint(bits), chainLen, nsub, nil
+}
+
+// writeSubRecord writes one sub-table record and returns the bytes written.
+func writeSubRecord(w io.Writer, sub *subTable) (int, error) {
+	var pre [12]byte
+	binary.LittleEndian.PutUint64(pre[:8], sub.seed)
+	binary.LittleEndian.PutUint32(pre[8:], uint32(len(sub.ends)))
+	total, err := w.Write(pre[:])
+	if err != nil {
+		return total, err
+	}
+	var k5 [5]byte
+	for i := range sub.ends {
+		putKey5(k5[:], sub.starts[i])
+		if nw, err := w.Write(k5[:]); err != nil {
+			return total + nw, err
+		} else {
+			total += nw
+		}
+		putKey5(k5[:], sub.ends[i])
+		if nw, err := w.Write(k5[:]); err != nil {
+			return total + nw, err
+		} else {
+			total += nw
+		}
+	}
+	return total, nil
+}
+
+// readSubRecord reads one sub-table record. It returns io.EOF when the reader is
+// cleanly at a record boundary (no record present) and io.ErrUnexpectedEOF when a
+// record is present but truncated — a resume loader treats both as "stop here",
+// keeping only the complete records read so far. The initial slice capacity is
+// capped so a corrupt/hostile count cannot force a huge allocation before a short
+// read fails.
+func readSubRecord(r io.Reader) (subTable, error) {
+	var pre [12]byte
+	if _, err := io.ReadFull(r, pre[:]); err != nil {
+		if err == io.EOF {
+			return subTable{}, io.EOF
+		}
+		return subTable{}, io.ErrUnexpectedEOF
+	}
+	m := int(binary.LittleEndian.Uint32(pre[8:]))
+	capHint := m
+	if capHint < 0 || capHint > 1<<16 {
+		capHint = 1 << 16
+	}
+	sub := subTable{
+		seed:   binary.LittleEndian.Uint64(pre[:8]),
+		starts: make([]uint64, 0, capHint),
+		ends:   make([]uint64, 0, capHint),
+	}
+	var k5 [5]byte
+	for i := 0; i < m; i++ {
+		if _, err := io.ReadFull(r, k5[:]); err != nil {
+			return subTable{}, io.ErrUnexpectedEOF
+		}
+		start := getKey5(k5[:])
+		if _, err := io.ReadFull(r, k5[:]); err != nil {
+			return subTable{}, io.ErrUnexpectedEOF
+		}
+		sub.starts = append(sub.starts, start)
+		sub.ends = append(sub.ends, getKey5(k5[:]))
+	}
+	return sub, nil
+}
+
 // WriteTo serialises the table in a compact binary form (keys as 5 bytes).
 func (t *Table) WriteTo(w io.Writer) (int64, error) {
-	var hdr [8 + 1 + 4 + 4]byte
-	copy(hdr[:8], thunderMagic)
-	hdr[8] = byte(bitsOf(t.n))
-	binary.LittleEndian.PutUint32(hdr[9:], uint32(t.chainLen))
-	binary.LittleEndian.PutUint32(hdr[13:], uint32(len(t.subs)))
-	total, err := w.Write(hdr[:])
+	total, err := writeTableHeader(w, t.n, t.chainLen, len(t.subs))
 	if err != nil {
 		return int64(total), err
 	}
-	var num [4]byte
-	var k5 [5]byte
 	for s := range t.subs {
-		sub := &t.subs[s]
-		var sb [8]byte
-		binary.LittleEndian.PutUint64(sb[:], sub.seed)
-		if nw, err := w.Write(sb[:]); err != nil {
-			return int64(total + nw), err
-		} else {
-			total += nw
-		}
-		binary.LittleEndian.PutUint32(num[:], uint32(len(sub.ends)))
-		if nw, err := w.Write(num[:]); err != nil {
-			return int64(total + nw), err
-		} else {
-			total += nw
-		}
-		for i := range sub.ends {
-			putKey5(k5[:], sub.starts[i])
-			if nw, err := w.Write(k5[:]); err != nil {
-				return int64(total + nw), err
-			} else {
-				total += nw
-			}
-			putKey5(k5[:], sub.ends[i])
-			if nw, err := w.Write(k5[:]); err != nil {
-				return int64(total + nw), err
-			} else {
-				total += nw
-			}
+		nw, err := writeSubRecord(w, &t.subs[s])
+		total += nw
+		if err != nil {
+			return int64(total), err
 		}
 	}
 	return int64(total), nil
 }
 
-// ReadTable deserialises a table written by WriteTo.
+// ReadTable deserialises a table written by WriteTo. A truncated or malformed
+// stream is ErrBadTable.
 func ReadTable(r io.Reader) (*Table, error) {
-	var hdr [17]byte
-	if _, err := io.ReadFull(r, hdr[:]); err != nil {
-		return nil, ErrBadTable
+	n, chainLen, nsub, err := readTableHeader(r)
+	if err != nil {
+		return nil, err
 	}
-	if string(hdr[:8]) != thunderMagic {
-		return nil, ErrBadTable
-	}
-	bits := int(hdr[8])
-	if bits < 1 || bits > thunderMaxBits {
-		return nil, ErrBadTable
-	}
-	chainLen := int(binary.LittleEndian.Uint32(hdr[9:]))
-	nsub := int(binary.LittleEndian.Uint32(hdr[13:]))
-	if chainLen < 1 || nsub < 1 || nsub > 1<<20 {
-		return nil, ErrBadTable
-	}
-	t := &Table{n: uint64(1) << uint(bits), chainLen: chainLen, subs: make([]subTable, nsub)}
+	t := &Table{n: n, chainLen: chainLen, subs: make([]subTable, nsub)}
 	for s := 0; s < nsub; s++ {
-		var sb [8]byte
-		if _, err := io.ReadFull(r, sb[:]); err != nil {
+		sub, err := readSubRecord(r)
+		if err != nil {
 			return nil, ErrBadTable
-		}
-		var num [4]byte
-		if _, err := io.ReadFull(r, num[:]); err != nil {
-			return nil, ErrBadTable
-		}
-		m := int(binary.LittleEndian.Uint32(num[:]))
-		// Grow the chain slices as bytes are actually read rather than
-		// pre-allocating m entries. A corrupt or hostile count (a uint32 is up to
-		// ~4.3e9) would otherwise make() tens of GB before the first short read
-		// could fail — an OOM/DoS from operator-supplied --table input. Capping the
-		// initial capacity keeps a lying count cheap; a truncated stream then fails
-		// at io.ReadFull having allocated only what it actually read.
-		capHint := m
-		if capHint > 1<<16 {
-			capHint = 1 << 16
-		}
-		sub := subTable{seed: binary.LittleEndian.Uint64(sb[:]), starts: make([]uint64, 0, capHint), ends: make([]uint64, 0, capHint)}
-		var k5 [5]byte
-		for i := 0; i < m; i++ {
-			if _, err := io.ReadFull(r, k5[:]); err != nil {
-				return nil, ErrBadTable
-			}
-			start := getKey5(k5[:])
-			if _, err := io.ReadFull(r, k5[:]); err != nil {
-				return nil, ErrBadTable
-			}
-			sub.starts = append(sub.starts, start)
-			sub.ends = append(sub.ends, getKey5(k5[:]))
 		}
 		t.subs[s] = sub
 	}
 	return t, nil
+}
+
+// openResumeFile opens (or creates) the incremental output file at path for a
+// table with the given parameters. A fresh file gets the header and no
+// pre-loaded sub-tables. An existing file has its header validated against
+// (n, chainLen, nsub); every complete sub-table record is loaded (a truncated
+// trailing record from an interrupted run is discarded), the file is truncated to
+// the last complete record and positioned for appending. A non-thunder file or a
+// parameter mismatch is an error rather than a silent overwrite.
+func openResumeFile(path string, n uint64, chainLen, nsub int) (pre []subTable, f *os.File, err error) {
+	f, err = os.OpenFile(path, os.O_RDWR, 0o600)
+	if errors.Is(err, os.ErrNotExist) {
+		f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0o600)
+		if err != nil {
+			return nil, nil, err
+		}
+		if _, werr := writeTableHeader(f, n, chainLen, nsub); werr != nil {
+			f.Close()
+			return nil, nil, werr
+		}
+		return nil, f, nil
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	fn, fChainLen, fNsub, herr := readTableHeader(f)
+	if herr != nil {
+		f.Close()
+		return nil, nil, fmt.Errorf("%s is not a thunder table (remove it or choose another output path): %w", path, herr)
+	}
+	if fn != n || fChainLen != chainLen || fNsub != nsub {
+		f.Close()
+		return nil, nil, fmt.Errorf("%s was built with different parameters; remove it or match --bits/--length/--tables", path)
+	}
+	offset := int64(thunderHeaderLen)
+	br := bufio.NewReaderSize(f, 1<<20)
+	for len(pre) < nsub {
+		sub, rerr := readSubRecord(br)
+		if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
+			break // clean boundary, or a truncated trailing record: stop
+		}
+		if rerr != nil {
+			f.Close()
+			return nil, nil, rerr
+		}
+		if sub.seed != uint64(len(pre))*thunderSeedStride {
+			f.Close()
+			return nil, nil, fmt.Errorf("%s: inconsistent checkpoint at sub-table %d", path, len(pre))
+		}
+		pre = append(pre, sub)
+		offset += int64(12 + 10*len(sub.ends))
+	}
+	if terr := f.Truncate(offset); terr != nil { // drop any partial tail
+		f.Close()
+		return nil, nil, terr
+	}
+	if _, serr := f.Seek(offset, io.SeekStart); serr != nil {
+		f.Close()
+		return nil, nil, serr
+	}
+	return pre, f, nil
+}
+
+// appendSubRecord writes one completed sub-table to the open output file and
+// flushes it to disk, so an interrupted run leaves a valid, resumable prefix.
+func appendSubRecord(f *os.File, sub *subTable) error {
+	bw := bufio.NewWriterSize(f, 1<<20)
+	if _, err := writeSubRecord(bw, sub); err != nil {
+		return err
+	}
+	if err := bw.Flush(); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // BenchImageRate measures how many R2 image evaluations one core does per second
