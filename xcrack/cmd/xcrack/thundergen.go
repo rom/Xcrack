@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bufio"
 	"context"
 	"flag"
 	"fmt"
@@ -56,7 +55,16 @@ func runThunderGen(args []string) int {
 
 	// Plan: total chain work and an estimated wall-clock from a quick micro-bench
 	// of the image function, plus the on-disk size (10 bytes per stored chain).
-	totalChains := uint64(*tables) * uint64(*chains)
+	// Chains per sub-table are capped to the key space (mirroring generateSub's
+	// starts = min(chains, 2^bits)), so the estimates are honest for a small
+	// --bits where the default chain count exceeds the key space.
+	keyspace := uint64(1) << uint(*bits)
+	perSub := uint64(*chains)
+	capped := false
+	if perSub > keyspace {
+		perSub, capped = keyspace, true
+	}
+	totalChains := uint64(*tables) * perSub
 	totalOps := totalChains * uint64(*length)
 	rate := pdf.BenchImageRate(250 * time.Millisecond) // images/sec, single core
 	cores := *workers
@@ -75,9 +83,17 @@ func runThunderGen(args []string) int {
 			est = time.Duration(ns)
 		}
 	}
-	fmt.Fprintf(os.Stderr, "thunder-gen plan: 2^%d key space, %d sub-tables × %d chains × %d columns\n", *bits, *tables, *chains, *length)
-	fmt.Fprintf(os.Stderr, "  chain work   ~%s image ops   (≈ %s on %d core(s) at ~%.0fk/s/core)\n",
-		humanCount(totalOps), roundDur(est), cores, rate/1e3)
+	capNote := ""
+	if capped {
+		capNote = fmt.Sprintf(" (capped from %d to the 2^%d key space)", *chains, *bits)
+	}
+	estNote := ""
+	if *gpu {
+		estNote = "; --gpu rate is reported by the live progress"
+	}
+	fmt.Fprintf(os.Stderr, "thunder-gen plan: 2^%d key space, %d sub-tables × %d chains × %d columns%s\n", *bits, *tables, perSub, *length, capNote)
+	fmt.Fprintf(os.Stderr, "  chain work   ~%s image ops   (CPU est. ≈ %s on %d core(s) at ~%.0fk/s/core%s)\n",
+		humanCount(totalOps), roundDur(est), cores, rate/1e3, estNote)
 	fmt.Fprintf(os.Stderr, "  table size   ~%s on disk (pre-dedup; merges shrink it)\n", humanBytes(totalChains*10))
 	fmt.Fprintf(os.Stderr, "  coverage     rises with chains×columns×tables vs 2^%d; add --tables for ~100%%\n", *bits)
 	if *dryRun {
@@ -139,7 +155,20 @@ func runThunderGen(args []string) int {
 
 	started := time.Now()
 	params := pdf.TableParams{
-		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers, Chain: chain, GPUChainBatch: gpuBatchN,
+		KeyspaceBits: *bits, ChainLen: *length, Chains: *chains, Tables: *tables, Workers: *workers,
+		Chain: chain, GPUChainBatch: gpuBatchN,
+		// Write each sub-table to --out as it completes, and resume after any
+		// already present, so an interrupted or crashed run continues instead of
+		// restarting. The file is a complete, usable table once the run finishes.
+		ResumeFile: *out,
+		OnResume: func(done, total int) {
+			switch {
+			case done >= total:
+				fmt.Fprintf(os.Stderr, "  %s is already complete (%d/%d sub-tables); nothing to do\n", *out, done, total)
+			case done > 0:
+				fmt.Fprintf(os.Stderr, "  resuming %s: %d/%d sub-tables already done\n", *out, done, total)
+			}
+		},
 	}
 	if prog != nil {
 		prog.start = started
@@ -149,32 +178,20 @@ func runThunderGen(args []string) int {
 	tbl, err := pdf.GenerateTable(ctx, params)
 	if err != nil {
 		if ctx.Err() != nil {
-			fmt.Fprintln(os.Stderr, "interrupted")
+			fmt.Fprintf(os.Stderr, "interrupted — partial table saved to %s; rerun the same command to resume\n", *out)
 			return 130
 		}
 		fmt.Fprintf(os.Stderr, "xcrack thunder-gen: %v\n", err)
 		return 2
 	}
-
-	f, err := os.Create(*out)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "xcrack thunder-gen: %v\n", err)
-		return 2
-	}
-	bw := bufio.NewWriterSize(f, 1<<20)
-	n, werr := tbl.WriteTo(bw)
-	if werr == nil {
-		werr = bw.Flush()
-	}
-	if cerr := f.Close(); werr == nil {
-		werr = cerr
-	}
-	if werr != nil {
-		fmt.Fprintf(os.Stderr, "xcrack thunder-gen: writing %s: %v\n", *out, werr)
-		return 2
+	// The table was written to *out incrementally during generation; report its
+	// final size from disk.
+	var size uint64
+	if fi, serr := os.Stat(*out); serr == nil {
+		size = uint64(fi.Size())
 	}
 	fmt.Printf("wrote %s: %s, %d chains over 2^%d, %d columns, %d sub-tables (%s)\n",
-		*out, humanBytes(uint64(n)), tbl.Chains(), tbl.KeyspaceBits(), tbl.ChainLen(), *tables, roundDur(time.Since(started)))
+		*out, humanBytes(size), tbl.Chains(), tbl.KeyspaceBits(), tbl.ChainLen(), *tables, roundDur(time.Since(started)))
 	fmt.Println("use it with: xcrack pdf-keyattack --table " + *out + " FILE.pdf")
 	return 0
 }

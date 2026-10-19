@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **`thunder-gen` checkpoint/resume.** Table generation now writes each
+  sub-table to `--out` as it finishes (flushed to disk), so a long run is no
+  longer all-or-nothing: if it is interrupted (Ctrl-C), crashes, or the GPU
+  resets, re-running the **same command** continues from the last completed
+  sub-table instead of restarting. A truncated trailing record from a mid-write
+  crash is discarded on resume. The file is a complete, usable table the moment
+  the last sub-table is written (same format as before — no finalize step), and
+  re-running a finished build reports "already complete" and does nothing. A
+  `--out` whose header does not match the requested `--bits`/`--length`/`--tables`
+  is refused rather than silently overwritten. (`pdf.TableParams` gains
+  `ResumeFile`/`OnResume`.)
 - **Web GUI — Tools tab (specialist subcommands).** `xcrack-web` gains a **Tools**
   view exposing the CLI's non-cracking subcommands. The quick, stateless ones run
   in the browser against new synchronous `/api/v1/tools/*` endpoints that reuse
@@ -74,6 +85,13 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   unchanged and remains the default.
 
 ### Fixed / performance
+- **`thunder-gen` plan estimates are honest for small `--bits`.** The plan's
+  "chain work", wall-clock and on-disk-size lines counted the full `--chains`
+  per sub-table even when the key space is smaller, over-stating a `--bits 24`
+  build by ~4× (e.g. "1.1T ops / 2.5 GiB"). They now cap chains per sub-table to
+  the key space (`min(--chains, 2^bits)`, matching generation) and note the cap;
+  the wall-clock is labelled a **CPU** estimate (it never reflected `--gpu`, and
+  under `--gpu` the line now points to the live progress for the real rate).
 - **`thunder-gen --gpu` self-tests the kernel and shows progress.** Before
   trusting a device for the whole table, `thunder-gen --gpu` now runs the GPU
   self-test (which validates the thunder-chain generator against the CPU
