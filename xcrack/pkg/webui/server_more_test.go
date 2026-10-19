@@ -106,6 +106,11 @@ func TestDistributedCrack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Drain in-flight job runners before the t.TempDir() work directory is removed
+	// (registered before ts.Close so it runs after it: stop HTTP, then drain). This
+	// test builds its own server rather than using newTestServer, so it needs the
+	// same Close() the helper does.
+	defer srv.Close()
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
