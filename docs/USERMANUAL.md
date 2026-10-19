@@ -354,7 +354,54 @@ PuTTY v3), scrypt (age, Ethereum, PBES2), bcrypt (OpenSSH), and SQLCipher
 **No GPU of your own?** Use path A/B on a rented box, or offload to hashcat/John
 with `hashline` / `export-challenge` (section 2).
 
-### D. Building the optional tiers (Linux)
+### D. Building a Thunder Table on the GPU (`thunder-gen --gpu`)
+
+`thunder-gen` builds the one-time precomputed rainbow table that lets
+`pdf-keyattack --table` invert a PDF V1/R2 file key in seconds. The build is the
+expensive part, and `--gpu` offloads the chain walk (byte-identical to the CPU
+walk, so a GPU-built table is inverted by the exact same lookup; before trusting
+a device for the whole table it is self-tested against the CPU reference and
+falls back on any mismatch):
+
+```sh
+bin/xcrack thunder-gen --out r2.thunder --bits 40 --gpu --progress 5%
+```
+
+Two independent knobs tune the GPU walk; the defaults are sensible and most runs
+need neither:
+
+- **`--gpu-batch N`** (or `XCRACK_GPU_CHAIN_BATCH=N`) — how many chains are
+  offloaded per call. This is an **occupancy** knob: a wide batch keeps all of the
+  device's lanes busy. The default is wide; you would only *lower* it to cap host
+  memory, not to avoid a crash.
+- **`XCRACK_GPU_OP_BUDGET=N`** — the **compute-watchdog** knob. The kernel is
+  column-batched: it advances every chain only a few columns per GPU submission,
+  which bounds a single submission's work (work-items × columns, default `2^24`).
+  A GPU driver resets the queue if one submission runs too long — a *"ring
+  timeout"* / *"context lost"* / `Aborted (core dumped)`, common on **integrated**
+  GPUs. If you still hit that, **lower** `XCRACK_GPU_OP_BUDGET` (e.g. `2097152`);
+  raise it for more throughput headroom on a discrete card.
+
+```sh
+# integrated GPU that trips its watchdog under the default budget:
+XCRACK_GPU_OP_BUDGET=2097152 bin/xcrack thunder-gen --out r2.thunder --bits 40 --gpu --progress 5%
+```
+
+On a Mesa/AMD box the integrated GPU is exposed to OpenCL by **rusticl**, which is
+opt-in per process — export it (and, if several devices are present, point
+`XCRACK_GPU_DEVICE` at the one you want) in the *same shell* as the run:
+
+```sh
+export RUSTICL_ENABLE=radeonsi
+export XCRACK_GPU_DEVICE=radeonsi   # prefer the iGPU over a CPU ICD like pocl
+bin/xcrack thunder-gen --out r2.thunder --bits 40 --gpu --progress 5%
+```
+
+The build writes `--out` incrementally and **resumes** it, so if a run is
+interrupted — or a device does trip its watchdog — re-running the *same command*
+continues from the last completed sub-table rather than restarting.
+
+### E. Building the optional tiers (Linux)
 
 Two build tags select the optional features, and the same recipe applies to all
 three binaries (`xcrack`, `xcrackd`, `xcrack-web`):
@@ -1242,7 +1289,7 @@ silently discarding your cache). TPM support is compiled in only with
 `-tags tpm`; the default pure-Go build reports a clear error if you ask for it,
 so you are never left believing the cache is protected when it is not. A
 plaintext cache remains the default and is unchanged. See
-[§4.D](#d-building-the-optional-tiers-linux) for how to build the `tpm` tier (it
+[§4.E](#e-building-the-optional-tiers-linux) for how to build the `tpm` tier (it
 needs no extra packages) and the runtime device access it expects:
 `/dev/tpmrm0`, typically group `tss`.
 

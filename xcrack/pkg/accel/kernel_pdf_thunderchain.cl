@@ -8,7 +8,18 @@
 // k = (image + seed + col) mod n. n is a power of two, so the modulo is a mask
 // (n-1), passed in as nMask.
 //
-// This is byte-for-byte identical to the pure-Go walk in
+// Column-batched walk: a single work-item per chain that walked the *whole*
+// chainLen in one dispatch forced a dilemma on integrated GPUs — a long dispatch
+// trips the compute watchdog ("ring timeout" / "context lost" → GPU reset), so
+// the host had to cap the work-item count low enough that chains×chainLen stayed
+// under the watchdog, which starved occupancy (too few lanes busy) and left the
+// iGPU no faster than the CPU. pdf_thunderchain_step breaks that dilemma: it
+// advances the running key of each chain by only `cols` columns per dispatch,
+// resuming from device-resident state. The host launches the full chain width of
+// work-items (high occupancy) and sweeps col0 = 0, cols, 2·cols, … so each
+// dispatch's op-work (work-items × cols) stays under the watchdog regardless of
+// chainLen. Walking [0, chainLen) as a sequence of column batches is byte-for-byte
+// identical to the single-dispatch walk, and to the pure-Go walk in
 // xcrypto/scheme/pdf/thundertable.go (r2Image + reduce), so a table generated
 // here is inverted by the same CPU Lookup; validated against the Go reference at
 // startup (GPUSelfTest) and GPU-vs-CPU in the cmd tests.
@@ -51,18 +62,26 @@ inline ulong r2Image8(ulong idx) {
     return v;
 }
 
-__kernel void pdf_thunderchain(const ulong nMask,    // n-1 (n is a power of two)
-                               const uint chainLen,
-                               const ulong seed,
-                               const ulong startIdx,
-                               const uint count,
-                               __global ulong *out)   // count endpoints
+// pdf_thunderchain_step advances each chain's running key by `cols` columns,
+// starting at column col0. On the first batch (col0 == 0) the key is seeded from
+// the chain's start index (startIdx + gid, matching the Go start = i); later
+// batches resume the running key left in device-resident `state` by the previous
+// batch. After the final batch (col0 + cols == chainLen) state[gid] holds the
+// chain endpoint. nMask = n-1 (n is a power of two).
+__kernel void pdf_thunderchain_step(const ulong nMask,
+                                    const ulong seed,
+                                    const ulong startIdx,
+                                    const uint col0,       // first column of this batch
+                                    const uint cols,       // columns to advance this batch
+                                    const uint count,
+                                    __global ulong *state) // count running keys (in/out)
 {
     uint gid = get_global_id(0);
     if (gid >= count) return;
-    ulong k = startIdx + (ulong)gid; // chain start index (matches the Go start = i)
-    for (uint col = 0; col < chainLen; col++) {
+    ulong k = (col0 == 0u) ? (startIdx + (ulong)gid) : state[gid];
+    for (uint c = 0; c < cols; c++) {
+        uint col = col0 + c;
         k = (r2Image8(k) + seed + (ulong)col) & nMask;
     }
-    out[gid] = k;
+    state[gid] = k;
 }

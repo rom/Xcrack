@@ -33,7 +33,7 @@ func runThunderGen(args []string) int {
 	tables := fs_.Int("tables", 4, "independent sub-tables (more => higher coverage)")
 	workers := fs_.Int("workers", 0, "generation workers (0 = all cores)")
 	gpu := fs_.Bool("gpu", false, "offload chain generation to an OpenCL device (needs a -tags opencl build with OpenCL hardware; falls back to CPU)")
-	gpuBatch := fs_.Int("gpu-batch", 0, "chains per GPU submission with --gpu (0 = auto, sized to stay under the device's compute watchdog); lower it if a run hits a GPU 'ring timeout'/'context lost' (also via XCRACK_GPU_CHAIN_BATCH)")
+	gpuBatch := fs_.Int("gpu-batch", 0, "chains offloaded per GPU call with --gpu (0 = auto; a wide batch keeps the device's lanes busy). The compute watchdog is handled by column-batching each submission — tune it with XCRACK_GPU_OP_BUDGET, not this (also via XCRACK_GPU_CHAIN_BATCH)")
 	progressF := fs_.String("progress", "", "periodic progress to stderr: 'N%' every N percent (N=1,5,10,25), or 'N<hour|day>' every N hours/days (e.g. 5%, 2hour, 1day)")
 	dryRun := fs_.Bool("dry-run", false, "print the generation plan (work, size, time estimate) and exit")
 	if err := fs_.Parse(args); err != nil {
@@ -110,8 +110,10 @@ func runThunderGen(args []string) int {
 	// chain is byte-identical to the CPU walk, so the table is inverted by the same
 	// CPU lookup; GenerateTable falls back to the CPU per sub-table if the device
 	// errors, so a GPU hiccup never corrupts the table.
-	// Resolve the per-submission GPU batch: the flag wins, else XCRACK_GPU_CHAIN_BATCH,
-	// else 0 (GenerateTable sizes it automatically from --length).
+	// Resolve the GPU offload batch (chains per Chain call, for occupancy): the
+	// flag wins, else XCRACK_GPU_CHAIN_BATCH, else 0 (GenerateTable uses a wide
+	// default). The per-submission compute-watchdog budget is a separate knob
+	// (XCRACK_GPU_OP_BUDGET) handled inside the backend.
 	gpuBatchN := *gpuBatch
 	if gpuBatchN == 0 {
 		if v := os.Getenv("XCRACK_GPU_CHAIN_BATCH"); v != "" {
@@ -144,10 +146,11 @@ func runThunderGen(args []string) int {
 						fmt.Fprintf(os.Stderr, "  offloading chains to %s %s (%s)\n", d.Vendor, d.Name, d.Type)
 					}
 					if gpuBatchN > 0 {
-						fmt.Fprintf(os.Stderr, "  GPU submission batch: %d chains/call (--gpu-batch)\n", gpuBatchN)
+						fmt.Fprintf(os.Stderr, "  GPU offload batch: %d chains/call (--gpu-batch)\n", gpuBatchN)
 					} else {
-						fmt.Fprintln(os.Stderr, "  GPU submission batch: auto (lower --gpu-batch if you hit a 'ring timeout'/'context lost')")
+						fmt.Fprintln(os.Stderr, "  GPU offload batch: auto (wide, for occupancy)")
 					}
+					fmt.Fprintln(os.Stderr, "  each submission is column-batched under the compute watchdog (tune with XCRACK_GPU_OP_BUDGET if you still hit a 'ring timeout'/'context lost')")
 				}
 			}
 		}
