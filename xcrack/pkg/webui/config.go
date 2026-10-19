@@ -4,6 +4,7 @@ import (
 	"log/slog"
 
 	"github.com/rom/xcrack/pkg/jobspec"
+	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/xcrack"
 )
 
@@ -43,6 +44,10 @@ type Config struct {
 	// Auth enables multi-user access via OIDC. Its zero value keeps the
 	// single-user console (no login, no per-user ownership) unchanged.
 	Auth AuthConfig
+	// Sealer, if set, seals the found-password vault (potfile) at rest — the
+	// binary provides a TPM sealer so the webui package stays free of the TPM
+	// build tag. Nil keeps a plaintext vault.
+	Sealer securecache.Sealer
 }
 
 // AuthConfig turns the console into a multi-user application fronted by an OIDC

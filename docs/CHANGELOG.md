@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — recovered-password vault & job re-run.** `xcrack-web` now keeps a
+  server-side found-password vault (potfile) under its work directory: every
+  recovered password is stored and fed back into new jobs' loopback pass, so a
+  reused or previously found password is caught fast. A new **Recovered** tab
+  lists the vault (with whether it is plaintext or TPM-sealed at rest — the
+  binary can supply a sealer via `Config.Sealer`). The vault is a single-user,
+  `--expose-secrets` feature and is disabled when multi-user auth is on, so it
+  never leaks passwords between users. Each History row also gains **re-run**:
+  `POST /api/v1/jobs/{id}/rerun` starts a fresh job from a finished or
+  interrupted job's saved spec and already-uploaded files — a GUI "resume" that
+  needs no re-upload (`GET /api/v1/vault` is new).
 - **Web GUI — optional multi-user access via OIDC.** `xcrack-web` can now front
   the console with an OpenID Connect identity provider, turning the single-user
   tool into a shared service. It is **off by default** — a localhost instance is

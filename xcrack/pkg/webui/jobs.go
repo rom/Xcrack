@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/rom/xcrack/pkg/jobspec"
+	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/xcrack"
 	"github.com/rom/xcrypto/candidates"
 )
@@ -208,10 +209,35 @@ func (j *Job) subscribe() (history []Event, ch chan Event, done chan struct{}, c
 
 // Manager owns the set of jobs and their on-disk working directories.
 type Manager struct {
-	cfg  Config
-	mu   sync.Mutex
-	jobs map[string]*Job
-	wg   sync.WaitGroup // tracks live runner goroutines, for Shutdown
+	cfg   Config
+	mu    sync.Mutex
+	jobs  map[string]*Job
+	vault *securecache.Store // found-password vault (potfile)
+	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
+}
+
+// vaultActive reports whether the found-password vault is in use. It is a
+// single-user, secrets-exposed feature: in multi-user mode a server-wide vault
+// would leak passwords across users (and loopback would cross-pollinate them),
+// so it is disabled when auth is on.
+func (m *Manager) vaultActive() bool {
+	return m.vault != nil && m.cfg.ExposeSecrets && !m.cfg.Auth.Enabled
+}
+
+// recordFound stores a recovered password in the vault (best-effort).
+func (m *Manager) recordFound(pw string) {
+	if !m.vaultActive() || pw == "" {
+		return
+	}
+	_ = m.vault.Add(pw)
+}
+
+// vaultView returns the vault's passwords and whether it is sealed at rest.
+func (m *Manager) vaultView() (encrypted bool, pws []string) {
+	if !m.vaultActive() {
+		return false, nil
+	}
+	return m.vault.Encrypted(), m.vault.Passwords()
 }
 
 // defaultWorkDir is the per-user default root for job working directories.
@@ -225,6 +251,13 @@ func NewManager(cfg Config) (*Manager, error) {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
 	m := &Manager{cfg: cfg, jobs: map[string]*Job{}}
+	// The found-password vault (potfile). A sealed vault that cannot be opened
+	// (bad key / tampering) is a hard error rather than a silent fresh start.
+	vault, err := securecache.Open(filepath.Join(cfg.WorkDir, "potfile"), cfg.Sealer)
+	if err != nil {
+		return nil, fmt.Errorf("found-password vault: %w", err)
+	}
+	m.vault = vault
 	m.loadPersisted()
 	return m, nil
 }
@@ -416,6 +449,51 @@ func (m *Manager) Shutdown() {
 	m.wg.Wait()
 }
 
+// rerunInfo returns what re-running needs: the job's working directory, its
+// sanitized spec YAML, and the uploaded source file names.
+func (j *Job) rerunInfo() (dir, specYAML string, names []string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.dir, j.SpecYAML, append([]string(nil), j.Files...)
+}
+
+// rerun starts a fresh job from an existing one's saved spec and uploaded source
+// files (still on disk under the old job's directory), owned by owner. It leaves
+// the original untouched. The saved spec's file references were already locked to
+// the old job's upload directory, so re-running adds no new path exposure.
+func (m *Manager) rerun(old *Job, owner string) (*Job, error) {
+	dir, specYAML, names := old.rerunInfo()
+	if specYAML == "" || len(names) == 0 {
+		return nil, fmt.Errorf("job cannot be re-run (no saved spec or source files)")
+	}
+	spec, err := jobspec.ParseStrict([]byte(specYAML))
+	if err != nil {
+		return nil, fmt.Errorf("saved spec: %w", err)
+	}
+	sources := make([]string, len(names))
+	for i, n := range names {
+		p := filepath.Join(dir, "uploads", n)
+		if _, err := os.Stat(p); err != nil {
+			return nil, fmt.Errorf("source %q is no longer on disk", n)
+		}
+		sources[i] = p
+	}
+	nj, err := m.newJob()
+	if err != nil {
+		return nil, err
+	}
+	nj.mu.Lock()
+	nj.spec = spec
+	nj.Files = names
+	nj.sources = sources
+	nj.FilesTotal = len(sources)
+	nj.SpecYAML = specYAML
+	nj.Owner = owner
+	nj.mu.Unlock()
+	m.start(nj)
+	return nj, nil
+}
+
 // run executes the job: build engine options, assemble candidates, process each
 // uploaded source file, and write any decrypted tree to the job's output dir.
 func (m *Manager) run(j *Job) {
@@ -467,10 +545,19 @@ func (m *Manager) run(j *Job) {
 		if m.cfg.ExposeSecrets && !f.KeyRecovered {
 			ev.Password = f.Password
 		}
+		if f.Password != "" {
+			m.recordFound(f.Password) // persist to the vault (gated by vaultActive)
+		}
 		j.emit(ev)
 	}
 
-	asm, err := jobspec.NewAssembler(spec, jobspec.Runtime{})
+	// Seed the loopback pass with the vault's known passwords, so a reused or
+	// previously recovered password is caught fast (single-user, secrets-exposed).
+	rt := jobspec.Runtime{}
+	if m.vaultActive() {
+		rt.LoopbackPasswords = m.vault.Passwords()
+	}
+	asm, err := jobspec.NewAssembler(spec, rt)
 	if err != nil {
 		j.fail(fmt.Sprintf("assemble candidates: %v", err))
 		return

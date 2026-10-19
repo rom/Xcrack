@@ -120,6 +120,7 @@ function wireTabs() {
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
       if (btn.dataset.tab === "history") refreshHistory();
+      if (btn.dataset.tab === "recovered") refreshVault();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
     });
   });
@@ -520,6 +521,7 @@ function setRunStatus(msg, err) { const s = $("run-status"); s.textContent = msg
 // ---- history ----------------------------------------------------------------
 function wireHistory() {
   $("history-refresh").addEventListener("click", refreshHistory);
+  $("vault-refresh").addEventListener("click", refreshVault);
   const nt = $("notify-toggle");
   try { nt.checked = localStorage.getItem("xcrack-notify") === "1"; } catch {}
   nt.addEventListener("change", () => {
@@ -551,11 +553,42 @@ async function refreshHistory() {
       el("td", { textContent: j.created_at ? new Date(j.created_at).toLocaleString() : "—" }),
       el("td", {}, [
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
+        el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
         el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
       ]),
     ]));
   }
   host.append(tbl);
+}
+
+// rerunJob starts a fresh job from a saved one's spec + uploads (no re-upload)
+// and opens it. The GUI "resume" for an interrupted or finished run.
+async function rerunJob(id) {
+  let res;
+  try { res = await fetch(api("/jobs/" + id + "/rerun"), { method: "POST" }); }
+  catch (e) { toast("Re-run failed: " + e); return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); toast("Re-run failed: " + (e.error || res.status)); return; }
+  const { id: nid } = await res.json();
+  toast("Re-running…");
+  openHistoryJob(nid);
+}
+
+// ---- recovered-password vault (potfile) ------------------------------------
+async function refreshVault() {
+  const host = $("vault-list");
+  let v;
+  try { v = await (await fetch(api("/vault"))).json(); }
+  catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the vault." })); return; }
+  host.textContent = "";
+  if (!v.enabled) {
+    host.append(el("p", { className: "hint", textContent: "The vault is available only on a single-user instance with password display enabled." }));
+    return;
+  }
+  host.append(el("p", { className: "hint", textContent: `${(v.count || 0).toLocaleString()} recovered password(s) · ${v.encrypted ? "sealed to the host TPM at rest" : "plaintext at rest"}` }));
+  if (!v.count) { host.append(el("p", { className: "hint", textContent: "No passwords recovered yet." })); return; }
+  const ol = el("ol", { className: "toplist" });
+  for (const pw of v.passwords || []) ol.append(el("li", {}, [el("code", { textContent: pw })]));
+  host.append(ol);
 }
 
 async function deleteHistoryJob(id) {

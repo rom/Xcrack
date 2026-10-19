@@ -15,6 +15,7 @@
   <nav id="tabs">
     <button data-tab="crack" class="active">Crack</button>
     <button data-tab="history">History</button>
+    <button data-tab="recovered">Recovered</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
     <button data-tab="docs">Docs</button>
@@ -225,6 +226,18 @@
       </div>
       <p class="hint">Every run is saved under the server's work directory and survives a restart. Open one to review its results or re-download its output; delete removes it and its working files.</p>
       <div id="history-list"></div>
+    </div>
+  </section>
+
+  <!-- RECOVERED (potfile vault) ----------------------------------------- -->
+  <section id="tab-recovered" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Recovered passwords</h2>
+        <button type="button" id="vault-refresh" class="mini">Refresh</button>
+      </div>
+      <p class="hint">The server's found-password vault (potfile). Every recovered password is kept here and fed back into new jobs' loopback pass, so a reused or previously found password is caught fast. On a multi-user instance the vault is disabled to avoid leaking passwords between users.</p>
+      <div id="vault-list"></div>
     </div>
   </section>
 

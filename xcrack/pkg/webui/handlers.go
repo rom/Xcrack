@@ -215,6 +215,33 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
+// handleRerun starts a fresh job from an existing (finished or interrupted) job's
+// saved spec and uploaded files — a GUI "resume" that needs no re-upload.
+func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
+	old := s.jobForRequest(w, r)
+	if old == nil {
+		return
+	}
+	owner, _ := s.currentUser(r)
+	nj, err := s.mgr.rerun(old, owner.Subject)
+	if err != nil {
+		writeErr(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, map[string]string{"id": nj.ID})
+}
+
+// handleVault lists the found-password vault (potfile). It is a single-user,
+// secrets-exposed feature; otherwise it reports disabled.
+func (s *Server) handleVault(w http.ResponseWriter, r *http.Request) {
+	if !s.mgr.vaultActive() {
+		writeJSON(w, http.StatusOK, map[string]any{"enabled": false})
+		return
+	}
+	enc, pws := s.mgr.vaultView()
+	writeJSON(w, http.StatusOK, map[string]any{"enabled": true, "encrypted": enc, "count": len(pws), "passwords": pws})
+}
+
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 	if s.jobForRequest(w, r) == nil {
 		return
