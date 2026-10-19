@@ -183,7 +183,10 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   supported; the `hashline` emitter no longer claims a non-existent `$dmg$`
   line; ODF AES-256-GCM and encrypted DMG/KeePass are no longer shown as
   unimplemented; GPU/OpenCL is described as an opt-in build tier, not "out of
-  scope").
+  scope"). The `--find-all` / `find_all` toggle (CLI flag, YAML key, API
+  `Options.FindAll`, and the web-GUI checkbox) is now annotated **reserved —
+  not yet active** everywhere it appears, since the engine ignores it today and
+  already explores every node by default.
 
 ### Fixed / performance
 - **`xcrack-web` drains in-flight jobs on shutdown (fixes a flaky test).** A job

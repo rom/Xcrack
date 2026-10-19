@@ -234,7 +234,7 @@ const HELP = {
   comb_sep: "A separator inserted between the two words in a combinator attack (e.g. '-' or '.'). Leave empty for none.",
   adaptive: "Across many files, try passwords already recovered from other files first, and attack the smallest files first.",
   cost_queue: "Triage many files weakest-first: benchmark each and attack the fastest/cheapest schemes before slow, strong KDFs.",
-  find_all: "Keep searching every encrypted node even after some are unlocked, instead of stopping at the first success per file.",
+  find_all: "Reserved — not yet active. Intended to keep searching every encrypted node even after some are unlocked; the engine already searches every node by default, so this toggle has no effect today.",
   loopback: "Feed already-recovered (cached) passwords back through the mangling rules, to catch reused passwords with new suffixes (Summer2023 → Summer2024!).",
   spray: "Try a curated password-spraying set (common passwords + season/year patterns), tried early.",
   spray_tokens: "Org/product/user words (comma-separated) mangled into the spray set, e.g. a company or product name.",

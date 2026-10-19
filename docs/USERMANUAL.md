@@ -236,7 +236,7 @@ Run `xcrack <subcommand> --help` for each tool's own flags.
 | `--timeout`/`--time-limit` / `--max-duration` | per-file budget / whole-run deadline |
 | `--recurse` / `--no-recurse` / `--explode-documents` | container decomposition controls |
 | `--max-depth` / `--max-nodes` / `--max-total-bytes` / `--max-entry-size` / `--max-candidates` | safety ceilings |
-| `--find-all` / `--adaptive` / `--cost-queue` | search every node / corpus-wide promotion / weakest-first triage |
+| `--find-all` / `--adaptive` / `--cost-queue` | search every node *(reserved — not yet active; the engine already does this by default)* / corpus-wide promotion / weakest-first triage |
 
 ### Persistence and resume
 

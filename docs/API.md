@@ -99,7 +99,7 @@ layers, stop at the first match, `NumCPU` workers). Every field:
 | `NoRecurse bool` | recurse | disable container decomposition |
 | `NoPromote bool` | promote | disable password promotion to inner layers |
 | `CorpusPromotion bool` | off | promote recovered passwords across *every* file in a run, most-successful first |
-| `FindAll bool` | — | keep searching after the first match |
+| `FindAll bool` | — | **reserved — not yet active** (the engine ignores it today); intended to keep searching after the first match |
 | `ExplodeDocuments bool` | off | decompose documents into their internal parts |
 | `ContextCandidates bool` | off | seed guesses from the node name and plaintext sibling entries |
 | `HintCandidates bool` | off | seed guesses from an embedded password hint (iWork `.iwph`, ZIP comment) |
