@@ -1108,11 +1108,37 @@ The app is organised into tabs across the top: **Crack**, **History** (§10.6),
 - **Easy mode** (default) is a guided form: drop the locked file(s), pick a
   wordlist, tick the candidate sources and generators (masks, rules, Markov,
   PRINCE, toggle-case, keyboard-walk, name/sibling context, embedded hint), and
-  press **Run**. Two helpers sit alongside it: the **attack wizard**
-  (*"what do you know about the password?"* — a known prefix/suffix, a length
-  range, character types, personal or organisation words) fills the form for
-  you, and the **mask builder** assembles a `?l?u?d?s?a` brute-force mask with a
-  live keyspace counter.
+  press **Run**. Two helpers sit alongside it: the **attack wizard** (§10.3.1)
+  composes a whole attack from what you know, and the **mask builder** assembles
+  a `?l?u?d?s?a` brute-force mask with a live keyspace counter.
+
+#### 10.3.1 The attack wizard
+
+The wizard turns *"what do you know about the password?"* into a configured
+Crack form — nothing runs until you press **Run**. It offers:
+
+- **Presets** — one-click starting points (Personal, Corporate policy,
+  Passphrase, PIN/numeric, Keyboard pattern) that fill the wizard sensibly; tweak
+  from there.
+- **Attack kind** — is it a recognisable *word/name* (dictionary + rules), *random
+  characters* (brute force), a *number/PIN*, or *not sure* (both)? This decides the
+  shape of the attack and which sections apply.
+- **Known parts & length** — a known prefix/suffix (tried as explicit guesses, and
+  pinned into the brute-force mask) and a length range.
+- **Mangling → rules** — how a word is likely altered (capitalise, ALL CAPS, leet
+  `a→@ e→3 i→1 o→0 s→$`, append 1–2 digits, append `!`) and *significant years* are
+  compiled into real hashcat **rules** (the cross-product of the chosen transforms)
+  plus a hybrid digit-append, so `rex` also tries `Rex`, `r3x`, `rex!`, `Rex2024`, …
+- **Wordlist** — the built-in common list or any saved **Library** wordlist.
+- **Extra sources** — Markov, keyboard walks, PRINCE (joined words), case toggles,
+  and loopback (reuse previously-found passwords).
+- **Live feasibility estimate** — as you fill it in, the wizard shows the resulting
+  brute-force keyspace and a plain verdict (small / moderate / large / impractical),
+  so you can tell before running whether a brute force is sane or a wordlist + rules
+  is the better bet.
+
+(The combinator and breach-corpus sources need files you name, so they stay in the
+advanced form rather than the wizard.)
 - **Advanced mode** (the toggle in the header) expands the Crack form with the
   full engine surface in grouped, collapsible panels: concurrency &
   acceleration, search behaviour, generators & ordering (Markov/PCFG, order,

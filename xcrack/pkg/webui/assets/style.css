@@ -210,3 +210,14 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
   .log-head { flex-wrap: wrap; }
   .palette-box { width: 100%; }
 }
+
+/* --- expanded attack wizard --- */
+.wizard-box { overflow-y: auto; padding-bottom: 16px; }
+.wizard-box > :not(.modal-head) { padding-left: 16px; padding-right: 16px; }
+.wz-presets { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; }
+.wz-presets span { color: var(--muted); font-size: 13px; }
+.wz-chip { padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--panel); color: var(--ink); cursor: pointer; font-size: 13px; }
+.wz-chip:hover { background: var(--brand); color: var(--brand-ink); border-color: var(--brand); }
+.wz-estimate { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; }
+.wz-estimate:empty { display: none; }
+.wz-estimate div { margin: 2px 0; }

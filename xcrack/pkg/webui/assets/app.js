@@ -1029,40 +1029,197 @@ function wireMaskBuilder() {
 }
 
 // ---- attack wizard ----------------------------------------------------------
+// Preset = a starting configuration of the wizard controls (not the Crack form);
+// the user can then tweak before pressing Build.
+const WZ_PRESETS = {
+  personal:   { kind: "word",  min: 6,  max: 14, l: true,  u: false, d: true,  s: false, cap: true,  upper: false, leet: true,  digit: true,  bang: true,  markov: true,  kw: false, prince: false, toggle: false, loopback: true },
+  corporate:  { kind: "word",  min: 8,  max: 16, l: true,  u: true,  d: true,  s: true,  cap: true,  upper: false, leet: true,  digit: true,  bang: true,  markov: true,  kw: false, prince: false, toggle: false, loopback: true },
+  passphrase: { kind: "word",  min: 10, max: 30, l: true,  u: false, d: false, s: false, cap: true,  upper: false, leet: false, digit: false, bang: false, markov: false, kw: false, prince: true,  toggle: false, loopback: false },
+  pin:        { kind: "pin",   min: 4,  max: 8,  l: false, u: false, d: true,  s: false, cap: false, upper: false, leet: false, digit: false, bang: false, markov: false, kw: false, prince: false, toggle: false, loopback: false },
+  keyboard:   { kind: "word",  min: 6,  max: 12, l: true,  u: false, d: true,  s: true,  cap: false, upper: false, leet: false, digit: false, bang: false, markov: false, kw: true,  prince: false, toggle: false, loopback: false },
+};
+
 function wireWizard() {
   const modal = $("wizard-modal");
-  $("wizard-open").addEventListener("click", () => { modal.hidden = false; });
+  $("wizard-open").addEventListener("click", () => { modal.hidden = false; wzPopulateWordlists(); wzSyncKind(); });
   $("wizard-close").addEventListener("click", () => { modal.hidden = true; });
   modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
   $("wizard-build").addEventListener("click", buildFromWizard);
+  $("wz-kind").addEventListener("change", wzSyncKind);
+  modal.querySelectorAll(".wz-chip").forEach((b) => b.addEventListener("click", () => wzApplyPreset(b.dataset.preset)));
+  // Recompute the feasibility estimate and section visibility on any change.
+  modal.querySelectorAll("input, select").forEach((el) => {
+    el.addEventListener("input", wzUpdateEstimate);
+    el.addEventListener("change", wzUpdateEstimate);
+  });
 }
+
+// wzPopulateWordlists fills the wordlist picker with the built-in list plus any
+// saved Library wordlists, preserving the current selection.
+async function wzPopulateWordlists() {
+  const sel = $("wz-wordlist");
+  const keep = sel.value;
+  let names = [];
+  try { names = ((await (await fetch(api("/library"))).json()).wordlists || []).map((w) => w.name); } catch {}
+  sel.textContent = "";
+  sel.append(el("option", { value: "__default__", textContent: "Built-in common list" }));
+  for (const n of names) sel.append(el("option", { value: n, textContent: "Library: " + n }));
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep;
+}
+
+// wzSyncKind shows/hides the dictionary-only and brute-only sections for the
+// selected attack kind, then refreshes the estimate.
+function wzSyncKind() {
+  const kind = $("wz-kind").value;
+  const dict = kind === "word" || kind === "unsure";
+  const brute = kind === "brute" || kind === "pin" || kind === "unsure";
+  $("wizard-modal").querySelectorAll(".wz-dict-only").forEach((e) => { e.style.display = dict ? "" : "none"; });
+  $("wizard-modal").querySelectorAll(".wz-brute-only").forEach((e) => { e.style.display = brute && kind !== "pin" ? "" : "none"; });
+  wzUpdateEstimate();
+}
+
+function wzApplyPreset(name) {
+  const p = WZ_PRESETS[name];
+  if (!p) return;
+  $("wz-kind").value = p.kind;
+  $("wz-min").value = p.min; $("wz-max").value = p.max;
+  for (const [id, k] of [["wz-l", "l"], ["wz-u", "u"], ["wz-d", "d"], ["wz-s", "s"], ["wz-cap", "cap"],
+    ["wz-upper", "upper"], ["wz-leet", "leet"], ["wz-digit", "digit"], ["wz-bang", "bang"],
+    ["wz-markov", "markov"], ["wz-kw", "kw"], ["wz-prince", "prince"], ["wz-toggle", "toggle"], ["wz-loopback", "loopback"]]) {
+    $(id).checked = !!p[k];
+  }
+  wzSyncKind();
+  toast("Preset applied — adjust anything, then Build.");
+}
+
+// wzClasses returns the selected brute-force character classes as mask tokens.
+function wzClasses(kind) {
+  if (kind === "pin") return "?d";
+  return ($("wz-l").checked ? "?l" : "") + ($("wz-u").checked ? "?u" : "") +
+    ($("wz-d").checked ? "?d" : "") + ($("wz-s").checked ? "?s" : "");
+}
+
+// wzUpdateEstimate computes and renders a pre-run feasibility estimate: the
+// brute-force keyspace (when a brute force is in the mix) with a plain verdict,
+// and a note for the dictionary pass. It never runs anything.
+function wzUpdateEstimate() {
+  const host = $("wz-estimate");
+  if (!host) return;
+  const kind = $("wz-kind").value;
+  const min = +$("wz-min").value || 0, max = +$("wz-max").value || 0;
+  const prefix = $("wz-prefix").value.trim(), suffix = $("wz-suffix").value.trim();
+  const lines = [];
+  if (kind === "word" || kind === "unsure") {
+    const n = wzRules().length, hy = $("wz-digit").checked ? " + 1–2 appended digits" : "";
+    lines.push(`Dictionary: wordlist × ${n} rule${n === 1 ? "" : "s"}${hy} — usually completes quickly.`);
+  }
+  if (kind === "brute" || kind === "pin" || kind === "unsure") {
+    const sizes = { "?l": 26, "?u": 26, "?d": 10, "?s": 33 };
+    const cls = wzClasses(kind);
+    const toks = cls.match(/\?[luds]/g) || [];
+    let per = 0n; for (const t of toks) per += BigInt(sizes[t] || 0);
+    if (per === 0n) {
+      lines.push("Brute force: pick at least one character type.");
+    } else {
+      const fixed = prefix.length + suffix.length;
+      let ks = 0n;
+      const lo = Math.max(1, min), hi = Math.max(lo, max || min || 8);
+      for (let L = lo; L <= hi; L++) {
+        const vary = L - fixed;
+        if (vary < 0) continue;
+        ks += per ** BigInt(vary);
+      }
+      lines.push(`Brute force: ≈ ${ks.toLocaleString()} candidate${ks === 1n ? "" : "s"} — ${wzVerdict(ks)}.`);
+    }
+  }
+  host.textContent = "";
+  for (const l of lines) host.append(el("div", { textContent: l }));
+}
+
+function wzVerdict(ks) {
+  if (ks < 100000000n) return "small, fast on any format";
+  if (ks < 1000000000000n) return "moderate, feasible";
+  if (ks < 1000000000000000n) return "large — practical mainly on fast formats or a GPU";
+  return "impractical as pure brute force; prefer a word + rules";
+}
+
+// wzRules builds the hashcat rule set from the mangling choices as the cross
+// product of prefix transforms (identity/capitalise/upper/leet) and suffix
+// appends (nothing / '!' / each significant year). ':' is the no-op (try the
+// word unchanged). Years like 2024 append as $2$0$2$4.
+function wzRules() {
+  const prefixes = [""];
+  if ($("wz-cap").checked) prefixes.push("c");
+  if ($("wz-upper").checked) prefixes.push("u");
+  if ($("wz-leet").checked) prefixes.push("sa@se3si1so0ss$");
+  const suffixes = [""];
+  if ($("wz-bang").checked) suffixes.push("$!");
+  for (const y of ($("wz-years").value.match(/\d{2,4}/g) || [])) {
+    suffixes.push(y.split("").map((d) => "$" + d).join(""));
+  }
+  const out = new Set();
+  for (const p of prefixes) for (const s of suffixes) out.add((p + s) || ":");
+  return [...out];
+}
+
 function buildFromWizard() {
+  const kind = $("wz-kind").value;
   const prefix = $("wz-prefix").value.trim(), suffix = $("wz-suffix").value.trim();
   const min = +$("wz-min").value || 0, max = +$("wz-max").value || 0;
   const tokens = $("wz-tokens").value.trim();
-  // Sensible first passes.
-  $("use_default").checked = true;
-  $("markov").checked = true;
+  const dict = kind === "word" || kind === "unsure";
+  const brute = kind === "brute" || kind === "pin" || kind === "unsure";
+
   // Known parts → explicit guesses tried first.
   const guesses = [];
   if (prefix) guesses.push(prefix);
   if (suffix) guesses.push(suffix);
   if (prefix && suffix) guesses.push(prefix + suffix);
-  if (guesses.length) $("passwords").value = guesses.join("\n");
+  $("passwords").value = guesses.join("\n");
+
   if (min) $("min_length").value = min;
   if (max) $("max_length").value = max;
-  // Personal / org words → spray set + name/sibling context.
-  if (tokens) { $("spray").checked = true; $("spray_tokens").value = tokens; $("context").checked = true; }
-  // Optional brute force over the chosen classes and length range.
-  if ($("wz-brute").checked) {
-    const cls = ($("wz-l").checked ? "?l" : "") + ($("wz-u").checked ? "?u" : "") + ($("wz-d").checked ? "?d" : "") + ($("wz-s").checked ? "?s" : "");
+
+  // Wordlist source (dictionary kinds).
+  const wl = $("wz-wordlist").value;
+  $("use_default").checked = !dict ? false : wl === "__default__";
+  $("lib_names").value = dict && wl !== "__default__" ? wl : "";
+
+  // Mangling rules + appended digits (dictionary kinds).
+  $("rules").value = dict ? wzRules().join("\n") : "";
+  $("hybrid_append").value = dict && $("wz-digit").checked ? "?d\n?d?d" : "";
+
+  // Personal / org words → spray set + name/sibling context; years → spray years.
+  $("spray").checked = !!tokens;
+  $("spray_tokens").value = tokens;
+  $("spray_years").value = ($("wz-years").value.match(/\d{2,4}/g) || []).join(",");
+  $("context").checked = !!tokens;
+
+  // Extra sources.
+  $("markov").checked = $("wz-markov").checked;
+  $("keyboard_walk").checked = $("wz-kw").checked;
+  $("prince").checked = dict && $("wz-prince").checked;
+  $("toggle_case").checked = dict && $("wz-toggle").checked;
+  $("loopback").checked = $("wz-loopback").checked;
+
+  // Brute-force mask over the chosen classes (and literal prefix/suffix).
+  if (brute) {
+    const cls = wzClasses(kind);
     if (cls) {
       $("cc1").value = cls;
-      const len = max || min || 8;
-      $("masks").value = "?1".repeat(len);
-      if (min && max) $("increment").value = min + ":" + max;
+      const fixed = prefix.length + suffix.length;
+      const target = max || min || 8;
+      const vary = Math.max(1, target - fixed);
+      // A literal prefix/suffix pins the structure; otherwise sweep the length range.
+      $("masks").value = prefix + "?1".repeat(vary) + suffix;
+      $("increment").value = (!fixed && min && max && min < max) ? min + ":" + max : "";
     }
+  } else {
+    $("masks").value = "";
+    $("increment").value = "";
+    $("cc1").value = "";
   }
+
   if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
   $("wizard-modal").hidden = true;
   toast("Wizard filled the Crack form — review the options and press Run.");
