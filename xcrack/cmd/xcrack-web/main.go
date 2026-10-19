@@ -2,12 +2,21 @@
 // application: a single-page GUI plus a JSON/SSE API exposing the full engine
 // feature set (see pkg/webui).
 //
-// It is designed to run locally — bound to localhost, it is a single-user
-// recovery console — or as a shared service. Like xcrackd it ships no
-// authentication, so a non-localhost instance MUST sit behind authentication and
-// (unless xcrack-web's own TLS is enabled via --tls-cert/--tls-key) transport
-// security; never expose it directly to an untrusted network. A submitted job
-// may reference only files uploaded with it unless --allow-server-paths is set.
+// It runs in one of two modes, chosen with --mode:
+//
+//   - single (the default): a no-login, single-user recovery console. Every
+//     request is the implicit local owner. This is the localhost default and
+//     needs no identity provider.
+//   - multi: a shared service with per-user job ownership, fronted by an OIDC
+//     identity provider (--auth-oidc-* flags). Each user sees only their own
+//     jobs; --auth-admins may see everyone's.
+//
+// Single-user mode ships no authentication, so a non-localhost single-user
+// instance MUST sit behind an authenticating proxy. Either mode, when reachable
+// off-host, MUST have transport security — xcrack-web's own TLS (--tls-cert/
+// --tls-key) or a terminating proxy; never expose it directly to an untrusted
+// network. A submitted job may reference only files uploaded with it unless
+// --allow-server-paths is set.
 package main
 
 import (
@@ -54,7 +63,9 @@ func run() int {
 
 		shutdownGrace = flag.Duration("shutdown-grace", 10*time.Second, "graceful shutdown grace period")
 
-		oidcIssuer   = flag.String("auth-oidc-issuer", "", "enable multi-user login via this OIDC issuer URL (its /.well-known/openid-configuration is read at startup)")
+		mode = flag.String("mode", "single", "run mode: 'single' (no login, single-user console) or 'multi' (per-user access; requires the --auth-oidc-* flags)")
+
+		oidcIssuer   = flag.String("auth-oidc-issuer", "", "multi-user OIDC issuer URL, read with --mode multi (its /.well-known/openid-configuration is fetched at startup)")
 		oidcClientID = flag.String("auth-oidc-client-id", "", "OIDC client ID (required with --auth-oidc-issuer)")
 		oidcRedirect = flag.String("auth-redirect-url", "", "this server's own /auth/callback URL as registered with the provider, e.g. https://host:8899/auth/callback (required with --auth-oidc-issuer)")
 		authAdmins   = flag.String("auth-admins", "", "comma-separated subjects or emails allowed to see and manage every user's jobs")
@@ -67,6 +78,14 @@ func run() int {
 	// The OIDC client secret comes from the environment, never argv (process
 	// arguments are world-readable on many systems).
 	clientSecret := os.Getenv("XCRACK_WEB_OIDC_CLIENT_SECRET")
+
+	// Resolve single- vs multi-user up front: --mode is the explicit switch, and a
+	// misconfigured provider must never silently leave the console open.
+	authEnabled, err := resolveAuthMode(*mode, *oidcIssuer, *oidcClientID, *oidcRedirect, *authAdmins)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "xcrack-web: %v\n", err)
+		return 1
+	}
 
 	cfg := webui.Config{
 		WorkDir:           *workDir,
@@ -81,7 +100,7 @@ func run() int {
 		TLS:               *tlsCert != "" || *tlsKey != "",
 		Accelerator:       gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
-			Enabled:      *oidcIssuer != "",
+			Enabled:      authEnabled,
 			Issuer:       *oidcIssuer,
 			ClientID:     *oidcClientID,
 			ClientSecret: clientSecret,
@@ -91,11 +110,9 @@ func run() int {
 		},
 	}
 	if cfg.Auth.Enabled {
-		if cfg.Auth.ClientID == "" || cfg.Auth.RedirectURL == "" {
-			fmt.Fprintln(os.Stderr, "xcrack-web: --auth-oidc-issuer requires --auth-oidc-client-id and --auth-redirect-url")
-			return 1
-		}
-		logger.Info("multi-user auth enabled", "issuer", cfg.Auth.Issuer, "admins", len(cfg.Auth.Admins))
+		logger.Info("multi-user mode", "issuer", cfg.Auth.Issuer, "admins", len(cfg.Auth.Admins))
+	} else {
+		logger.Info("single-user mode (no login)")
 	}
 
 	srv, err := webui.NewServer(cfg)
@@ -180,6 +197,34 @@ func run() int {
 		return 1
 	}
 	return 0
+}
+
+// resolveAuthMode validates the --mode selection against the OIDC flags and
+// reports whether multi-user auth should be enabled.
+//
+//   - "single" (the default) is a no-login, single-user console. It rejects stray
+//     --auth-* flags so a half-configured provider can never silently leave the
+//     console open to everyone.
+//   - "multi" turns on per-user access and requires an OIDC issuer, client ID, and
+//     redirect URL (the client secret is read from the environment separately).
+func resolveAuthMode(mode, issuer, clientID, redirect, admins string) (enabled bool, err error) {
+	switch mode {
+	case "single":
+		if issuer != "" || clientID != "" || redirect != "" || admins != "" {
+			return false, fmt.Errorf("--mode single takes no --auth-* flags; pass --mode multi for multi-user login, or drop the --auth-oidc-* / --auth-admins flags")
+		}
+		return false, nil
+	case "multi":
+		if issuer == "" {
+			return true, fmt.Errorf("--mode multi requires --auth-oidc-issuer (plus --auth-oidc-client-id and --auth-redirect-url)")
+		}
+		if clientID == "" || redirect == "" {
+			return true, fmt.Errorf("--mode multi requires --auth-oidc-client-id and --auth-redirect-url")
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("--mode must be 'single' or 'multi', got %q", mode)
+	}
 }
 
 // splitComma splits a comma-separated flag value into trimmed, non-empty parts.

@@ -146,7 +146,7 @@ See [`CRACKING.md`](CRACKING.md) for which weakness applies to which format.
 Keep orchestration in Xcrack but run the expensive key derivation elsewhere.
 
 ```sh
-xcrack hashline target.pdf > hashes.txt            # emit $pdf$/$office$/$zip2$/$dmg$ for hashcat/John
+xcrack hashline target.pdf > hashes.txt            # emit $pdf$/$office$/$zip2$ for hashcat/John
 xcrack export-challenge target.kdbx > challenge.json
 # ... solve it on the GPU box, then re-import the recovered password ...
 xcrack --resume-from solved.json -o ./out target.kdbx
@@ -1104,13 +1104,20 @@ legitimate cryptanalysis — no sound cipher is weakened.
 
 | Family | Formats | Notes |
 | ------ | ------- | ----- |
-| Archives | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **7z**, **RAR** | 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
+| Archives | ZIP (ZipCrypto, WinZip AES), tar, gzip, bzip2, xz, **zstd**, **lz4**, **7z**, **RAR** | 7z/RAR also **header-encrypted** (`-mhe` / `-hp`) |
 | MS Office | OOXML (`.docx/.xlsx/.pptx`, agile + standard), legacy (`.doc/.xls/.ppt`: RC4 CryptoAPI / RC4 97-2000 / XOR) | legacy XOR body reconstruction: Excel only |
-| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC), **Apple iWork** (Pages/Numbers/Keynote, '13+ `.iwpv2`) | iWork recovers the passphrase only (body not reconstructed) |
+| Other docs | PDF (RC4 / AESV2 / AESV3, user + owner), ODF (AES-256-CBC / GCM), **Apple iWork** (Pages/Numbers/Keynote, '13+ `.iwpv2`) | iWork recovers the passphrase only (body not reconstructed) |
 | Mail / passphrase | MIME (`.eml`) attachments, **age** (scrypt), **symmetric OpenPGP** (`gpg -c`) | |
-| Keys / key stores | **OpenSSH** private keys, **PEM/PKCS#8** (PBES2 + DEK-Info), **JKS**, **PKCS#12** (`.p12/.pfx`), **PuTTY** `.ppk` (v3/v2), **SQLCipher** (library-only) | |
+| Keys / key stores | **OpenSSH** private keys, **PEM/PKCS#8** (PBES2 + DEK-Info), **JKS**, **PKCS#12** (`.p12/.pfx`), **PuTTY** `.ppk` (v3/v2) | |
+| Password managers | **KeePass** (`.kdbx` 3.1 / 4 — AES-KDF / Argon2d / Argon2id) | |
+| Disk images | **Apple DMG** (encrypted disk image, AES-128/256) | |
+| Crypto wallets | **Ethereum** keystore (`.json`, scrypt / PBKDF2) | recovers the passphrase |
+| Data stores | **Access/Jet** (`.mdb` password read from the header, no crack; `.accdb` needs a search), **SQLCipher** (via `--as sqlcipher`) | |
+| Office macros | **VBA project password** (`.doc/.xls/.ppt`, macro-enabled Office, `vbaProject.bin`) via `vba-recover` | plaintext read, or a crackable salted-SHA-1 hashline |
 
-Not yet implemented (staged): KeePass (needs in-tree Argon2d), encrypted DMG,
-ODF AES-GCM, and legacy-Office macro/VBA auxiliary-stream decryption. Out of
-scope: GPU cracking in-tree, any online/network attack, and public-key PDF
-(needs a private key, not a password). See the [roadmap](roadmap.md).
+Not yet implemented (staged): legacy-Office macro/VBA auxiliary-stream
+decryption. GPU/OpenCL cracking is an **opt-in, build-tagged tier** (`-tags
+opencl`, hardware-gated), not part of the default or CI build — see
+[CRACKING.md](CRACKING.md) and the `--gpu` flag. Out of scope: any
+online/network attack and public-key PDF (needs a private key, not a password).
+See the [roadmap](roadmap.md).

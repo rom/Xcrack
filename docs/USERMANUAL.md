@@ -1019,7 +1019,9 @@ supported in [`FILEFORMATS.md`](FILEFORMATS.md), and see how it is attacked in
 `xcrack-web` is a browser front-end to the engine: the same recovery power as
 the CLI, reachable from a graphical interface. It is a single self-contained
 binary that embeds the engine **and** the web assets, so there is nothing to
-install alongside it and it works offline.
+install alongside it and it works offline. It runs either as a **single-user**
+console (the default — no login) or as a **multi-user** service with per-user
+job ownership behind an OIDC identity provider (§10.2).
 
 Every feature the CLI configuration file can express is reachable from the GUI,
 because the GUI builds the *same* job description (`jobspec.Spec`, the YAML the
@@ -1029,7 +1031,7 @@ because the GUI builds the *same* job description (`jobspec.Spec`, the YAML the
 
 ```sh
 make web                     # build bin/xcrack-web
-bin/xcrack-web               # serve on http://127.0.0.1:8899 (localhost only)
+bin/xcrack-web               # serve on http://127.0.0.1:8899 (localhost, single-user)
 # or:
 bin/xcrack-web --addr :9000  # listen on all interfaces (see the security note)
 ```
@@ -1041,20 +1043,76 @@ with `--docs-dir`.
 | Flag | Meaning |
 |------|---------|
 | `--addr` | listen address (default `127.0.0.1:8899`; use `:PORT` for all interfaces) |
+| `--mode single\|multi` | run mode: `single` (no login, single-user; the default) or `multi` (per-user access via OIDC — §10.2) |
 | `--docs-dir DIR` | Markdown docs to serve in the **Docs** tab (default: auto-detect `./docs`) |
-| `--work-dir DIR` | where per-job uploads and extracted output live (default: a temp dir) |
+| `--work-dir DIR` | where per-job uploads, extracted output and persisted job state live (default: a temp dir) |
 | `--max-upload N` | maximum job-submission size in bytes (default 512 MiB) |
+| `--max-jobs N` | maximum jobs running at once (default `0` = unlimited); extra jobs queue until a slot frees |
 | `--expose-secrets` | show recovered passwords in the UI/stream (default on; see below) |
 | `--allow-server-paths` | let a job reference server-side files, not just uploads (trusted local use only) |
+| `--print-url` | print the URL to open on startup (default on) |
+| `--shutdown-grace D` | graceful-shutdown grace period (default `10s`) |
 | `--tls-cert` / `--tls-key` | serve HTTPS (see [5. Distributed environments](#5-distributed-environments) for the cert scripts) |
-| `--tls-client-ca` | require client certificates (mutual TLS) |
+| `--tls-client-ca` | require and verify client certificates (mutual TLS) |
+| `--tls-min-version` | minimum TLS version, `1.2` (default) or `1.3` |
+| `--auth-oidc-issuer` | OIDC issuer URL (required with `--mode multi`) |
+| `--auth-oidc-client-id` | OIDC client ID (required with `--mode multi`) |
+| `--auth-redirect-url` | this server's own `/auth/callback` URL as registered with the provider |
+| `--auth-admins` | comma-separated subjects/emails allowed to see and manage every user's jobs |
+| `--auth-cookie-insecure` | drop the `Secure` flag on the session cookie (plain-HTTP local testing only) |
 
-### 10.2 Easy mode, advanced mode and the Configuration view
+The OIDC client secret is read from the `XCRACK_WEB_OIDC_CLIENT_SECRET`
+environment variable, never a flag (process arguments are world-readable).
+
+### 10.2 Single-user and multi-user mode
+
+`xcrack-web` runs in one of two modes, chosen with `--mode`:
+
+- **`--mode single`** (the default) is a no-login console: every request is the
+  implicit local owner, and all jobs, the recovered-password vault (§10.7) and
+  the statistics are shared. This is the right mode on your own machine.
+- **`--mode multi`** turns the console into a shared service with **per-user job
+  ownership**, fronted by an OpenID Connect identity provider. Each user signs
+  in and sees only their own jobs — the list, detail, event stream, download,
+  cancel, delete and statistics are all scoped to the signed-in user, and
+  another user's job is a 404 (its existence is hidden). Subjects or emails in
+  `--auth-admins` may see and manage everyone's jobs.
+
+Enable multi-user mode by pointing it at your provider:
+
+```sh
+export XCRACK_WEB_OIDC_CLIENT_SECRET=…        # the client secret, from the environment
+bin/xcrack-web --mode multi \
+  --addr :8443 --tls-cert tls/server.crt --tls-key tls/server.key \
+  --auth-oidc-issuer https://idp.example.net/ \
+  --auth-oidc-client-id xcrack-web \
+  --auth-redirect-url https://crack.example.net:8443/auth/callback \
+  --auth-admins alice@example.net,bob@example.net
+```
+
+Login uses the OAuth 2.0 Authorization Code flow with PKCE; the verified session
+is held in an HttpOnly, SameSite=Lax, `Secure` cookie (use
+`--auth-cookie-insecure` only for plain-HTTP local testing). `--mode single`
+rejects stray `--auth-*` flags, so a half-configured provider can never silently
+leave the console open. The recovered-password vault (§10.7) is **disabled** in
+multi-user mode so passwords never leak between users. The SPA shows a sign-in
+gate when a session is required, and a user chip with a logout control once
+signed in.
+
+### 10.3 Easy mode, advanced mode and the Configuration view
+
+The app is organised into tabs across the top: **Crack**, **History** (§10.6),
+**Recovered** (§10.7), **Library** (§10.8), **Tools** (§10.9), **Statistics**
+(§10.10), **Docs** and **Configuration**.
 
 - **Easy mode** (default) is a guided form: drop the locked file(s), pick a
   wordlist, tick the candidate sources and generators (masks, rules, Markov,
   PRINCE, toggle-case, keyboard-walk, name/sibling context, embedded hint), and
-  press **Run**.
+  press **Run**. Two helpers sit alongside it: the **attack wizard**
+  (*"what do you know about the password?"* — a known prefix/suffix, a length
+  range, character types, personal or organisation words) fills the form for
+  you, and the **mask builder** assembles a `?l?u?d?s?a` brute-force mask with a
+  live keyspace counter.
 - **Advanced mode** (the toggle in the header) expands the Crack form with the
   full engine surface in grouped, collapsible panels: concurrency &
   acceleration, search behaviour, generators & ordering (Markov/PCFG, order,
@@ -1068,12 +1126,14 @@ with `--docs-dir`.
   **Format**, and **↤ From form** (fill the editor from the Crack form). Tick
   *Run from the YAML below* to use the document verbatim instead of the form.
   The schema is exactly the one in [`config/README.md`](../config/README.md).
-  This view also has the **Appearance** theme picker (see §10.6).
+  This view also has the **Appearance** theme picker (see §10.12), an
+  **Import…** button and a **🔗 Copy link** button for sharing a configuration
+  (§10.11).
 
 Every setting carries a **hover tooltip** explaining what it does (e.g. what a
 Markov generator is, or that "max candidates 0" means unlimited).
 
-### 10.3 Distributed cracking from the GUI
+### 10.4 Distributed cracking and the cluster health check
 
 The **Distributed cracking** panel (advanced mode) fans the search out to a
 fleet of `xcrackd` servers instead of cracking locally: list the server URLs
@@ -1085,21 +1145,64 @@ the configured endpoints, it is only honoured when `xcrack-web` was started with
 rejected. Passwords are recovered on the servers; decrypted content stays there,
 so a distributed run reports passwords without a local download.
 
-### 10.4 Running a job
+A **Check** button in the panel pings each configured server's health endpoint
+(`POST /api/v1/cluster/health`, also `--allow-server-paths`-gated) and reports
+each one up or down with its latency, so you can confirm the fleet is reachable
+before launching a long run.
+
+### 10.5 Running a job
 
 Progress streams live over Server-Sent Events (nothing is polled). The running
 job shows the **start timestamp**, a ticking **elapsed** clock, a **progress
 bar** (a true percentage against the keyspace for a single finite-keyspace
-target, otherwise an indeterminate sweep), the **latest candidate/term** being
-tested, live throughput, the engine log, and each recovered password as it is
-found. When a file is unlocked its decrypted contents can be **downloaded** as a
-zip of the extracted tree.
+target, otherwise an indeterminate sweep), a live **ETA** on a determinate run
+(remaining keyspace ÷ current rate, with an honest nudge that an impractically
+long brute force is better served by a wordlist + rules), the **latest
+candidate/term** being tested, live throughput, the engine log (with an
+autoscroll toggle and a copy button), and each recovered password as it is
+found. When the browser tab is in the background, a completion updates the tab
+title (and, if you allow it, raises a desktop notification). When a file is
+unlocked its decrypted contents can be **downloaded** as a zip of the extracted
+tree.
 
 **Previewing a wordlist:** next to each uploaded wordlist (or auxiliary file) a
 **Preview** button shows the first lines of the `.txt` in a dialog, so you can
 check a list before launching the run.
 
-### 10.5 Tools (specialist subcommands)
+### 10.6 History and durability
+
+Every job is persisted to its working directory (`job.json`, written atomically
+as the job progresses), so the job list **survives a server restart** instead of
+living only in memory. The **History** tab lists past and running jobs — state,
+files, decrypted count, candidates tried, created time — and lets you **open** a
+finished job to review it or **delete** it from the list. A job that was running
+when the server stopped reloads as **interrupted** rather than silently
+vanishing.
+
+Any history row can be **re-run**: a fresh job is started from the saved spec
+and the files already uploaded for the original, so a GUI "resume" needs no
+re-upload.
+
+### 10.7 Recovered passwords (the vault)
+
+`xcrack-web` keeps a server-side **vault** (a potfile) under its working
+directory: every recovered password is stored and fed back into the loopback
+pass of new jobs, so a password you have found before — or that is reused across
+files — is caught immediately. The **Recovered** tab lists the vault and shows
+whether it is held in plaintext or sealed to a TPM at rest (see §11.6 for the
+seal). The vault is a single-user, `--expose-secrets` feature: it is **disabled**
+whenever multi-user mode is on (§10.2), so recovered passwords never cross
+between users.
+
+### 10.8 The wordlist library
+
+The **Library** tab is a reusable store of dictionaries: upload a wordlist once
+and reference it by name from any job's Crack form (the *Library wordlists*
+field), instead of re-uploading it every time. Each entry can be **previewed**
+(first lines) or **deleted**. The library lives under the working directory
+alongside job state.
+
+### 10.9 Tools (specialist subcommands)
 
 The **Tools** tab surfaces the CLI's specialist, non-cracking subcommands
 (§[3](#3-command-reference)) without leaving the browser. The quick, stateless
@@ -1121,6 +1224,9 @@ right away:
   --table` fast path).
 - **Wordlist utilities** — length-filter, dedupe, sort, sort-by-length, or split
   a wordlist (upload or paste); split downloads a zip of equal parts.
+- **Rule tester** — type a sample word and one hashcat-style rule per line to see
+  exactly what the engine's rule compiler does to the word (the transformed
+  output, or a rejection), so you can check a rule before adding it to a job.
 
 The long compute jobs — a full 2⁴⁰ `pdf-keyattack` / `office-keyattack` sweep
 and `thunder-gen` table generation — are **not** run from the browser; instead
@@ -1130,16 +1236,33 @@ CLI or the distributed tier. Recovered secrets (keys, VBA/Access passwords) are
 shown only when the server was started with `--expose-secrets`; otherwise a
 redaction marker stands in, exactly as on the crack path.
 
-### 10.6 Statistics
+### 10.10 Statistics
 
 The **Statistics** tab shows the aggregate counters across jobs (files
 processed, candidates tried, decrypted vs. still-locked), a live candidate-
 throughput chart for the running job, a **speed-by-algorithm/cipher** table
-(per-format candidate throughput measured from finished jobs), and a **top
+(per-format candidate throughput measured from finished jobs), a **top
 recovered passwords** list (most frequently recovered, when the server exposes
-secrets).
+secrets), and a **System & acceleration** card (whether this build can use a
+GPU tier, whether it has the TPM-sealed cache, and the version). In multi-user
+mode the counters are scoped to the signed-in user.
 
-### 10.7 Appearance (themes) and in-app documentation
+### 10.11 Command palette, shortcuts, and sharing
+
+A **command palette** (<kbd>⌘</kbd>/<kbd>Ctrl</kbd>-<kbd>K</kbd>) jumps to any
+tab and runs common actions by name; <kbd>⌘</kbd>/<kbd>Ctrl</kbd>-<kbd>Enter</kbd>
+validates-and-runs the current job from anywhere.
+
+The Configuration tab can **share a configuration** two ways. **🔗 Copy link**
+encodes the current spec into a URL fragment (base64url — the spec stays in the
+browser and never reaches the server or its logs) that reopens the console
+pre-filled; **Import…** loads a spec from a pasted or uploaded YAML/JSON file,
+validated before it is applied. When a secrets-exposing console is reachable
+over plain HTTP without auth, a **trust banner** at the top of the page warns to
+add TLS or turn on multi-user mode before sharing it. The layout is responsive
+and usable down to a phone-width screen.
+
+### 10.12 Appearance (themes) and in-app documentation
 
 The **Configuration** tab's Appearance picker offers six themes plus System
 (which follows your OS light/dark setting): **Light**, **Dark**, **Glow**,
@@ -1147,13 +1270,17 @@ The **Configuration** tab's Appearance picker offers six themes plus System
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
 
-### 10.8 Security
+### 10.13 Security
 
-`xcrack-web` ships no authentication and, bound to localhost (the default), is a
-single-user console; exposing it on a network needs a proxy and TLS. Its
-security model, how to enable TLS, and the TPM-sealed cache are covered in
-[11. Security](#11-security) — see [§11.4](#114-the-web-gui-xcrack-web),
-[§11.5](#115-enabling-tls) and [§11.6](#116-encrypting-the-found-password-cache-tpm).
+In **single-user mode** (the default), bound to localhost, `xcrack-web` ships no
+authentication and is a single-user console; exposing *that* on a network needs
+an authenticating proxy and TLS. **Multi-user mode** (§10.2) adds built-in OIDC
+login and per-user isolation, but still needs TLS when reached off-host. Either
+way, the console shows a trust banner when it is exposed without those
+protections. Its full security model, how to enable TLS, and the TPM-sealed
+cache are covered in [11. Security](#11-security) — see
+[§11.4](#114-the-web-gui-xcrack-web), [§11.5](#115-enabling-tls) and
+[§11.6](#116-encrypting-the-found-password-cache-tpm).
 
 ---
 
@@ -1188,8 +1315,10 @@ crafted table can never cause a false positive.
 you are authorized to process, as a user with no more privilege than the task
 needs. It does not protect recovered secrets once you have asked for them — a
 results file, an audit log with `--audit-log-password`, or an on-screen password
-is yours to protect. The network services (`xcrackd`, `xcrack-web`) **ship no
-authentication or authorization**; that is the operator's responsibility (below).
+is yours to protect. `xcrackd` **ships no authentication or authorization**, and
+so does `xcrack-web` in its default single-user mode; that is the operator's
+responsibility (below). `xcrack-web`'s optional multi-user mode adds built-in
+OIDC login and per-user isolation (§10.2, §11.4).
 Side-channel resistance (timing, power) of the cracking primitives is out of
 scope — Xcrack attacks crypto, it is not a constant-time secrets vault.
 
@@ -1220,12 +1349,18 @@ terminate TLS itself (next section) or sit behind a TLS-terminating proxy.
 
 ### 11.4 The web GUI (`xcrack-web`)
 
-`xcrack-web` has the same "no built-in auth" posture as `xcrackd`. Bound to
+`xcrack-web` runs in one of two modes (§10.2). In the default **single-user
+mode** it has the same "no built-in auth" posture as `xcrackd`: bound to
 localhost (the default `127.0.0.1:8899`) it is a single-user console on your own
-machine. If you bind a non-localhost address it warns on startup, because it is
-then reachable by others with no authentication: put it behind an authenticating
-reverse proxy and enable TLS, and pass `--expose-secrets=false` so recovered
-passwords do not appear in the shared UI or event stream.
+machine, and if you bind a non-localhost address it warns on startup, because it
+is then reachable by others with no authentication — put it behind an
+authenticating reverse proxy and enable TLS, and pass `--expose-secrets=false`
+so recovered passwords do not appear in the shared UI or event stream.
+**Multi-user mode** (`--mode multi`) instead provides built-in OIDC login and
+per-user job isolation, so it can be shared without an external auth proxy; it
+still needs TLS when reached off-host, and the admins named in `--auth-admins`
+can see every user's jobs. A non-localhost console warns (and shows a trust
+banner) until TLS and authentication are in place.
 
 A submitted job may reference **only the files uploaded with it**: every
 file-path field in the job spec is resolved within that job's upload area and

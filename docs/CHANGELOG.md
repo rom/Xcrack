@@ -15,6 +15,13 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — explicit `--mode single|multi` run-mode switch.** `xcrack-web`
+  now selects single- vs multi-user access with a first-class `--mode` flag
+  (`single`, the default no-login console, or `multi`, per-user access via
+  OIDC) instead of inferring it from the presence of `--auth-*` flags. `--mode
+  single` rejects stray `--auth-*` flags and `--mode multi` requires the OIDC
+  issuer/client-ID/redirect, so a half-configured provider can never silently
+  leave the console open.
 - **Web GUI — UX polish: command palette, shareable configs, trust banners.**
   `xcrack-web` gains a round of usability work. A **command palette**
   (<kbd>⌘/Ctrl-K</kbd>) jumps to any tab and triggers common actions by name;
@@ -159,6 +166,24 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   rejected. The default pure-Go build excludes the TPM dependency and reports a
   clear error if asked, keeping ADR 0001 intact. The plaintext cache is
   unchanged and remains the default.
+
+### Documentation
+- **Synced the docs to the implementation.** Brought the user-facing docs back
+  in line with the code after the web-GUI build-out: the USERMANUAL web-GUI
+  chapter (§10) now covers the two run modes, job history/durability, the
+  recovered-password vault, the wordlist library, the attack wizard and mask
+  builder, the rule tester, the cluster health check, the command palette and
+  config sharing, and the full flag set; the security chapter and
+  `architecture.md` describe `xcrackd`/`xcrack-web` as first-class network
+  containers with the single-/multi-user posture; `API.md` lists the full
+  `pkg/webui` endpoint set. The reference docs (`USAGE.md`, `FILEFORMATS.md`,
+  `FAQ.md`, `CRACKING.md`, `TERMINOLOGY.md`) were reviewed against the registry
+  and the CLI and corrected where they had drifted
+  (e.g. the Ethereum-keystore format and KeePass KDBX3.1 are now listed as
+  supported; the `hashline` emitter no longer claims a non-existent `$dmg$`
+  line; ODF AES-256-GCM and encrypted DMG/KeePass are no longer shown as
+  unimplemented; GPU/OpenCL is described as an opt-in build tier, not "out of
+  scope").
 
 ### Fixed / performance
 - **`xcrack-web` drains in-flight jobs on shutdown (fixes a flaky test).** A job

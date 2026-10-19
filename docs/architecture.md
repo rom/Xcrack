@@ -140,6 +140,26 @@ A thin shell over the engine: parse flags and config, build `Options`, stream
 sources in, render output. It adds no capability the library lacks (full
 library/CLI parity is a requirement — see [ASR](asr.md) CON-3).
 
+### 2.4 HTTP service (`github.com/rom/xcrack`, `cmd/xcrackd` + `pkg/api`)
+
+A hardened, headless backend that exposes the same engine over a small JSON/REST
+surface (identify, decrypt) plus Prometheus metrics, for a thin client to call.
+Request bodies are bounded and handed to the same hostile-input-safe parsers;
+per-request deadlines bound processing. It terminates TLS/mTLS itself or sits
+behind a TLS-terminating proxy, and can offload the PBKDF2/key-search inner loop
+to an optional GPU/OpenCL tier. It ships no authentication — the operator fronts
+it (see [threat model](threat-model.md)).
+
+### 2.5 Web GUI (`github.com/rom/xcrack`, `cmd/xcrack-web` + `pkg/webui`)
+
+A single self-contained binary that embeds the engine **and** the browser assets
+and serves a graphical console over a JSON/SSE API. It builds the same
+`jobspec.Spec` the CLI's `--config` consumes, so it adds no cracking capability
+the library lacks; it adds operator features around it (persisted job history,
+a recovered-password vault, a wordlist library, specialist tools). It runs
+single-user (the default) or multi-user with per-user job ownership behind an
+OIDC provider.
+
 ## 3. Components (C4 level 3)
 
 Status key: ✓ implemented · ◦ designed-for / planned.
@@ -277,8 +297,14 @@ a stream of files through it, rather than spinning up goroutines per call.
   deadlines enforce the scanner's per-file SLA.
 - **CLI (secondary):** `xcrack --source ... --out ... --wordlist ...` for
   interactive use; identical engine underneath.
-- **No external processes, no network, no privileged access.** A single static
-  binary / a pure-Go dependency.
+- **HTTP service (`xcrackd`):** a headless backend on a trusted host, called by a
+  thin client over REST; optional TLS/mTLS and an optional GPU/OpenCL tier.
+- **Web GUI (`xcrack-web`):** a self-contained browser console (single- or
+  multi-user); same engine, with job history/vault/library around it.
+- **The library and CLI need no external processes, no network, and no
+  privileged access** — a single static binary / a pure-Go dependency. The
+  network surface is confined to the two services above, which ship no crypto of
+  their own beyond the shared engine.
 
 ## 6. Cross-cutting concerns
 
