@@ -167,6 +167,7 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 #user-area { display: inline-flex; align-items: center; gap: 8px; margin-left: 10px; }
 .user-chip { font-size: 13px; color: var(--muted); }
 .login-gate { position: fixed; inset: 0; background: var(--bg); display: flex; align-items: center; justify-content: center; z-index: 100; }
+.login-gate[hidden] { display: none; }  /* the hidden attribute must win over display:flex (single-user mode, and when signed in) */
 .login-box { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 32px 40px; text-align: center; box-shadow: 0 8px 40px rgba(0,0,0,.18); }
 .login-box .brand { font-size: 22px; font-weight: 600; margin-bottom: 10px; }
 .login-box p { color: var(--muted); margin: 0 0 18px; }

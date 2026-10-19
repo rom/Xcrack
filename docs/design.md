@@ -150,7 +150,6 @@ type Options struct {
     NoPromote        bool         // disable password promotion (default: promote ancestors first)
 
     // recursion / documents
-    FindAll          bool         // keep searching after first match (reserved; default stop-on-first)
     ExplodeDocuments bool         // decompose documents into parts (default false, opt-in)
 
     // budgets & limits (hostile-input safety)
@@ -386,8 +385,7 @@ func decompose(ctx, node, candidates, depth):
 Notes:
 
 - `search` is the only concurrent step within a node; it fans candidates across
-  `Workers` goroutines and stops on first hit (the `--find-all` override is
-  reserved — not yet active).
+  `Workers` goroutines and stops each node's search on the first hit.
 - Every `fmt.*` call is wrapped by a `recover()` boundary that converts a panic
   in a (hostile-input-exposed) parser into a `StatusError` node — the scan
   continues. See [threat model](threat-model.md).
@@ -485,7 +483,6 @@ Concurrency (MVP subset in bold):
       --timeout D           per-file budget                       (bold)
       --max-duration D
       --throttle PCT
-      --stop-on-first / --find-all    (--find-all reserved — not yet active)
       --keep-going / --fail-fast
 
 Recursion / limits:

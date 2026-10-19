@@ -183,12 +183,24 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   supported; the `hashline` emitter no longer claims a non-existent `$dmg$`
   line; ODF AES-256-GCM and encrypted DMG/KeePass are no longer shown as
   unimplemented; GPU/OpenCL is described as an opt-in build tier, not "out of
-  scope"). The `--find-all` / `find_all` toggle (CLI flag, YAML key, API
-  `Options.FindAll`, and the web-GUI checkbox) is now annotated **reserved —
-  not yet active** everywhere it appears, since the engine ignores it today and
-  already explores every node by default.
+  scope").
+
+### Removed
+- **Dropped the dead `find_all` toggle.** `Options.FindAll` was reserved and
+  never read by the engine, which already searches every encrypted node in the
+  tree — so the `--find-all` flag, the `find_all` config key, the
+  `Options.FindAll` field and the web-GUI "Find-all" checkbox had no effect.
+  Removed all of them rather than leave a misleading knob; full-tree exploration
+  stays the default and is unchanged.
 
 ### Fixed / performance
+- **`xcrack-web` single-user mode no longer shows a login gate.** The full-screen
+  login overlay (`.login-gate`) was styled `display:flex` with no `[hidden]`
+  rule, so the `hidden` attribute — and the `hidden=true` the SPA sets in
+  single-user mode and once signed in — was overridden and the gate covered the
+  app anyway, prompting a sign-in whose button hit `/auth/login` and returned
+  `authentication is not configured`. Added the `.login-gate[hidden]` guard (as
+  `.modal[hidden]` already has) and a regression test over the embedded asset.
 - **`xcrack-web` drains in-flight jobs on shutdown (fixes a flaky test).** A job
   runs in a background goroutine that outlives its `202 Accepted` response, so
   nothing waited for it: on `SIGINT`/`SIGTERM` the server stopped HTTP but

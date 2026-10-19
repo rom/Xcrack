@@ -71,7 +71,6 @@ func (s *Spec) BuildOptions() (xcrack.Options, error) {
 	opts.ExplodeDocuments = s.Recursion.ExplodeDocuments
 	opts.NoPromote = !s.promote()
 	opts.CorpusPromotion = s.Search.Adaptive
-	opts.FindAll = s.Search.FindAll
 	opts.ContextCandidates = s.Search.Context
 	opts.HintCandidates = s.Search.Hint || len(s.Search.HintRules) > 0
 	if opts.HintCandidates {

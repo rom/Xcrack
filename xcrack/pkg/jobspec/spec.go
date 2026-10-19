@@ -73,7 +73,6 @@ type Spec struct {
 		CostQueue     bool     `yaml:"cost_queue"`     // triage many files weakest/fastest-attack-first
 
 		// The fields below used to be reachable only as CLI flags.
-		FindAll         bool     `yaml:"find_all"`         // (web/library) keep searching every encrypted node even if some stay locked
 		Loopback        bool     `yaml:"loopback"`         // (web/library) feed cached/pot recovered passwords back through the rules
 		PCFG            bool     `yaml:"pcfg"`             // (web/library) train a PCFG on the candidate words and generate guesses in probability order
 		PCFGMax         int      `yaml:"pcfg_max"`         // (web/library) max PCFG guesses (0 => 100000)

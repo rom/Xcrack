@@ -97,12 +97,11 @@ type Options struct {
 	ThrottlePercent int // approximate CPU duty cycle 1..99 (0/100 => no throttle)
 
 	// Behavior toggles are phrased so the zero value is the sensible default:
-	// the engine recurses, promotes passwords, and stops on the first match
-	// unless told otherwise.
+	// the engine recurses and promotes passwords unless told otherwise, and
+	// always searches every encrypted node in the tree.
 	NoRecurse         bool // disable container decomposition (default: recurse)
 	NoPromote         bool // disable password promotion (default: promote)
 	CorpusPromotion   bool // promote recovered passwords across every file in a run (not just inner layers) and try the most repeatedly-successful ones first; requires promotion on (default: off)
-	FindAll           bool // reserved: keep searching after the first match (phase 2)
 	ExplodeDocuments  bool // decompose documents into parts (default false, opt-in)
 	ContextCandidates bool // seed each search with candidates derived from the node name and plaintext harvested from plain sibling entries (default: off)
 	HintCandidates    bool // seed each search with candidates derived from a format's embedded password hint (e.g. iWork .iwph, ZIP comment), tried right after promoted passwords (default: off)
