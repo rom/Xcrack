@@ -44,6 +44,9 @@ type Config struct {
 	TPMBuild bool
 	// Version is reported to the UI.
 	Version string
+	// TLS reports (for the UI) whether the server is served over HTTPS, so the
+	// console can warn when an unencrypted instance might be exposed.
+	TLS bool
 	// Auth enables multi-user access via OIDC. Its zero value keeps the
 	// single-user console (no login, no per-user ownership) unchanged.
 	Auth AuthConfig

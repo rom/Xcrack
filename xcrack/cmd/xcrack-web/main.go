@@ -78,6 +78,7 @@ func run() int {
 		GPUAvailable:      accel.Built(),
 		TPMBuild:          securecache.TPMBuilt,
 		Version:           version,
+		TLS:               *tlsCert != "" || *tlsKey != "",
 		Accelerator:       gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
 			Enabled:      *oidcIssuer != "",

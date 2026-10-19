@@ -13,6 +13,8 @@ type Meta struct {
 	GPUAvailable  bool         `json:"gpu_available"`
 	TPMBuild      bool         `json:"tpm_build"`
 	ExposeSecrets bool         `json:"expose_secrets"`
+	TLS           bool         `json:"tls"`          // served over HTTPS
+	AuthEnabled   bool         `json:"auth_enabled"` // multi-user OIDC on
 	Formats       []FormatInfo `json:"formats"`
 	StarterSpec   string       `json:"starter_spec"`
 }
@@ -43,6 +45,8 @@ func buildMeta(cfg Config) Meta {
 		GPUAvailable:  cfg.GPUAvailable,
 		TPMBuild:      cfg.TPMBuild,
 		ExposeSecrets: cfg.ExposeSecrets,
+		TLS:           cfg.TLS,
+		AuthEnabled:   cfg.Auth.Enabled,
 		Formats:       formats,
 		StarterSpec:   starterSpec,
 	}

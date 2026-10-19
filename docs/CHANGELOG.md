@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — UX polish: command palette, shareable configs, trust banners.**
+  `xcrack-web` gains a round of usability work. A **command palette**
+  (<kbd>⌘/Ctrl-K</kbd>) jumps to any tab and triggers common actions by name;
+  <kbd>⌘/Ctrl-Enter</kbd> validates-and-runs from anywhere. **Shareable config
+  links** let the Configuration tab copy the current spec into a URL fragment
+  (base64url, so the spec never leaves the browser or hits the server log) that
+  reopens pre-filled, and an **Import…** button loads a spec from a pasted or
+  uploaded YAML/JSON file (validated through `/api/v1/config/validate` before it
+  is applied). **Trust banners** warn, from the bootstrap `meta` (`tls`,
+  `auth_enabled`), when a console that exposes secrets is reachable over plain
+  HTTP without auth — a nudge to add TLS or turn on OIDC before sharing. The
+  layout is now **responsive**, usable down to a phone-width screen. (`Config`
+  gains `TLS`; `meta` reports `tls` and `auth_enabled`.)
 - **Web GUI — wordlist library, job-concurrency cap, cluster health & status.**
   `xcrack-web` gains several operator features: a **wordlist library** (a new
   **Library** tab — upload dictionaries once, reused by name across jobs via the

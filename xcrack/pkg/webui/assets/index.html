@@ -28,6 +28,8 @@
   <span id="user-area"></span>
 </header>
 
+<div id="banners"></div>
+
 <div id="login-gate" class="login-gate" hidden>
   <div class="login-box">
     <div class="brand">🔓 <span>Xcrack</span></div>
@@ -420,6 +422,8 @@
           <button type="button" id="yaml-validate">Validate</button>
           <button type="button" id="yaml-format">Format</button>
           <button type="button" id="yaml-from-form">↤ From form</button>
+          <button type="button" id="yaml-import">Import…</button>
+          <button type="button" id="yaml-share">🔗 Copy link</button>
           <span id="yaml-status"></span>
         </div>
         <div id="editor-host"><textarea id="yaml" spellcheck="false" rows="24"></textarea></div>
@@ -427,6 +431,22 @@
     </div>
   </section>
 </main>
+
+<div id="palette-modal" class="modal" hidden>
+  <div class="modal-box palette-box">
+    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false">
+    <ul id="palette-list" class="palette-list"></ul>
+  </div>
+</div>
+
+<div id="import-modal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><strong>Import configuration</strong><button type="button" id="import-close" class="x">✕</button></div>
+    <p class="hint">Paste a job configuration (YAML or JSON) shared with you. It is validated, loaded into the editor, and the next run uses it verbatim.</p>
+    <textarea id="import-text" rows="10" spellcheck="false" placeholder="candidates:&#10;  use_default_list: true"></textarea>
+    <div class="modal-actions"><button type="button" id="import-do" class="primary">Import</button></div>
+  </div>
+</div>
 
 <div id="wizard-modal" class="modal" hidden>
   <div class="modal-box">

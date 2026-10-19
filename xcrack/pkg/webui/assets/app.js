@@ -50,13 +50,36 @@ async function boot() {
   wireMaskBuilder();
   wireWizard();
   wirePhase5();
+  wireImport();
+  wirePalette();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
   renderBadges();
+  renderBanners();
   const gated = await applyAuthGate();
   Editor.set(META.starter_spec || "");
+  applySharedConfig();
   if (!gated) loadDocs();
+}
+
+// ---- Phase 6: trust banners -------------------------------------------------
+function renderBanners() {
+  const host = $("banners"); if (!host) return;
+  host.textContent = "";
+  if (META.tls === false) {
+    host.append(banner("warn", "⚠ No TLS — serve over HTTPS (--tls-cert/--tls-key) before exposing this console beyond localhost."));
+  }
+  if (META.expose_secrets === false) {
+    host.append(banner("info", "🔒 Password display is off on this server (--expose-secrets=false)."));
+  }
+}
+function banner(kind, text) {
+  const b = el("div", { className: "banner banner-" + kind }, [
+    el("span", { textContent: text }),
+    el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() }),
+  ]);
+  return b;
 }
 
 // ---- auth gate --------------------------------------------------------------
@@ -374,7 +397,96 @@ function wireEditorButtons() {
     const res = await fetch(api("/config/format"), { method: "POST", body: JSON.stringify(formToSpec()) });
     if (res.ok) { Editor.set((await res.json()).yaml); setYamlStatus("from form", true); $("yaml-authoritative").checked = true; }
   });
+  $("yaml-share").addEventListener("click", copyShareLink);
 }
+
+// ---- Phase 6: shareable config links + import ------------------------------
+function b64urlEncode(s) { return btoa(unescape(encodeURIComponent(s))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); }
+function b64urlDecode(s) { s = s.replace(/-/g, "+").replace(/_/g, "/"); try { return decodeURIComponent(escape(atob(s))); } catch { return ""; } }
+
+async function copyShareLink() {
+  let text = $("yaml-authoritative").checked ? Editor.get() : JSON.stringify(formToSpec());
+  try { const r = await fetch(api("/config/format"), { method: "POST", body: text }); if (r.ok) text = (await r.json()).yaml; } catch {}
+  const url = location.origin + location.pathname + "#cfg=" + b64urlEncode(text);
+  try { await navigator.clipboard.writeText(url); toast("Shareable link copied."); }
+  catch { location.hash = "cfg=" + b64urlEncode(text); toast("Link placed in the address bar."); }
+}
+function applySharedConfig() {
+  const m = /[#&]cfg=([^&]+)/.exec(location.hash);
+  if (!m) return;
+  const text = b64urlDecode(m[1]);
+  if (!text) return;
+  Editor.set(text);
+  $("yaml-authoritative").checked = true;
+  toast("Loaded a shared configuration — review it in Configuration, then Run.");
+}
+
+function wireImport() {
+  $("yaml-import").addEventListener("click", () => { $("import-modal").hidden = false; $("import-text").focus(); });
+  $("import-close").addEventListener("click", () => { $("import-modal").hidden = true; });
+  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) $("import-modal").hidden = true; });
+  $("import-do").addEventListener("click", doImport);
+}
+async function doImport() {
+  const text = $("import-text").value.trim();
+  if (!text) { toast("Paste a configuration first."); return; }
+  try {
+    const r = await (await fetch(api("/config/validate"), { method: "POST", body: text })).json();
+    if (!r.valid) { toast("Invalid configuration: " + r.error); return; }
+  } catch { toast("Could not validate the configuration."); return; }
+  Editor.set(text);
+  $("yaml-authoritative").checked = true;
+  $("import-modal").hidden = true;
+  document.querySelector('#tabs button[data-tab="config"]').click();
+  toast("Imported — the next run uses this configuration.");
+}
+
+// ---- Phase 6: command palette ----------------------------------------------
+const PALETTE = [
+  { label: "Go to Crack", run: () => gotoTab("crack") },
+  { label: "Go to History", run: () => gotoTab("history") },
+  { label: "Go to Recovered", run: () => gotoTab("recovered") },
+  { label: "Go to Library", run: () => gotoTab("library") },
+  { label: "Go to Tools", run: () => gotoTab("tools") },
+  { label: "Go to Statistics", run: () => gotoTab("stats") },
+  { label: "Go to Docs", run: () => gotoTab("docs") },
+  { label: "Go to Configuration", run: () => gotoTab("config") },
+  { label: "Run job", run: () => $("run").click() },
+  { label: "Cancel job", run: () => $("cancel").click() },
+  { label: "Open attack wizard", run: () => $("wizard-open").click() },
+  { label: "Validate configuration", run: () => { gotoTab("config"); $("yaml-validate").click(); } },
+  { label: "Copy shareable link", run: copyShareLink },
+  { label: "Import configuration", run: () => $("yaml-import").click() },
+  { label: "Toggle advanced options", run: () => { const c = $("advanced"); c.checked = !c.checked; document.body.classList.toggle("adv", c.checked); } },
+];
+function gotoTab(name) { document.querySelector(`#tabs button[data-tab="${name}"]`).click(); }
+
+let paletteIdx = 0, paletteItems = [];
+function wirePalette() {
+  document.addEventListener("keydown", (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); }
+    else if ((e.metaKey || e.ctrlKey) && e.key === "Enter") { e.preventDefault(); $("run").click(); }
+  });
+  const inp = $("palette-input");
+  inp.addEventListener("input", renderPalette);
+  inp.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") $("palette-modal").hidden = true;
+    else if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); paletteIdx = Math.max(0, paletteIdx - 1); highlightPalette(); }
+    else if (e.key === "Enter") { e.preventDefault(); runPalette(paletteIdx); }
+  });
+  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) $("palette-modal").hidden = true; });
+}
+function openPalette() { $("palette-modal").hidden = false; $("palette-input").value = ""; paletteIdx = 0; renderPalette(); $("palette-input").focus(); }
+function renderPalette() {
+  const q = $("palette-input").value.toLowerCase();
+  paletteItems = PALETTE.filter((a) => a.label.toLowerCase().includes(q));
+  if (paletteIdx >= paletteItems.length) paletteIdx = 0;
+  const ul = $("palette-list"); ul.textContent = "";
+  paletteItems.forEach((a, i) => ul.append(el("li", { className: i === paletteIdx ? "sel" : "", textContent: a.label, onclick: () => runPalette(i) })));
+}
+function highlightPalette() { [...$("palette-list").children].forEach((li, i) => li.classList.toggle("sel", i === paletteIdx)); }
+function runPalette(i) { $("palette-modal").hidden = true; const a = paletteItems[i]; if (a) a.run(); }
 function setYamlStatus(msg, ok) { const s = $("yaml-status"); s.textContent = msg; s.className = ok ? "ok" : "err"; }
 
 // ---- run / events -----------------------------------------------------------
