@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/binary"
 	"net/http/httptest"
+	"sync"
 	"testing"
 	"time"
 
@@ -200,13 +201,18 @@ func TestCollectiveResumeOffsetContiguous(t *testing.T) {
 	data := buildWinZipAES(t, []byte("Welcome1"), 3, "doc.bin", []byte("secret payload"))
 	const keyspace = 120
 	job := FileJob{Path: "doc.zip", Data: data, Candidates: candidateList("not-present-anywhere", keyspace)}
+	// OnProgress is called concurrently (one goroutine per server), so the
+	// callback must synchronize its own state.
+	var mu sync.Mutex
 	var maxTried int64
 	res := Run(context.Background(), servers, []FileJob{job}, Options{
 		Mode: Collective, BatchSize: 8,
 		OnProgress: func(p Progress) {
+			mu.Lock()
 			if p.Tried > maxTried {
 				maxTried = p.Tried
 			}
+			mu.Unlock()
 		},
 	})
 	if res[0].Found {
