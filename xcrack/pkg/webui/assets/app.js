@@ -47,6 +47,8 @@ async function boot() {
   wirePreview();
   wireTools();
   wireHistory();
+  wireMaskBuilder();
+  wireWizard();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
@@ -422,6 +424,16 @@ function fmtDur(ms) {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), sec = s % 60;
   return (h ? h + "h " : "") + (h || m ? m + "m " : "") + sec + "s";
 }
+// fmtETA renders a remaining-seconds estimate, collapsing very long spans to a
+// coarse human phrase instead of an absurd hour count.
+function fmtETA(sec) {
+  const yr = 365 * 86400;
+  if (!isFinite(sec) || sec < 0) return "—";
+  if (sec > 100 * yr) return "centuries";
+  if (sec > yr) return (sec / yr).toFixed(1) + " yr";
+  if (sec > 2 * 86400) return (sec / 86400).toFixed(1) + " d";
+  return fmtDur(sec * 1000);
+}
 
 function streamEvents(id) {
   if (evtSource) evtSource.close();
@@ -457,7 +469,13 @@ function updateProgress(candidates, latest) {
     const pct = Math.min(100, candidates / jobKeyspace * 100);
     bar.classList.remove("indeterminate");
     fill.style.width = pct.toFixed(1) + "%";
-    $("progress-text").textContent = `${candidates.toLocaleString()} / ${jobKeyspace.toLocaleString()} (${pct.toFixed(1)}%) · ${rate.toLocaleString()}/s`;
+    let line = `${candidates.toLocaleString()} / ${jobKeyspace.toLocaleString()} (${pct.toFixed(1)}%) · ${rate.toLocaleString()}/s`;
+    const remain = rate > 0 ? (jobKeyspace - candidates) / rate : -1;
+    if (remain > 0) {
+      line += " · ETA " + fmtETA(remain);
+      if (remain > 365 * 86400) line += " — impractically long at this rate; a wordlist + rules will likely beat brute force";
+    }
+    $("progress-text").textContent = line;
   } else {
     bar.classList.add("indeterminate");
     fill.style.width = "100%";
@@ -735,7 +753,99 @@ function wireTools() {
   $("export-challenge-run").addEventListener("click", exportChallenge);
   $("pdf-table-run").addEventListener("click", pdfTable);
   $("wl-run").addEventListener("click", wordlistTool);
+  $("rt-run").addEventListener("click", ruleTest);
   wireCLI();
+}
+
+// ruleTest shows what mangling rules do to a sample word (engine rule compiler).
+async function ruleTest() {
+  const out = toolOut("rule-test");
+  const word = $("rt-word").value;
+  if (!word) { out.textContent = "Enter a sample word."; return; }
+  out.textContent = "Testing…";
+  const fd = new FormData(); fd.append("word", word); fd.append("rules", $("rt-rules").value);
+  let res;
+  try { res = await fetch(api("/tools/rule-test"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  const j = await res.json();
+  out.textContent = "";
+  const results = j.results || [];
+  if (!results.length) { out.append(el("p", { className: "hint", textContent: "No rules to apply." })); return; }
+  const tbl = el("table", { className: "stat-table" });
+  tbl.append(el("tr", {}, [el("th", { textContent: "rule" }), el("th", { textContent: "→ output" })]));
+  for (const r of results) {
+    tbl.append(el("tr", {}, [
+      el("td", {}, [el("code", { textContent: r.rule })]),
+      el("td", {}, r.kept ? [el("code", { textContent: r.output })] : [el("span", { className: "hint", textContent: "(rejected)" })]),
+    ]));
+  }
+  out.append(tbl);
+}
+
+// ---- mask builder -----------------------------------------------------------
+function wireMaskBuilder() {
+  const mask = [];
+  const sizes = { "?l": 26, "?u": 26, "?d": 10, "?s": 33, "?a": 95 };
+  const render = () => {
+    $("mb-mask").textContent = mask.length ? mask.join("") : "(empty)";
+    let ks = 1n;
+    for (const t of mask) ks *= BigInt(sizes[t] || 1);
+    $("mb-keyspace").textContent = mask.length ? `keyspace: ${ks.toLocaleString()} (${mask.length} chars)` : "keyspace: 1";
+  };
+  document.querySelectorAll(".mb-tok").forEach((b) => b.addEventListener("click", () => {
+    const t = b.dataset.tok;
+    if (t === "clear") mask.length = 0;
+    else if (t === "backspace") mask.pop();
+    else mask.push(t);
+    render();
+  }));
+  $("mb-insert").addEventListener("click", () => {
+    if (!mask.length) return;
+    const ta = $("masks");
+    ta.value = (ta.value.trim() ? ta.value.replace(/\n+$/, "") + "\n" : "") + mask.join("");
+  });
+  render();
+}
+
+// ---- attack wizard ----------------------------------------------------------
+function wireWizard() {
+  const modal = $("wizard-modal");
+  $("wizard-open").addEventListener("click", () => { modal.hidden = false; });
+  $("wizard-close").addEventListener("click", () => { modal.hidden = true; });
+  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+  $("wizard-build").addEventListener("click", buildFromWizard);
+}
+function buildFromWizard() {
+  const prefix = $("wz-prefix").value.trim(), suffix = $("wz-suffix").value.trim();
+  const min = +$("wz-min").value || 0, max = +$("wz-max").value || 0;
+  const tokens = $("wz-tokens").value.trim();
+  // Sensible first passes.
+  $("use_default").checked = true;
+  $("markov").checked = true;
+  // Known parts → explicit guesses tried first.
+  const guesses = [];
+  if (prefix) guesses.push(prefix);
+  if (suffix) guesses.push(suffix);
+  if (prefix && suffix) guesses.push(prefix + suffix);
+  if (guesses.length) $("passwords").value = guesses.join("\n");
+  if (min) $("min_length").value = min;
+  if (max) $("max_length").value = max;
+  // Personal / org words → spray set + name/sibling context.
+  if (tokens) { $("spray").checked = true; $("spray_tokens").value = tokens; $("context").checked = true; }
+  // Optional brute force over the chosen classes and length range.
+  if ($("wz-brute").checked) {
+    const cls = ($("wz-l").checked ? "?l" : "") + ($("wz-u").checked ? "?u" : "") + ($("wz-d").checked ? "?d" : "") + ($("wz-s").checked ? "?s" : "");
+    if (cls) {
+      $("cc1").value = cls;
+      const len = max || min || 8;
+      $("masks").value = "?1".repeat(len);
+      if (min && max) $("increment").value = min + ":" + max;
+    }
+  }
+  if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
+  $("wizard-modal").hidden = true;
+  toast("Wizard filled the Crack form — review the options and press Run.");
 }
 
 const toolOut = (name) => document.querySelector(`.tool-out[data-out="${name}"]`);

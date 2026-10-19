@@ -78,6 +78,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/tools/access-recover", p(s.handleToolAccess))
 	mux.HandleFunc("POST /api/v1/tools/export-challenge", p(s.handleToolExportChallenge))
 	mux.HandleFunc("POST /api/v1/tools/wordlist", p(s.handleToolWordlist))
+	mux.HandleFunc("POST /api/v1/tools/rule-test", p(s.handleToolRuleTest))
 	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
 	mux.Handle("/", assets)
 	s.mux = mux

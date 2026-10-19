@@ -52,6 +52,20 @@
         <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
         <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
         <div class="field"><label>Masks <small>(?l ?u ?d ?s ?a — one per line)</small></label><textarea id="masks" rows="2" placeholder="?d?d?d?d"></textarea></div>
+        <details class="mask-builder"><summary>Mask builder</summary>
+          <div class="mb-row">
+            <button type="button" class="mb-tok" data-tok="?l">?l a–z</button>
+            <button type="button" class="mb-tok" data-tok="?u">?u A–Z</button>
+            <button type="button" class="mb-tok" data-tok="?d">?d 0–9</button>
+            <button type="button" class="mb-tok" data-tok="?s">?s sym</button>
+            <button type="button" class="mb-tok" data-tok="?a">?a all</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="backspace">⌫</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="clear">clear</button>
+          </div>
+          <div class="mb-field"><code id="mb-mask" class="mb-mask">(empty)</code></div>
+          <div class="hint" id="mb-keyspace">keyspace: 1</div>
+          <button type="button" id="mb-insert" class="mini">Insert into masks ↑</button>
+        </details>
         <div class="field"><label>Mangling rules <small>(hashcat syntax, one per line)</small></label><textarea id="rules" rows="2" placeholder="c&#10;$1"></textarea></div>
         <fieldset class="generators">
           <legend>Generators</legend>
@@ -193,6 +207,7 @@
     </div>
 
     <div class="runbar">
+      <button type="button" id="wizard-open">✨ Wizard</button>
       <button id="run" class="primary">▶ Run</button>
       <button id="cancel" disabled>■ Cancel</button>
       <span id="run-status"></span>
@@ -310,6 +325,15 @@
       </div>
 
       <div class="card tool">
+        <h3>Rule tester</h3>
+        <p class="hint">See what hashcat-style mangling rules do to a sample word — the exact transforms a run would try.</p>
+        <div class="field"><label>Sample word</label><input type="text" id="rt-word" placeholder="password"></div>
+        <div class="field"><label>Rules <small>(one per line)</small></label><textarea id="rt-rules" rows="3" placeholder="c&#10;$1&#10;sa@"></textarea></div>
+        <button class="tool-run primary" id="rt-run">Test</button>
+        <div class="tool-out" data-out="rule-test"></div>
+      </div>
+
+      <div class="card tool">
         <h3>Long-running attacks → CLI command</h3>
         <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs best run on the CLI / distributed tier. Pick one, set the options, and copy the exact command.</p>
         <div class="field"><label>Operation</label>
@@ -381,6 +405,31 @@
     </div>
   </section>
 </main>
+
+<div id="wizard-modal" class="modal" hidden>
+  <div class="modal-box">
+    <div class="modal-head"><strong>Attack wizard</strong><button type="button" id="wizard-close" class="x">✕</button></div>
+    <p class="hint">Tell the wizard what you know; it fills the Crack form. Nothing runs until you press Run.</p>
+    <div class="row">
+      <div class="field"><label>Known start (prefix)</label><input type="text" id="wz-prefix" placeholder="Acme"></div>
+      <div class="field"><label>Known end (suffix)</label><input type="text" id="wz-suffix" placeholder="!"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>Min length</label><input type="number" id="wz-min" min="0" value="6"></div>
+      <div class="field"><label>Max length</label><input type="number" id="wz-max" min="0" value="10"></div>
+    </div>
+    <fieldset class="generators">
+      <legend>Character types</legend>
+      <label><input type="checkbox" id="wz-l" checked> lowercase</label>
+      <label><input type="checkbox" id="wz-u"> UPPERCASE</label>
+      <label><input type="checkbox" id="wz-d" checked> digits</label>
+      <label><input type="checkbox" id="wz-s"> symbols</label>
+    </fieldset>
+    <div class="field"><label>Personal / org words <small>(comma-separated: names, company, pet…)</small></label><input type="text" id="wz-tokens" placeholder="acme,rex,anna"></div>
+    <label class="check"><input type="checkbox" id="wz-brute"> Also brute-force the character types over the length range (can be huge)</label>
+    <div class="modal-actions"><button type="button" id="wizard-build" class="primary">Build the attack</button></div>
+  </div>
+</div>
 
 <div id="preview-modal" class="modal" hidden>
   <div class="modal-box">

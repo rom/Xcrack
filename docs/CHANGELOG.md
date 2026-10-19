@@ -15,6 +15,16 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — attack wizard, mask builder, rule tester & ETA.** `xcrack-web`
+  gains guidance for building an attack: a **wizard** ("what do you know about
+  the password?" — known prefix/suffix, length range, character types, personal/
+  org words) that fills the Crack form (explicit guesses, length limits, spray +
+  context, and an optional brute-force mask with increment); a **mask builder**
+  with a live keyspace counter that inserts `?l?u?d?s?a` masks; a **rule tester**
+  (`POST /api/v1/tools/rule-test`) that shows, per rule, what the engine's real
+  hashcat-rule compiler does to a sample word (output or rejection); and a live
+  **ETA** on determinate runs (keyspace ÷ current rate) with an honest nudge that
+  an impractically long brute force is better served by a wordlist + rules.
 - **Web GUI — recovered-password vault & job re-run.** `xcrack-web` now keeps a
   server-side found-password vault (potfile) under its work directory: every
   recovered password is stored and fed back into new jobs' loopback pass, so a
