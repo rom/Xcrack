@@ -28,7 +28,14 @@ func newTestServer(t *testing.T) *httptest.Server {
 		t.Fatalf("NewServer: %v", err)
 	}
 	ts := httptest.NewServer(srv.Handler())
-	t.Cleanup(ts.Close)
+	// Stop accepting requests, then drain in-flight job runners before the
+	// t.TempDir() work directory is removed — otherwise a background runner can
+	// still be writing under it as RemoveAll runs (flaky "directory not empty").
+	// Registered after t.TempDir() (inside NewServer), so it runs before it.
+	t.Cleanup(func() {
+		ts.Close()
+		srv.Close()
+	})
 	return ts
 }
 

@@ -85,6 +85,16 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   unchanged and remains the default.
 
 ### Fixed / performance
+- **`xcrack-web` drains in-flight jobs on shutdown (fixes a flaky test).** A job
+  runs in a background goroutine that outlives its `202 Accepted` response, so
+  nothing waited for it: on `SIGINT`/`SIGTERM` the server stopped HTTP but
+  abandoned running jobs mid-write, and in tests a runner could still be writing
+  under the `t.TempDir()` work directory as it was removed — an intermittent
+  `RemoveAll … directory not empty` failure in `pkg/webui`. The job `Manager`
+  now tracks its runner goroutines and gains `Shutdown()` (exposed as
+  `Server.Close()`) that cancels every in-flight job and waits for the
+  goroutines to exit; `xcrack-web` calls it after the HTTP shutdown, and the
+  test server drains jobs before its work directory is cleaned up.
 - **`thunder-gen --gpu` column-batched chain kernel (occupancy).** The GPU
   thunder-chain walk previously ran one work-item per chain over the *whole*
   chain length in a single dispatch, which forced a dilemma on integrated GPUs:

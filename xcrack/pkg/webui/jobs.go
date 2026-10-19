@@ -190,6 +190,7 @@ type Manager struct {
 	cfg  Config
 	mu   sync.Mutex
 	jobs map[string]*Job
+	wg   sync.WaitGroup // tracks live runner goroutines, for Shutdown
 }
 
 // defaultWorkDir is the per-user default root for job working directories.
@@ -272,14 +273,38 @@ func (m *Manager) cancel(id string) bool {
 	return false
 }
 
-// start launches the job's runner goroutine.
+// start launches the job's runner goroutine. wg is incremented here, before the
+// goroutine starts, so Shutdown's Wait can never miss a just-started runner.
 func (m *Manager) start(j *Job) {
+	m.wg.Add(1)
 	go m.run(j)
+}
+
+// Shutdown cancels every in-flight job and waits for all runner goroutines to
+// exit, so once it returns nothing is still writing under a job's working
+// directory. A caller that owns the work directory (a test, or a server
+// shutting down) can then remove it without racing a runner. Safe to call once.
+func (m *Manager) Shutdown() {
+	m.mu.Lock()
+	cancels := make([]context.CancelFunc, 0, len(m.jobs))
+	for _, j := range m.jobs {
+		j.mu.Lock()
+		if j.cancel != nil {
+			cancels = append(cancels, j.cancel)
+		}
+		j.mu.Unlock()
+	}
+	m.mu.Unlock()
+	for _, c := range cancels {
+		c()
+	}
+	m.wg.Wait()
 }
 
 // run executes the job: build engine options, assemble candidates, process each
 // uploaded source file, and write any decrypted tree to the job's output dir.
 func (m *Manager) run(j *Job) {
+	defer m.wg.Done() // last, so Shutdown's Wait returns only after all cleanup/IO
 	defer close(j.done)
 	ctx, cancel := context.WithCancel(context.Background())
 	j.mu.Lock()
