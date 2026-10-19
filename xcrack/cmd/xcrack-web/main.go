@@ -141,7 +141,12 @@ func run() int {
 	logger.Info("shutting down")
 	ctx, cancel := context.WithTimeout(context.Background(), *shutdownGrace)
 	defer cancel()
-	if err := httpSrv.Shutdown(ctx); err != nil {
+	err = httpSrv.Shutdown(ctx)
+	// Stop accepting requests first (above), then cancel and await in-flight job
+	// runners so they are not abandoned mid-write on exit. Done even if the HTTP
+	// shutdown timed out.
+	srv.Close()
+	if err != nil {
 		logger.Error("graceful shutdown failed", "err", err)
 		return 1
 	}

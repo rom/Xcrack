@@ -69,6 +69,12 @@ func NewServer(cfg Config) (*Server, error) {
 // Handler returns the HTTP handler for the whole application.
 func (s *Server) Handler() http.Handler { return s.mux }
 
+// Close cancels any in-flight jobs and waits for their runner goroutines to
+// exit. After it returns, nothing is still touching the work directory, so a
+// caller shutting the server down (or a test that owns a temporary work
+// directory) can clean up without racing a runner.
+func (s *Server) Close() { s.mgr.Shutdown() }
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
