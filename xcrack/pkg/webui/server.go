@@ -31,6 +31,7 @@ type Server struct {
 	limiter     *rateLimiter
 	authLimiter *rateLimiter
 	trail       *auditTrail
+	fleet       *fleetStore
 }
 
 // NewServer builds the web application. It fails if the work directory cannot be
@@ -55,6 +56,7 @@ func NewServer(cfg Config) (*Server, error) {
 	}
 	s.trail = newAuditTrail(cfg.WorkDir, cfg.AuditLogger)
 	mgr.trail = s.trail
+	s.fleet = newFleetStore(cfg.WorkDir)
 	assets, err := assetHandler()
 	if err != nil {
 		return nil, err
@@ -93,6 +95,9 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/library/{name}/preview", p(s.handleLibraryPreview))
 	mux.HandleFunc("DELETE /api/v1/library/{name}", p(s.handleLibraryDelete))
 	mux.HandleFunc("POST /api/v1/cluster/health", p(s.handleClusterHealth))
+	mux.HandleFunc("GET /api/v1/fleet", p(s.handleFleetGet))
+	mux.HandleFunc("PUT /api/v1/fleet", p(s.handleFleetPut))
+	mux.HandleFunc("POST /api/v1/fleet/health", p(s.handleFleetHealth))
 	mux.HandleFunc("GET /api/v1/docs", p(s.handleListDocs))
 	mux.HandleFunc("GET /api/v1/docs/{name}", p(s.handleGetDoc))
 	// Specialist, non-cracking tools (the CLI's subcommands), synchronous.

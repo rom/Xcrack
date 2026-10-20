@@ -124,6 +124,29 @@ func TestAccessibilityMarkup(t *testing.T) {
 	}
 }
 
+// TestFleetUI guards the fleet tab: the nav tab/panel and the JS that loads,
+// saves, probes and applies the worker fleet.
+func TestFleetUI(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	for _, want := range []string{`data-tab="fleet"`, `id="tab-fleet"`, `id="fleet-list"`, `id="fleet-health"`} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("index.html is missing fleet markup %q", want)
+		}
+	}
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	for _, want := range []string{"refreshFleet", "saveFleet", "fleetHealth", "useFleet", "/fleet/health"} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("app.js is missing fleet wiring %q", want)
+		}
+	}
+}
+
 // TestKeyAttackJobUI guards the "run as job" wiring for the long key attacks:
 // the upload field and run button in the markup, and the JS that posts to the
 // three new tool-job endpoints.

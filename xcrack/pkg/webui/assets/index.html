@@ -20,6 +20,7 @@
     <button data-tab="library" role="tab" id="tabbtn-library" aria-controls="tab-library" aria-selected="false" tabindex="-1" data-i18n="nav.library">Library</button>
     <button data-tab="tools" role="tab" id="tabbtn-tools" aria-controls="tab-tools" aria-selected="false" tabindex="-1" data-i18n="nav.tools">Tools</button>
     <button data-tab="stats" role="tab" id="tabbtn-stats" aria-controls="tab-stats" aria-selected="false" tabindex="-1" data-i18n="nav.stats">Statistics</button>
+    <button data-tab="fleet" role="tab" id="tabbtn-fleet" aria-controls="tab-fleet" aria-selected="false" tabindex="-1" data-i18n="nav.fleet">Fleet</button>
     <button data-tab="audit" id="tab-btn-audit" role="tab" aria-controls="tab-audit" aria-selected="false" tabindex="-1" data-i18n="nav.audit">Audit</button>
     <button data-tab="docs" role="tab" id="tabbtn-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1" data-i18n="nav.docs">Docs</button>
     <button data-tab="config" role="tab" id="tabbtn-config" aria-controls="tab-config" aria-selected="false" tabindex="-1" data-i18n="nav.config">Configuration</button>
@@ -433,6 +434,27 @@
     <div class="grid">
       <div class="card"><h2>Speed by algorithm / cipher</h2><div id="algo-speed"><p class="hint">Per-format candidate throughput from finished jobs.</p></div></div>
       <div class="card"><h2>Top recovered passwords</h2><div id="top-pw"><p class="hint">Most frequently recovered passwords across jobs.</p></div></div>
+    </div>
+  </section>
+
+  <!-- FLEET (managed distributed workers) ------------------------------- -->
+  <section id="tab-fleet" class="tab" role="tabpanel" aria-labelledby="tabbtn-fleet" tabindex="0">
+    <div class="card">
+      <div class="history-head">
+        <h2 data-i18n="head.fleet">Worker fleet</h2>
+        <div class="history-actions">
+          <button type="button" id="fleet-health" class="mini">Check health</button>
+          <button type="button" id="fleet-save" class="mini primary">Save fleet</button>
+        </div>
+      </div>
+      <p class="hint">The <code>xcrackd</code> / <code>xcrack-web</code> worker nodes a distributed crack fans out to. Save the fleet once here, see each node's live health, and apply it to a job instead of retyping URLs. Distributed cracking and these probes require the server to run with <code>--allow-server-paths</code>.</p>
+      <div id="fleet-disabled" class="banner banner-warn" hidden><span>Distributed cracking is disabled: start the server with <code>--allow-server-paths</code> (a trusted local instance) to manage and probe a fleet.</span></div>
+      <div id="fleet-list"></div>
+      <div class="runbar">
+        <button type="button" id="fleet-add" class="mini">+ Add node</button>
+        <button type="button" id="fleet-use" class="mini">Use fleet in a job →</button>
+        <span id="fleet-status" class="hint"></span>
+      </div>
     </div>
   </section>
 

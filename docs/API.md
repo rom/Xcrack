@@ -398,6 +398,9 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `GET` | `/api/v1/library/{name}/preview` | first lines of a library wordlist |
 | `DELETE` | `/api/v1/library/{name}` | delete a library wordlist |
 | `POST` | `/api/v1/cluster/health` | ping configured `xcrackd` servers (`--allow-server-paths`) |
+| `GET` | `/api/v1/fleet` | the saved worker fleet (node URL/group/label) + whether distributed cracking is enabled (`distributed_ready`) |
+| `PUT` | `/api/v1/fleet` | replace the saved fleet (`{nodes:[{url,group,label}]}`; requires `--allow-server-paths`, admin in multi-user) |
+| `POST` | `/api/v1/fleet/health` | probe every saved node: reachability, latency, and (for an `xcrack-web` node) version + GPU tier (`--allow-server-paths`) |
 | `POST` | `/api/v1/tools/{hashline,vba-recover,access-recover,export-challenge,wordlist,rule-test,pdf-keyattack-table}` | specialist, mostly-stateless tools (see §10.9) |
 | `POST` | `/api/v1/tools/office-keyattack` | Office 97/2000 40-bit RC4 key sweep (multipart: `source`, optional `workers`/`start`/`count`), run as a cancelable background **job** with live progress; writes the recovered key under the job output. A full 2⁴⁰ sweep is a long compute job — the Tools card also builds the CLI command for the distributed/GPU tier |
 | `POST` | `/api/v1/tools/pdf-keyattack` | PDF V1/R2 40-bit RC4 file-key sweep (the full sweep; multipart `source`, optional `workers`/`start`/`count`), run as a background **job**. For the instant precomputed-table path use `/tools/pdf-keyattack-table` |

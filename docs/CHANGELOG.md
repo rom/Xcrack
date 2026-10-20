@@ -15,6 +15,16 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — managed worker fleet.** A new **Fleet** tab turns ad-hoc
+  distributed-cracking URLs into a managed set of worker nodes: save the fleet
+  once (node URL, optional partition group and label; persisted server-wide), see
+  each node's **live health** — reachability, latency, and, for an `xcrack-web`
+  node, its version and GPU tier — and **apply the fleet to a job** with one
+  click (it fills the Crack form's distributed-servers field) instead of
+  retyping URLs. New endpoints `GET`/`PUT /api/v1/fleet` and
+  `POST /api/v1/fleet/health`; like distributed cracking itself every probe is
+  gated behind `--allow-server-paths` (a trusted local instance) and only ever
+  requests fixed, safe paths, and saving is admin-only in multi-user mode.
 - **Web GUI — long-running key attacks as server-side jobs.** The three
   compute-heavy specialist operations that were CLI-command-only in the Tools tab
   — **office-keyattack** (Office 97/2000 40-bit RC4 key sweep), **pdf-keyattack**

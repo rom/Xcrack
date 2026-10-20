@@ -55,6 +55,7 @@ async function boot() {
   wireImport();
   wirePalette();
   wireModalA11y();
+  wireFleet();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
@@ -190,6 +191,7 @@ function wireTabs() {
       if (btn.dataset.tab === "history") refreshHistory();
       if (btn.dataset.tab === "recovered") refreshVault();
       if (btn.dataset.tab === "library") refreshLibrary();
+      if (btn.dataset.tab === "fleet") refreshFleet();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
     });
     // Keyboard navigation per the WAI-ARIA tabs pattern: arrows move (and
@@ -1052,6 +1054,99 @@ async function clusterHealth() {
     ]));
   }
   out.append(tbl);
+}
+
+// ---- fleet (managed distributed workers) -----------------------------------
+let fleetNodes = [];
+function wireFleet() {
+  const on = (id, fn) => { const e = $(id); if (e) e.addEventListener("click", fn); };
+  on("fleet-add", () => { collectFleet(); fleetNodes.push({ url: "", group: "", label: "" }); renderFleet(); });
+  on("fleet-save", saveFleet);
+  on("fleet-health", fleetHealth);
+  on("fleet-use", useFleet);
+}
+async function refreshFleet() {
+  let v;
+  try { v = await (await fetch(api("/fleet"))).json(); }
+  catch { return; }
+  fleetNodes = v.nodes || [];
+  const dis = $("fleet-disabled"); if (dis) dis.hidden = !!v.distributed_ready;
+  renderFleet();
+}
+// collectFleet reads the editable rows back into fleetNodes before a re-render or
+// save, so in-progress edits are not lost.
+function collectFleet() {
+  const rows = document.querySelectorAll("#fleet-list tr.fleet-row");
+  if (!rows.length) return;
+  fleetNodes = [...rows].map((tr) => ({
+    url: tr.querySelector(".f-url").value.trim(),
+    group: tr.querySelector(".f-group").value.trim(),
+    label: tr.querySelector(".f-label").value.trim(),
+  })).filter((n) => n.url || n.group || n.label);
+}
+function renderFleet(health) {
+  const host = $("fleet-list"); if (!host) return;
+  host.textContent = "";
+  if (!fleetNodes.length) {
+    host.append(el("p", { className: "hint", textContent: "No worker nodes yet — add one, then Save." }));
+    return;
+  }
+  const byURL = {};
+  for (const h of health || []) byURL[h.url] = h;
+  const tbl = el("table", { className: "stat-table fleet-table" });
+  tbl.append(el("tr", {}, ["Node URL", "Group", "Label", "Status", "ms", "Version", "GPU", ""].map((h) => el("th", { textContent: h }))));
+  for (const n of fleetNodes) {
+    const h = byURL[n.url];
+    const statusCell = h
+      ? el("span", { className: "badge " + (h.ok ? "on" : "off"), textContent: h.ok ? "up" : (h.error ? "down" : "err") })
+      : el("span", { className: "hint", textContent: "—" });
+    const row = el("tr", { className: "fleet-row" }, [
+      el("td", {}, [el("input", { className: "f-url", type: "text", value: n.url || "", placeholder: "https://node:8443" })]),
+      el("td", {}, [el("input", { className: "f-group", type: "text", value: n.group || "", placeholder: "gpu" })]),
+      el("td", {}, [el("input", { className: "f-label", type: "text", value: n.label || "", placeholder: "rack-1" })]),
+      el("td", {}, [statusCell]),
+      el("td", { textContent: h ? String(h.latency_ms || 0) : "" }),
+      el("td", { textContent: (h && h.version) ? h.version : "" }),
+      el("td", {}, [h && h.gpu ? el("span", { className: "badge on", textContent: "GPU" }) : ""]),
+      el("td", {}, [el("button", { type: "button", className: "mini danger", textContent: "remove", onclick: (e) => { collectFleet(); const i = fleetNodes.indexOf(n); if (i >= 0) fleetNodes.splice(i, 1); renderFleet(); } })]),
+    ]);
+    tbl.append(row);
+  }
+  host.append(tbl);
+}
+async function saveFleet() {
+  collectFleet();
+  const status = $("fleet-status"); status.textContent = "Saving…";
+  let res;
+  try { res = await fetch(api("/fleet"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nodes: fleetNodes }) }); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); status.textContent = "✕ " + (e.error || res.status); return; }
+  const v = await res.json(); fleetNodes = v.nodes || []; renderFleet();
+  status.textContent = "Saved " + fleetNodes.length + " node(s).";
+  setTimeout(() => { status.textContent = ""; }, 2500);
+}
+async function fleetHealth() {
+  collectFleet();
+  const status = $("fleet-status"); status.textContent = "Probing…";
+  let v;
+  try { v = await (await fetch(api("/fleet/health"), { method: "POST" })).json(); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (v.error) { status.textContent = "✕ " + v.error; return; }
+  renderFleet(v.nodes || []);
+  const up = (v.nodes || []).filter((n) => n.ok).length;
+  status.textContent = up + " of " + (v.nodes || []).length + " node(s) up.";
+}
+// useFleet applies the saved fleet to a job: it fills the Crack form's
+// distributed-servers field (url@group lines) and opens it.
+function useFleet() {
+  collectFleet();
+  const lines = fleetNodes.filter((n) => n.url).map((n) => n.group ? n.url + "@" + n.group : n.url);
+  if (!lines.length) { $("fleet-status").textContent = "Add at least one node first."; return; }
+  $("servers").value = lines.join("\n");
+  if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
+  const panel = $("dist-panel"); if (panel) panel.open = true;
+  gotoTab("crack");
+  toast(lines.length + " node(s) applied to the job's distributed settings.");
 }
 
 async function deleteHistoryJob(id) {

@@ -1176,6 +1176,15 @@ A **Check** button in the panel pings each configured server's health endpoint
 each one up or down with its latency, so you can confirm the fleet is reachable
 before launching a long run.
 
+The **Fleet** tab is the managed version of this: instead of retyping node URLs
+into every job, save the fleet once (each node's URL, optional partition
+**group** and a **label**; it persists under the working directory and is
+admin-managed in multi-user mode). **Check health** probes every saved node and
+shows it up or down with its latency and, for an `xcrack-web` node, its **version
+and GPU tier** (`POST /api/v1/fleet/health`). **Use fleet in a job** fills the
+Crack form's distributed-servers field from the saved nodes in one click. The
+whole tab is gated behind `--allow-server-paths`, like distributed cracking.
+
 ### 10.5 Running a job
 
 Progress streams live over Server-Sent Events (nothing is polled). The running

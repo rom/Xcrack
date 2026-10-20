@@ -235,6 +235,10 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: 12px; font-weight: 500; }
 .muted { color: var(--muted); font-size: 13px; }
 
+/* Fleet table: compact inline inputs for the node URL / group / label. */
+.fleet-table input { width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 13px; }
+.fleet-table td:first-child { min-width: 180px; }
+
 /* A resumable (interrupted) job's re-run button is accented so it reads as
    "pick up where this left off" rather than a fresh restart. */
 .mini.resume { border-color: var(--brand); color: var(--brand); font-weight: 600; }
