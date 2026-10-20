@@ -216,6 +216,7 @@ type Manager struct {
 	vault *securecache.Store // found-password vault (potfile)
 	sem   chan struct{}      // job-concurrency limiter (nil = unlimited)
 	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
+	trail *auditTrail        // access/action audit (set by NewServer; may be nil)
 }
 
 // vaultActive reports whether the found-password vault is in use. It is a
@@ -641,6 +642,13 @@ func (m *Manager) run(j *Job) {
 		}
 		if f.Password != "" {
 			m.recordFound(f.Password) // persist to the vault (gated by vaultActive)
+		}
+		if m.trail != nil { // audit the recovery, never the secret itself
+			actor := j.Owner
+			if actor == "" {
+				actor = "local"
+			}
+			m.trail.record(auditEntry{Actor: actor, Action: "found", Target: f.Path, Detail: f.Format})
 		}
 		j.emit(ev)
 	}

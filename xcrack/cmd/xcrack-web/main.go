@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/rom/xcrack/pkg/accel"
+	"github.com/rom/xcrack/pkg/auditlog"
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/webui"
@@ -74,6 +75,9 @@ func run() int {
 		maxJobAge     = flag.Duration("max-job-age", 0, "prune finished jobs older than this (0 = disabled), e.g. 168h")
 		maxWorkDir    = flag.Int64("max-workdir-bytes", 0, "reject new jobs/inspects once the work directory holds this many bytes (0 = unlimited)")
 
+		auditSyslog  = flag.Bool("audit-syslog", false, "also forward the access/action audit trail to the system logger")
+		auditLogFile = flag.String("audit-log-file", "", "also append the access/action audit trail (JSON) to this file")
+
 		tlsCert     = flag.String("tls-cert", "", "serve HTTPS with this PEM certificate chain (requires --tls-key; see scripts/gen-selfsigned-cert.sh)")
 		tlsKey      = flag.String("tls-key", "", "private key (PEM) for --tls-cert")
 		tlsClientCA = flag.String("tls-client-ca", "", "require and verify client certificates against this PEM CA bundle (mutual TLS)")
@@ -105,6 +109,19 @@ func run() int {
 		return 1
 	}
 
+	// Optional external sink for the access/action audit trail (the JSONL trail
+	// under the work dir is always on regardless).
+	var auditLogger *slog.Logger
+	if *auditSyslog || *auditLogFile != "" {
+		al, closer, aerr := auditlog.New(auditlog.Config{Format: "json", File: *auditLogFile, Syslog: *auditSyslog})
+		if aerr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack-web: audit log: %v\n", aerr)
+			return 1
+		}
+		defer func() { _ = closer.Close() }()
+		auditLogger = al
+	}
+
 	cfg := webui.Config{
 		WorkDir:             *workDir,
 		DocsDir:             resolveDocsDir(*docsDir),
@@ -122,6 +139,7 @@ func run() int {
 		TPMBuild:            securecache.TPMBuilt,
 		Version:             version,
 		TLS:                 *tlsCert != "" || *tlsKey != "",
+		AuditLogger:         auditLogger,
 		Accelerator:         gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
 			Enabled:      authEnabled,

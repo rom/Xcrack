@@ -195,6 +195,7 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	job.mu.Unlock()
 
 	s.mgr.start(job)
+	s.audit(r, "job.create", job.ID, fmt.Sprintf("%d file(s)", len(names)))
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID})
 }
 
@@ -225,6 +226,7 @@ func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.mgr.remove(r.PathValue("id"))
+	s.audit(r, "job.delete", r.PathValue("id"), "")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
@@ -241,6 +243,7 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "job.rerun", nj.ID, "from "+old.ID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": nj.ID})
 }
 
@@ -263,6 +266,7 @@ func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusNotFound, "no such job (or already finished)")
 		return
 	}
+	s.audit(r, "job.cancel", r.PathValue("id"), "")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
 }
 

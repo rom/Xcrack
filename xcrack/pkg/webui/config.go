@@ -55,6 +55,11 @@ type Config struct {
 	// binary provides a TPM sealer so the webui package stays free of the TPM
 	// build tag. Nil keeps a plaintext vault.
 	Sealer securecache.Sealer
+	// AuditLogger, if set, also receives every access/action audit entry (in
+	// addition to the always-on <workdir>/audit.jsonl trail), so the operator can
+	// forward the trail to a file or syslog via pkg/auditlog. Nil keeps the
+	// trail to the JSONL file only.
+	AuditLogger *slog.Logger
 
 	// --- transport hardening & retention (see security.go, jobs.go) ---
 

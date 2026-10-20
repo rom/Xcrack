@@ -19,6 +19,7 @@
     <button data-tab="library">Library</button>
     <button data-tab="tools">Tools</button>
     <button data-tab="stats">Statistics</button>
+    <button data-tab="audit" id="tab-btn-audit">Audit</button>
     <button data-tab="docs">Docs</button>
     <button data-tab="config">Configuration</button>
   </nav>
@@ -396,6 +397,20 @@
     <div class="grid">
       <div class="card"><h2>Speed by algorithm / cipher</h2><div id="algo-speed"><p class="hint">Per-format candidate throughput from finished jobs.</p></div></div>
       <div class="card"><h2>Top recovered passwords</h2><div id="top-pw"><p class="hint">Most frequently recovered passwords across jobs.</p></div></div>
+    </div>
+  </section>
+
+  <!-- AUDIT ------------------------------------------------------------- -->
+  <section id="tab-audit" class="tab">
+    <div class="card">
+      <div class="history-head">
+        <h2>Audit trail</h2>
+        <div class="history-actions">
+          <span class="muted">Who ran what, when, and from where. Recovered secrets are never recorded here.</span>
+          <button type="button" id="audit-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <div id="audit-body"><p class="hint">—</p></div>
     </div>
   </section>
 

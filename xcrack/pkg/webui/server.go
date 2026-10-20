@@ -30,6 +30,7 @@ type Server struct {
 	handler     http.Handler // mux wrapped in the CSRF + rate-limit middleware
 	limiter     *rateLimiter
 	authLimiter *rateLimiter
+	trail       *auditTrail
 }
 
 // NewServer builds the web application. It fails if the work directory cannot be
@@ -52,6 +53,8 @@ func NewServer(cfg Config) (*Server, error) {
 	if cfg.AuthRateLimitPerMin > 0 {
 		s.authLimiter = newRateLimiter(cfg.AuthRateLimitPerMin, time.Minute)
 	}
+	s.trail = newAuditTrail(cfg.WorkDir, cfg.AuditLogger)
+	mgr.trail = s.trail
 	assets, err := assetHandler()
 	if err != nil {
 		return nil, err
@@ -80,6 +83,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/jobs/{id}/rerun", p(s.handleRerun))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/download", p(s.handleDownload))
 	mux.HandleFunc("GET /api/v1/stats", p(s.handleStats))
+	mux.HandleFunc("GET /api/v1/audit", p(s.handleAudit))
 	mux.HandleFunc("GET /api/v1/vault", p(s.handleVault))
 	mux.HandleFunc("GET /api/v1/library", p(s.handleLibraryList))
 	mux.HandleFunc("POST /api/v1/library", p(s.handleLibraryUpload))

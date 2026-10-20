@@ -97,6 +97,10 @@ async function applyAuthGate() {
   return false;
 }
 function renderUser(me) {
+  // The audit trail is admin-only; hide its tab for a non-admin signed-in user
+  // (single-user mode has no auth and is implicitly admin, so it stays visible).
+  const auditBtn = $("tab-btn-audit");
+  if (auditBtn) auditBtn.hidden = !!(me && me.auth_enabled && me.user && !me.user.admin);
   const area = $("user-area"); area.textContent = "";
   if (!me || !me.auth_enabled || !me.user) return;
   const who = me.user.email || me.user.name || me.user.subject || "signed in";
@@ -145,6 +149,7 @@ function wireTabs() {
       btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
+      if (btn.dataset.tab === "audit") refreshAudit();
       if (btn.dataset.tab === "history") refreshHistory();
       if (btn.dataset.tab === "recovered") refreshVault();
       if (btn.dataset.tab === "library") refreshLibrary();
@@ -729,6 +734,7 @@ function setRunStatus(msg, err) { const s = $("run-status"); s.textContent = msg
 // ---- history ----------------------------------------------------------------
 function wireHistory() {
   $("history-refresh").addEventListener("click", refreshHistory);
+  $("audit-refresh").addEventListener("click", refreshAudit);
   $("vault-refresh").addEventListener("click", refreshVault);
   const nt = $("notify-toggle");
   try { nt.checked = localStorage.getItem("xcrack-notify") === "1"; } catch {}
@@ -736,6 +742,32 @@ function wireHistory() {
     try { localStorage.setItem("xcrack-notify", nt.checked ? "1" : "0"); } catch {}
     if (nt.checked) requestNotifyPermission();
   });
+}
+
+// ---- audit trail ------------------------------------------------------------
+async function refreshAudit() {
+  const host = $("audit-body");
+  let entries;
+  try {
+    const r = await fetch(api("/audit"));
+    if (r.status === 403) { host.textContent = ""; host.append(el("p", { className: "hint", textContent: "Audit is visible to administrators only." })); return; }
+    entries = (await r.json()).entries || [];
+  } catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the audit trail." })); return; }
+  host.textContent = "";
+  if (!entries.length) { host.append(el("p", { className: "hint", textContent: "No audited actions yet." })); return; }
+  const tbl = el("table", { className: "history-table" });
+  tbl.append(el("tr", {}, ["When", "Actor", "IP", "Action", "Target", "Detail"].map((h) => el("th", { textContent: h }))));
+  for (const e of entries) {
+    tbl.append(el("tr", {}, [
+      el("td", { textContent: e.time ? new Date(e.time).toLocaleString() : "—" }),
+      el("td", { textContent: e.email || e.actor || "—" }),
+      el("td", { textContent: e.ip || "—" }),
+      el("td", {}, [el("span", { className: "pill", textContent: e.action })]),
+      el("td", { textContent: e.target || "" }),
+      el("td", { textContent: e.detail || "" }),
+    ]));
+  }
+  host.append(tbl);
 }
 
 const STATE_LABEL = { done: "done", error: "error", canceled: "canceled", interrupted: "interrupted", running: "running", queued: "queued" };

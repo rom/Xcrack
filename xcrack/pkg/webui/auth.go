@@ -291,11 +291,15 @@ func (s *Server) handleCallback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.auth.setCookie(w, id)
+	if s.trail != nil {
+		s.trail.record(auditEntry{Actor: u.Subject, Email: u.Email, IP: clientIP(r, s.cfg.TrustProxyHeaders), Action: "login"})
+	}
 	http.Redirect(w, r, "/", http.StatusFound)
 }
 
 // handleLogout clears the session and its cookie.
 func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	s.audit(r, "logout", "", "")
 	if c, err := r.Cookie(sessionCookie); err == nil {
 		s.auth.deleteSession(c.Value)
 	}

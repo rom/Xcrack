@@ -138,6 +138,7 @@ func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
 
 	preview, more := previewCandidates(asm, names[0])
 
+	s.audit(r, "inspect", "", fmt.Sprintf("%d file(s)", len(names)))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"files":                       results,
 		"files_truncated":             truncated,

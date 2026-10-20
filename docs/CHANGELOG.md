@@ -15,6 +15,16 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — access/action audit trail + admin Audit view.** `xcrack-web` now
+  keeps a structured, append-only audit trail (`<workdir>/audit.jsonl`,
+  surviving restarts) of who did what, when and from where — job create / cancel
+  / delete / re-run, inspect, login / logout, and password-recovery events —
+  with a new admin-only **Audit** tab and `GET /api/v1/audit` to read it
+  (newest first). It never records a recovered secret: a "found" entry logs the
+  target and scheme, not the password. The trail is always on; `--audit-syslog`
+  and `--audit-log-file` additionally forward it to the system logger or a JSON
+  file via `pkg/auditlog`. (Previously `pkg/auditlog` was not wired into the web
+  tier at all, so a shared instance kept no who-ran-what record.)
 - **Web GUI — transport hardening & retention (CSRF, rate limiting, work-dir
   caps).** `xcrack-web` now wraps the whole application in two always-on guards
   (active in single- and multi-user mode alike, since a localhost instance is

@@ -389,6 +389,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
 | `GET` | `/api/v1/stats` | aggregate counters across jobs |
+| `GET` | `/api/v1/audit` | the access/action audit trail (admin-only; newest first) — who ran what, when, from where; never records recovered secrets |
 | `GET` | `/api/v1/vault` | the recovered-password vault (single-user, `--expose-secrets`; off under multi-user) |
 | `GET`/`POST` | `/api/v1/library` | list / upload reusable wordlists |
 | `GET` | `/api/v1/library/{name}/preview` | first lines of a library wordlist |
