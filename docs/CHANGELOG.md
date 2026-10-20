@@ -206,6 +206,17 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   stays the default and is unchanged.
 
 ### Fixed / performance
+- **7z content-encryption detection and password check are now deterministic.**
+  A content-encrypted 7z (`7z a -p`, plaintext headers) could intermittently be
+  read as plaintext, or a wrong password accepted: 7z has no password MAC, the
+  `bodgit/sevenzip` library does not validate the per-member CRC on read, and the
+  detector probed by reading a single byte — so whether a wrong-password garbage
+  stream "decoded" without error depended on the archive's random AES IV. This
+  surfaced as a flaky `TestEncrypted7zEngine` under `-race`. The detector and the
+  password verifier now recompute the member's stored **CRC32** over the decoded
+  bytes and require a match (falling back to "decoded cleanly" only when no CRC is
+  stored or the member exceeds the decompression backstop), making both
+  IV-independent. Added a regression test over 30 fresh tiny archives.
 - **`xcrack-web` job progress finalises cleanly.** The indeterminate progress
   bar kept sweeping forever after a run ended (it re-added the animation on the
   final update); it is now tied to the live event stream and stops when the run

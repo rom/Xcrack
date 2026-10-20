@@ -228,6 +228,50 @@ func TestSevenZipEncrypted(t *testing.T) {
 	}
 }
 
+// TestSevenZipTinyEncryptedDeterministic guards a regression where a tiny
+// content-encrypted 7z (`7z a -p`) was intermittently classified as plaintext,
+// or a wrong password accepted: the old probe read only one byte and the
+// verifier never checked the member CRC, so whether a wrong-password garbage
+// stream "decoded" depended on the per-archive random AES IV. Each iteration is
+// a fresh archive (fresh IV); all must be detected as encrypted, reject the
+// wrong password, and round-trip under the right one.
+func TestSevenZipTinyEncryptedDeterministic(t *testing.T) {
+	bin, err := exec.LookPath("7z")
+	if err != nil {
+		t.Skip("7z CLI not available")
+	}
+	const pw = "LetMeIn"
+	content := []byte("the payload inside an encrypted 7z archive")
+	for i := 0; i < 30; i++ {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "doc.txt"), content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cmd := exec.Command(bin, "a", "-p"+pw, "a.7z", "doc.txt")
+		cmd.Dir = dir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("7z: %v\n%s", err, out)
+		}
+		data, err := os.ReadFile(filepath.Join(dir, "a.7z"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		e := findEntry(entriesOf(t, sevenzipFormat{}, data), "doc.txt")
+		if e == nil || !e.Encrypted {
+			t.Fatalf("iter %d: doc.txt not detected as encrypted: %+v", i, e)
+		}
+		if ok, _ := e.Verify([]byte("nope")); ok {
+			t.Fatalf("iter %d: wrong password accepted", i)
+		}
+		if ok, err := e.Verify([]byte(pw)); err != nil || !ok {
+			t.Fatalf("iter %d: correct password rejected: ok=%v err=%v", i, ok, err)
+		}
+		if got := readEntryPw(t, e, pw); !bytes.Equal(got, content) {
+			t.Fatalf("iter %d: content mismatch", i)
+		}
+	}
+}
+
 func TestRarEncrypted(t *testing.T) {
 	bin, err := exec.LookPath("rar")
 	if err != nil {
