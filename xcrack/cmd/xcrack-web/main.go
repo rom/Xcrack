@@ -97,6 +97,7 @@ func run() int {
 		oidcClientID = flag.String("auth-oidc-client-id", "", "OIDC client ID (required with --auth-oidc-issuer)")
 		oidcRedirect = flag.String("auth-redirect-url", "", "this server's own /auth/callback URL as registered with the provider, e.g. https://host:8899/auth/callback (required with --auth-oidc-issuer)")
 		authAdmins   = flag.String("auth-admins", "", "comma-separated subjects or emails allowed to see and manage every user's jobs")
+		authViewers  = flag.String("auth-viewers", "", "comma-separated subjects or emails granted read-only access to every user's jobs (reviewer/auditor role)")
 		cookieInsec  = flag.Bool("auth-cookie-insecure", false, "do not set the Secure flag on the session cookie (plain-HTTP local testing only)")
 	)
 	flag.Parse()
@@ -162,6 +163,7 @@ func run() int {
 			ClientSecret: clientSecret,
 			RedirectURL:  *oidcRedirect,
 			Admins:       splitComma(*authAdmins),
+			Viewers:      splitComma(*authViewers),
 			CookieSecure: !*cookieInsec,
 		},
 	}

@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — RBAC depth: per-job sharing + a read-only viewer role.** Multi-user
+  access was previously binary (owner, or an admin who sees everything). It now
+  distinguishes **read** from **modify** and adds two ways to widen read access
+  without granting control: a job **owner can share** a specific job (read-only)
+  with named user subjects (`POST /api/v1/jobs/{id}/share`, surfaced as a *Share*
+  control on owned jobs in History), and an operator can grant a **viewer role**
+  (`--auth-viewers`) — a reviewer/auditor who can list, open, download and audit
+  every user's jobs but cannot create, cancel, delete, re-run or share. Cancel /
+  delete / re-run / share now require owner-or-admin (a viewer or shared-with
+  reader gets 403), while list / open / download honour sharing and the viewer
+  role. `/api/v1/me` reports the viewer role so the SPA hides controls a
+  read-only user cannot use. (Per-user vaults remain a follow-up — the recovered-
+  password vault is still single-user-only.)
 - **Web GUI — out-of-band job-finished notifications (webhook + email).**
   `xcrack-web` can now notify when a job completes beyond the per-viewer browser
   toast (which only fires while the SPA is open): an operator-configured

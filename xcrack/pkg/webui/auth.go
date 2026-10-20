@@ -31,6 +31,7 @@ type user struct {
 	Email   string `json:"email,omitempty"`
 	Name    string `json:"name,omitempty"`
 	Admin   bool   `json:"admin"`
+	Viewer  bool   `json:"viewer,omitempty"` // read-only access to every user's jobs
 }
 
 // localUser is the implicit principal when auth is disabled: an admin with an
@@ -54,6 +55,7 @@ type authenticator struct {
 	enabled      bool
 	cookieSecure bool
 	admins       map[string]bool
+	viewers      map[string]bool
 
 	oauth    *oauth2.Config
 	verifier *oidc.IDTokenVerifier
@@ -70,11 +72,17 @@ type authenticator struct {
 func newAuthenticator(ctx context.Context, cfg AuthConfig) (*authenticator, error) {
 	a := &authenticator{
 		enabled: cfg.Enabled, cookieSecure: cfg.CookieSecure,
-		admins: map[string]bool{}, sessions: map[string]*session{}, states: map[string]pkceState{},
+		admins: map[string]bool{}, viewers: map[string]bool{},
+		sessions: map[string]*session{}, states: map[string]pkceState{},
 	}
 	for _, s := range cfg.Admins {
 		if s = strings.TrimSpace(s); s != "" {
 			a.admins[s] = true
+		}
+	}
+	for _, s := range cfg.Viewers {
+		if s = strings.TrimSpace(s); s != "" {
+			a.viewers[s] = true
 		}
 	}
 	if !cfg.Enabled || cfg.Issuer == "" {
@@ -98,6 +106,10 @@ func newAuthenticator(ctx context.Context, cfg AuthConfig) (*authenticator, erro
 
 func (a *authenticator) isAdmin(u user) bool {
 	return a.admins[u.Subject] || (u.Email != "" && a.admins[u.Email])
+}
+
+func (a *authenticator) isViewer(u user) bool {
+	return a.viewers[u.Subject] || (u.Email != "" && a.viewers[u.Email])
 }
 
 func (a *authenticator) newSession(u user) (string, error) {
@@ -199,12 +211,32 @@ func (s *Server) currentUser(r *http.Request) (user, bool) {
 		return user{}, false
 	}
 	u.Admin = u.Admin || s.auth.isAdmin(u)
+	u.Viewer = s.auth.isViewer(u)
 	return u, true
 }
 
-// canAccess reports whether u may see/act on a job with the given owner. Auth
-// off, or an admin, sees everything; otherwise only the owner's own jobs.
-func (s *Server) canAccess(u user, owner string) bool {
+// canAccess reports whether u may READ a job (list, open, download). Auth off,
+// an admin, or a viewer sees everything; otherwise the owner and anyone the
+// owner shared it with.
+func (s *Server) canAccess(u user, owner string, shared []string) bool {
+	if !s.auth.enabled || u.Admin || s.auth.isViewer(u) {
+		return true
+	}
+	if owner == u.Subject {
+		return true
+	}
+	for _, sub := range shared {
+		if sub == u.Subject {
+			return true
+		}
+	}
+	return false
+}
+
+// canMutate reports whether u may MODIFY a job (cancel, delete, re-run, share).
+// Only the owner or an admin may — a viewer or a shared-with reader cannot. Auth
+// off is always the implicit owner.
+func (s *Server) canMutate(u user, owner string) bool {
 	if !s.auth.enabled || u.Admin {
 		return true
 	}

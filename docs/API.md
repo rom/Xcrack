@@ -387,7 +387,8 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
 | `GET` | `/api/v1/events` | Server-Sent Events: a contentless `changed` nudge whenever any job is created/updated/removed, so the History/Statistics/Recovered/Audit lists update live (each list re-fetch is still access-filtered) |
 | `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
-| `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads |
+| `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads (owner/admin) |
+| `POST` | `/api/v1/jobs/{id}/share` | set the subjects granted read access to a job (`{subjects:[...]}`; owner/admin, multi-user mode) |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
 | `GET` | `/api/v1/stats` | aggregate counters across jobs |
 | `GET` | `/api/v1/audit` | the access/action audit trail (admin-only; newest first) — who ran what, when, from where; never records recovered secrets |

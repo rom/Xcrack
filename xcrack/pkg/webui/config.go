@@ -111,6 +111,10 @@ type AuthConfig struct {
 	// Admins lists subjects or email addresses allowed to see and manage every
 	// user's jobs (not just their own).
 	Admins []string
+	// Viewers lists subjects or email addresses granted read-only access to every
+	// user's jobs (list, open, download, audit) but not the ability to create,
+	// cancel, delete, re-run or share — a reviewer/auditor role.
+	Viewers []string
 	// CookieSecure sets the Secure flag on the session cookie. Default true; set
 	// false only for plain-HTTP local testing.
 	CookieSecure bool

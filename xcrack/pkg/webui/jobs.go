@@ -93,6 +93,7 @@ type JobView struct {
 	Results     []FileResult `json:"results,omitempty"`
 	SpecYAML    string       `json:"spec_yaml,omitempty"` // the (sanitized) spec the job ran
 	Owner       string       `json:"owner,omitempty"`     // owning user's subject (multi-user mode)
+	Shared      []string     `json:"shared,omitempty"`    // subjects the owner granted read access (multi-user)
 }
 
 // Job is a single recovery run over one or more uploaded files. Its mutable
@@ -116,6 +117,7 @@ type Job struct {
 	Results     []FileResult
 	SpecYAML    string
 	Owner       string
+	Shared      []string
 
 	mu         sync.Mutex
 	mgr        *Manager // back-reference, for persistence on state change
@@ -141,6 +143,7 @@ func (j *Job) snapshot() JobView {
 		FilesTotal: j.FilesTotal, FilesDone: j.FilesDone, Candidates: atomic.LoadInt64(&j.Candidates),
 		Keyspace: j.Keyspace, Decrypted: j.Decrypted, Distributed: j.Distributed,
 		Results: append([]FileResult(nil), j.Results...), SpecYAML: j.SpecYAML, Owner: j.Owner,
+		Shared: append([]string(nil), j.Shared...),
 	}
 }
 
@@ -149,6 +152,13 @@ func (j *Job) ownerID() string {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.Owner
+}
+
+// ownerAndShared returns the job's owner and the subjects it is shared with.
+func (j *Job) ownerAndShared() (string, []string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.Owner, append([]string(nil), j.Shared...)
 }
 
 func (j *Job) setState(s JobState) {
@@ -413,7 +423,8 @@ func (m *Manager) jobFromView(v JobView, dir string) *Job {
 		Files: v.Files, Error: errMsg, FilesTotal: v.FilesTotal, FilesDone: v.FilesDone,
 		Candidates: v.Candidates, Keyspace: v.Keyspace, Decrypted: v.Decrypted,
 		Distributed: v.Distributed, Results: v.Results, SpecYAML: v.SpecYAML, Owner: v.Owner,
-		dir: dir, done: closedChan, mgr: m,
+		Shared: v.Shared,
+		dir:    dir, done: closedChan, mgr: m,
 	}
 }
 

@@ -813,11 +813,32 @@ async function refreshHistory() {
       el("td", {}, [
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
         el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
+        ownsJob(j) ? el("button", { type: "button", className: "mini", textContent: (j.shared && j.shared.length) ? "shared ✓" : "share", onclick: () => shareJob(j) }) : "",
         el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
       ]),
     ]));
   }
   host.append(tbl);
+}
+
+// ownsJob reports whether the signed-in user owns this job, so only an owner is
+// offered the Share control (single-user mode has no sharing).
+function ownsJob(j) {
+  return me && me.auth_enabled && me.user && j.owner && j.owner === me.user.subject;
+}
+
+// shareJob prompts for the subjects to grant read access and saves the share.
+async function shareJob(j) {
+  const current = (j.shared || []).join(", ");
+  const input = prompt("Share this job (read-only) with these user subjects, comma-separated.\nLeave empty to un-share.", current);
+  if (input === null) return; // cancelled
+  const subjects = input.split(",").map((s) => s.trim()).filter(Boolean);
+  let res;
+  try { res = await fetch(api("/jobs/" + j.id + "/share"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjects }) }); }
+  catch (e) { toast("Share failed: " + e); return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); toast("Share failed: " + (e.error || res.status)); return; }
+  toast(subjects.length ? ("Shared with " + subjects.length + " user(s)") : "Un-shared");
+  refreshHistory();
 }
 
 // rerunJob starts a fresh job from a saved one's spec + uploads (no re-upload)
