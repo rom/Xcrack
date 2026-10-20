@@ -2,6 +2,7 @@ package privkey
 
 import (
 	"bytes"
+	"encoding/asn1"
 	"os"
 	"path/filepath"
 	"testing"
@@ -71,4 +72,55 @@ func FuzzParse(f *testing.F) {
 			Verify(data, []byte("x"))
 		}
 	})
+}
+
+// TestParsePBES2RejectsOversizeCost guards the PBES2 cost caps: a PKCS#8 header
+// can set the PBKDF2 iteration count and the scrypt N/r/p freely, so an
+// out-of-range value must be refused at parse rather than hang / OOM. Builds the
+// minimal ASN.1 parsePBES2 consumes; a sane value is the positive control, so a
+// crafting error can't make the test pass vacuously.
+func TestParsePBES2RejectsOversizeCost(t *testing.T) {
+	mustMarshal := func(v any) []byte {
+		b, err := asn1.Marshal(v)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return b
+	}
+	mk := func(kdf algorithmIdentifier) encryptedPrivateKeyInfo {
+		iv := mustMarshal(make([]byte, 16)) // OCTET STRING IV
+		enc := algorithmIdentifier{Algorithm: oidAES256CBC, Params: asn1.RawValue{FullBytes: iv}}
+		pb := mustMarshal(pbes2Params{KDF: kdf, EncScheme: enc})
+		return encryptedPrivateKeyInfo{
+			Algo:          algorithmIdentifier{Algorithm: oidPBES2, Params: asn1.RawValue{FullBytes: pb}},
+			EncryptedData: make([]byte, 16),
+		}
+	}
+	pbkdf2KDF := func(iter int) algorithmIdentifier {
+		kp := mustMarshal(struct { // minimal PBKDF2-params: salt + iter only
+			Salt []byte
+			Iter int
+		}{make([]byte, 8), iter})
+		return algorithmIdentifier{Algorithm: oidPBKDF2, Params: asn1.RawValue{FullBytes: kp}}
+	}
+	scryptKDF := func(n int) algorithmIdentifier {
+		sp := mustMarshal(struct {
+			Salt    []byte
+			N, R, P int
+		}{make([]byte, 8), n, 8, 1})
+		return algorithmIdentifier{Algorithm: oidScrypt, Params: asn1.RawValue{FullBytes: sp}}
+	}
+	check := func(name string, epki encryptedPrivateKeyInfo, wantErr bool) {
+		_, _, _, _, _, _, _, err := parsePBES2(epki)
+		if wantErr && err == nil {
+			t.Fatalf("%s: accepted out-of-range cost", name)
+		}
+		if !wantErr && err != nil {
+			t.Fatalf("%s: positive control rejected: %v", name, err)
+		}
+	}
+	check("pbkdf2 sane", mk(pbkdf2KDF(1000)), false)
+	check("pbkdf2 huge", mk(pbkdf2KDF(maxPBKDF2Iter+1)), true)
+	check("scrypt sane", mk(scryptKDF(1<<10)), false)
+	check("scrypt huge N", mk(scryptKDF(1<<25)), true)
 }

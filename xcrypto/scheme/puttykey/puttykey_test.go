@@ -1,6 +1,7 @@
 package puttykey
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"testing"
@@ -52,4 +53,22 @@ func FuzzParse(f *testing.F) {
 			Verify(info, []byte("x"))
 		}
 	})
+}
+
+// TestParseRejectsOversizeArgon guards the v3 Argon2 cost caps: Memory (KiB) and
+// Passes come straight from the .ppk header, so a crafted value must be refused
+// at parse (OOM / hang) rather than reaching argon2. The unmodified key is the
+// positive control.
+func TestParseRejectsOversizeArgon(t *testing.T) {
+	raw := load(t, "enc_v3.ppk")
+	if _, err := Parse(raw); err != nil {
+		t.Fatalf("positive control: baseline v3 ppk rejected: %v", err)
+	}
+	bad := bytes.Replace(raw, []byte("Argon2-Memory: 8192"), []byte("Argon2-Memory: 999999999"), 1)
+	if bytes.Equal(bad, raw) {
+		t.Fatal("could not patch Argon2-Memory in testdata")
+	}
+	if _, err := Parse(bad); err == nil {
+		t.Fatal("oversize Argon2-Memory accepted")
+	}
 }

@@ -8,10 +8,11 @@ BIN     := bin
 MODULES := ./xcrypto/... ./xfileformats/... ./xcrack/...
 DUR     ?= 20s
 LDFLAGS ?=
+COVERPROFILE ?= coverage.out
 
 .DEFAULT_GOAL := build
 
-.PHONY: all build cli server web run-server run-web test race check vet fmt fmt-check fuzz samples tidy clean install help
+.PHONY: all build cli server web run-server run-web test race cover check vet fmt fmt-check fuzz samples tidy clean install help
 
 all: build ## Build everything (alias for build)
 
@@ -54,6 +55,21 @@ fmt-check: ## Fail if any Go source is unformatted
 fuzz: ## Run every fuzz target briefly (override duration: make fuzz DUR=60s)
 	./scripts/fuzz.sh $(DUR)
 
+cover: ## Measure statement coverage per module (writes <module>/$(COVERPROFILE) + totals)
+	@for m in xcrypto xfileformats xcrack; do \
+		echo "==== $$m ===="; \
+		( cd $$m && \
+		  pkgs=$$($(GO) list -f '{{if or .TestGoFiles .XTestGoFiles}}{{.ImportPath}}{{end}}' ./...) && \
+		  $(GO) test -covermode=atomic -coverprofile=$(COVERPROFILE) $$pkgs && \
+		  echo "---- $$m total ----" && $(GO) tool cover -func=$(COVERPROFILE) | tail -1 ) || exit 1; \
+	done
+	@echo 'per-line HTML for a module: cd <module> && $(GO) tool cover -html=$(COVERPROFILE)'
+
+# Note: cover enumerates only packages that have tests (go list filter). A
+# package with no test files makes `go test -cover` exec a covdata binary that a
+# downloaded Go toolchain ships only as a builtin, which fails the whole run;
+# restricting to tested packages avoids that and is the right coverage set anyway.
+
 check: fmt-check vet race ## Run everything CI runs (fmt check, vet, race tests)
 
 samples: ## (Re)generate the demo sample files in ./samples
@@ -66,6 +82,7 @@ tidy: ## go mod tidy for every module
 
 clean: ## Remove compiled binaries from ./bin
 	rm -f $(BIN)/xcrack $(BIN)/xcrackd $(BIN)/xcrack-web
+	rm -f xcrypto/$(COVERPROFILE) xfileformats/$(COVERPROFILE) xcrack/$(COVERPROFILE)
 
 install: ## go install the CLI, service and web GUI into GOBIN
 	$(GO) install ./xcrack/cmd/xcrack ./xcrack/cmd/xcrackd ./xcrack/cmd/xcrack-web
