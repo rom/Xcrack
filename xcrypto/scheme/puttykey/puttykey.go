@@ -34,6 +34,16 @@ var ErrNotEncrypted = errors.New("puttykey: key is not encrypted")
 // ErrUnsupported means an unsupported KDF/cipher (e.g. Argon2d).
 var ErrUnsupported = errors.New("puttykey: unsupported KDF or cipher")
 
+// Bounds on the attacker-controlled v3 Argon2 cost parameters from the .ppk
+// header, so a crafted value cannot force a multi-TB allocation (Memory, in
+// KiB) or an unbounded hang (Passes). Mirrors the keepass caps; PuTTY defaults
+// are Memory=8192 KiB, Passes=13-21, Parallelism=1.
+const (
+	maxArgonMemoryKiB = 1 << 21 // 2 GiB of Argon2 memory
+	maxArgonPasses    = 1 << 24
+	maxArgonParallel  = 1 << 8
+)
+
 // Info holds the parsed .ppk fields needed to test a passphrase.
 type Info struct {
 	Version    int
@@ -124,6 +134,13 @@ func Parse(data []byte) (*Info, error) {
 		info.Salt, _ = hex.DecodeString(kv["Argon2-Salt"])
 		if info.Argon2Type == "Argon2d" {
 			return nil, ErrUnsupported // x/crypto provides only Argon2i/Argon2id
+		}
+		// Bound the Argon2 cost so a crafted header cannot OOM (Memory) or hang
+		// (Passes) the derivation; Parallelism must be >0 or argon2 panics.
+		if info.Memory == 0 || info.Memory > maxArgonMemoryKiB ||
+			info.Passes == 0 || info.Passes > maxArgonPasses ||
+			info.Parallel == 0 {
+			return nil, ErrUnsupported
 		}
 	}
 	return info, nil

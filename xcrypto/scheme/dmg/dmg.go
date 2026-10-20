@@ -32,6 +32,12 @@ import (
 // count (John applies the same default for both versions).
 const defaultIterations = 1000
 
+// maxIterations bounds the attacker-controlled PBKDF2 iteration count from the
+// encrcdsa header (or a $dmg$ hash line) so a crafted value (up to 2^32-1)
+// cannot turn verification into a CPU-exhaustion DoS. Real images use
+// ~1000–250000.
+const maxIterations = 1 << 24
+
 // Params are the per-image fields needed to verify a password. Version is 1 or
 // 2; the v1 fields (WrappedAESKey/WrappedHMACKey) and the v2 fields
 // (IV/EncryptedKeyblob/ChunkNo/Chunk) are mutually exclusive.
@@ -105,6 +111,9 @@ func VerifyWithDK(dk []byte, p Params) (bool, error) {
 
 // Verify reports whether password unlocks the image described by p.
 func Verify(password []byte, p Params) (bool, error) {
+	if p.Iterations > maxIterations {
+		return false, xcrypto.ErrUnsupported // implausible PBKDF2 cost: refuse rather than hang
+	}
 	dk, err := prim.PBKDF2(sha1.New, string(password), p.salt20(), p.iterations(), 32)
 	if err != nil {
 		return false, err

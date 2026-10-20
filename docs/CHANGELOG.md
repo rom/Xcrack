@@ -206,6 +206,32 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   stays the default and is unchanged.
 
 ### Fixed / performance
+- **Parser KDF-cost/allocation DoS hardening (sweep prompted by the RAR5 fix).**
+  An audit of every scheme for the same bug class — an untrusted header value
+  driving a KDF/hash loop or an allocation without an upper bound — found and
+  capped several more. All are reachable from the engine's Detect→Probe→Verify
+  path, and the KDF loops take no context, so a hang can't be cancelled; the cap
+  at parse/verify is the mitigation:
+  - **ethkeystore** — `dklen` was lower-bounded only; a huge value both allocated
+    and multiplied PBKDF2 cost. Capped (`maxDKLen`). Also added a scrypt working-
+    set ceiling (`128·N·r`), since the per-parameter caps still allowed tens of
+    GiB.
+  - **dmg** — the `encrcdsa`/`$dmg$` PBKDF2 iteration count (a uint32) was
+    unbounded. Capped at `maxIterations` (1<<24).
+  - **p12** — the PKCS#12 MacData iteration count (ASN.1 INTEGER) was unbounded.
+    Capped at `maxMacIterations` (1<<24).
+  - **privkey** — PBES2 PBKDF2 iterations and scrypt `N/r/p` were unbounded.
+    Capped (iterations 1<<24; scrypt N≤1<<20 with a `128·N·r` ceiling).
+  - **puttykey** — `.ppk` v3 Argon2 `Memory` (KiB) and `Passes` were unbounded
+    (OOM / hang). Capped, mirroring the keepass bounds; parallelism must be >0.
+  - **ooxml** — agile `KeyBits` was unbounded, forcing large per-candidate key-
+    buffer allocations before the cipher rejected the size. Bounded (`maxKeyBits`).
+  - **sshkey** — the bcrypt-pbkdf `rounds` field was never validated; safe today
+    only because the pinned `x/crypto` caps it, so a cap is now enforced at parse
+    (`maxRounds`) independent of the dependency version.
+  Adds scheme-level regression tests for the ethkeystore and dmg caps. Already-
+  bounded schemes (rar5, keepass, age, iwork, odf, ooxml spinCount, pgp, …) were
+  confirmed correct and unchanged.
 - **RAR5 KDF-cost denial of service fixed (found by nightly fuzzing).** A RAR5
   crypt header stores its PBKDF2 iteration count as a one-byte base-2 logarithm,
   which `parseRAR5CryptRecord` accepted unchecked. A corrupt or hostile header

@@ -21,6 +21,11 @@ import (
 // ErrNotPFX means the input is not a PKCS#12 file (or has no MacData to attack).
 var ErrNotPFX = errors.New("p12: not a PKCS#12 file with a password MAC")
 
+// maxMacIterations bounds the attacker-controlled MacData iteration count: the
+// KDF spin loop runs that many hashes per candidate, so a crafted value (ASN.1
+// INTEGER, up to ~2^63) would hang verification. Real PFX files use 1024–~100000.
+const maxMacIterations = 1 << 24
+
 var (
 	oidSHA1   = asn1.ObjectIdentifier{1, 3, 14, 3, 2, 26}
 	oidSHA256 = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 2, 1}
@@ -85,6 +90,9 @@ func Parse(data []byte) (*Info, error) {
 	iter := p.MacData.Iterations
 	if iter <= 0 {
 		iter = 1
+	}
+	if iter > maxMacIterations {
+		return nil, ErrNotPFX // implausible KDF cost: refuse rather than hang
 	}
 	return &Info{
 		authSafe: authSafe,

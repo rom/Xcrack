@@ -3,6 +3,7 @@ package ethkeystore
 import (
 	"encoding/hex"
 	"testing"
+	"time"
 )
 
 func mustHex(t *testing.T, s string) []byte {
@@ -191,6 +192,33 @@ func TestDeriveBounds(t *testing.T) {
 	for i, p := range bad {
 		if _, err := Verify([]byte("x"), p); err == nil {
 			t.Fatalf("case %d: expected error for crafted params, got nil", i)
+		}
+	}
+}
+
+// TestDeriveRejectsOversizeParams guards the KDF-cost/allocation DoS caps: a
+// keystore can set dklen and the scrypt N/r freely, so an out-of-range value
+// must be refused promptly rather than driving a multi-GiB allocation or a
+// runaway PBKDF2. Uses a watchdog so a regression fails instead of hanging.
+func TestDeriveRejectsOversizeParams(t *testing.T) {
+	salt := make([]byte, 16)
+	mac := make([]byte, 32)
+	ct := make([]byte, 16)
+	cases := map[string]Params{
+		"pbkdf2 huge dklen": {KDF: KDFPBKDF2, C: 1000, DKLen: maxDKLen + 1, Salt: salt, MAC: mac, Ciphertext: ct},
+		"scrypt N*r memory": {KDF: KDFScrypt, N: maxScryptN, R: maxR, P: 1, DKLen: 32, Salt: salt, MAC: mac, Ciphertext: ct},
+	}
+	for name, p := range cases {
+		p := p
+		done := make(chan bool, 1)
+		go func() { ok, _ := Verify([]byte("x"), p); done <- ok }()
+		select {
+		case ok := <-done:
+			if ok {
+				t.Fatalf("%s: Verify accepted out-of-range params", name)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%s: Verify did not reject promptly (cost/alloc DoS)", name)
 		}
 	}
 }

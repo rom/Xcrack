@@ -39,6 +39,10 @@ const (
 	agileSegment = 4096
 	// maxSpinCount bounds the agile iterated-hash work factor against a crafted file.
 	maxSpinCount = 50_000_000
+	// maxKeyBits bounds the attacker-controlled agile key size so a crafted
+	// EncryptionInfo cannot force large per-candidate key-buffer allocations
+	// (keyBits/8 bytes) before the cipher rejects the size. Real files use 128/192/256.
+	maxKeyBits = 4096
 )
 
 // Info is a parsed EncryptionInfo. Use ParseEncryptionInfo to build one.
@@ -167,6 +171,11 @@ func parseAgile(xmlBytes []byte) (*Info, error) {
 	// Bound block sizes to sane AES values.
 	if ke.BlockSize <= 0 || ke.BlockSize > 256 || doc.KeyData.BlockSize <= 0 || doc.KeyData.BlockSize > 256 {
 		return nil, fmt.Errorf("%w: implausible block size", xcrypto.ErrMalformed)
+	}
+	// Bound key sizes: keyBits/8 sets per-candidate key-buffer allocations, so a
+	// crafted huge keyBits is memory pressure before aes.NewCipher rejects it.
+	if ke.KeyBits <= 0 || ke.KeyBits > maxKeyBits || doc.KeyData.KeyBits <= 0 || doc.KeyData.KeyBits > maxKeyBits {
+		return nil, fmt.Errorf("%w: implausible key size", xcrypto.ErrMalformed)
 	}
 	keyHash, _, err := hashByName(doc.KeyData.HashAlgorithm)
 	if err != nil {

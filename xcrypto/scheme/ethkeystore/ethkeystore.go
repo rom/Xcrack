@@ -55,6 +55,13 @@ const (
 	maxPBKDF2C = 1 << 24
 	maxSalt    = 1 << 12
 	maxCipher  = 1 << 20
+	// maxDKLen bounds the KDF output length. The derived key only needs 32 bytes
+	// (the MAC uses derivedKey[16:32]); an attacker-set dklen otherwise both
+	// allocates and multiplies PBKDF2 cost by ceil(dklen/32).
+	maxDKLen = 1 << 10
+	// maxScryptMem bounds scrypt's working set (~128*N*r bytes): the per-parameter
+	// caps alone still allow N*r large enough to allocate tens of GiB.
+	maxScryptMem int64 = 1 << 30 // 1 GiB
 )
 
 // maxJSON bounds the keystore document Parse accepts; real keystores are a few
@@ -116,7 +123,7 @@ func Parse(doc []byte) (Params, error) {
 	if dklen == 0 {
 		dklen = 32
 	}
-	if dklen < 32 { // need at least derivedKey[16:32] for the MAC
+	if dklen < 32 || dklen > maxDKLen { // need [16:32] for the MAC; cap to bound KDF cost/alloc
 		return Params{}, xcrypto.ErrMalformed
 	}
 	p := Params{Salt: salt, DKLen: dklen, Ciphertext: ct, MAC: mac}
@@ -156,13 +163,17 @@ func (p Params) derive(password []byte) ([]byte, error) {
 	if dklen <= 0 {
 		dklen = 32
 	}
+	if dklen > maxDKLen {
+		return nil, xcrypto.ErrUnsupported
+	}
 	if len(p.Salt) == 0 || len(p.Salt) > maxSalt {
 		return nil, xcrypto.ErrMalformed
 	}
 	switch p.KDF {
 	case KDFScrypt:
 		if p.N < 2 || p.N > maxScryptN || p.N&(p.N-1) != 0 || // N must be a power of two > 1
-			p.R < 1 || p.R > maxR || p.P < 1 || p.P > maxP {
+			p.R < 1 || p.R > maxR || p.P < 1 || p.P > maxP ||
+			int64(128)*int64(p.N)*int64(p.R) > maxScryptMem { // bound the working set
 			return nil, xcrypto.ErrUnsupported
 		}
 		return scrypt.Key(password, p.Salt, p.N, p.R, p.P, dklen)
