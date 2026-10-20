@@ -1186,10 +1186,12 @@ target, otherwise an indeterminate sweep), a live **ETA** on a determinate run
 long brute force is better served by a wordlist + rules), the **latest
 candidate/term** being tested, live throughput, the engine log (with an
 autoscroll toggle and a copy button), and each recovered password as it is
-found. When the browser tab is in the background, a completion updates the tab
-title (and, if you allow it, raises a desktop notification). When a file is
-unlocked its decrypted contents can be **downloaded** as a zip of the extracted
-tree.
+found. When the run finishes it records an **end timestamp**, the progress bar
+**stops** (the indeterminate sweep is tied to the live stream), and the results
+lead with an **"X of Y decrypted"** summary. When the browser tab is in the
+background, a completion updates the tab title (and, if you allow it, raises a
+desktop notification). When a file is unlocked its decrypted contents can be
+**downloaded** as a zip of the extracted tree.
 
 **Previewing a wordlist:** next to each uploaded wordlist (or auxiliary file) a
 **Preview** button shows the first lines of the `.txt` in a dialog, so you can

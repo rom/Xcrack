@@ -206,6 +206,11 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   stays the default and is unchanged.
 
 ### Fixed / performance
+- **`xcrack-web` job progress finalises cleanly.** The indeterminate progress
+  bar kept sweeping forever after a run ended (it re-added the animation on the
+  final update); it is now tied to the live event stream and stops when the run
+  finishes. The progress panel gained an **Ended** timestamp alongside Started/
+  Elapsed, and the results now lead with an **"X of Y decrypted"** summary.
 - **`xcrack-web` single-user mode no longer shows a login gate.** The full-screen
   login overlay (`.login-gate`) was styled `display:flex` with no `[hidden]`
   rule, so the `hidden` attribute — and the `hidden=true` the SPA sets in

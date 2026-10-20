@@ -221,3 +221,6 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 .wz-estimate { margin: 12px 0 2px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); font-size: 13px; }
 .wz-estimate:empty { display: none; }
 .wz-estimate div { margin: 2px 0; }
+
+/* --- results summary (X of Y decrypted) --- */
+.results-summary { font-weight: 600; margin: 2px 0 10px; }

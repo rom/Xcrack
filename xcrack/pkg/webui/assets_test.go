@@ -42,6 +42,37 @@ func TestWizardControls(t *testing.T) {
 	}
 }
 
+// TestJobProgressControls guards the job-progress UI: the "Ended" timestamp
+// field, the results "X of Y decrypted" summary, and that the indeterminate
+// progress bar stops animating once the event stream closes (keyed on
+// evtSource), so a finished run doesn't sweep forever.
+func TestJobProgressControls(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `id="job-ended"`) {
+		t.Error("index.html is missing the #job-ended timestamp field")
+	}
+
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	js2 := string(js)
+	if !strings.Contains(js2, `job-ended`) {
+		t.Error("app.js never sets #job-ended")
+	}
+	if !strings.Contains(js2, "results-summary") || !strings.Contains(js2, "decrypted`") {
+		t.Error("app.js is missing the 'X of Y decrypted' results summary")
+	}
+	// The indeterminate sweep must be gated on a live event stream so it stops
+	// when the run ends.
+	if !strings.Contains(js2, `bar.classList.toggle("indeterminate", evtSource != null)`) {
+		t.Error("app.js no longer gates the indeterminate bar on evtSource; a finished run would animate forever")
+	}
+}
+
 // TestLoginGateHiddenGuard guards against a regression where the full-screen
 // login overlay (`.login-gate`) is styled `display:flex` but has no
 // `[hidden]` rule, so the `hidden` attribute (and the `hidden=true` the SPA
