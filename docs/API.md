@@ -385,6 +385,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `GET` | `/api/v1/jobs` / `/api/v1/jobs/{id}` | list jobs / one job's state + results |
 | `DELETE` | `/api/v1/jobs/{id}` | remove a finished job from the history |
 | `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
+| `GET` | `/api/v1/events` | Server-Sent Events: a contentless `changed` nudge whenever any job is created/updated/removed, so the History/Statistics/Recovered/Audit lists update live (each list re-fetch is still access-filtered) |
 | `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
 | `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |

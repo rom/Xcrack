@@ -79,6 +79,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("GET /api/v1/jobs/{id}", p(s.handleGetJob))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", p(s.handleDeleteJob))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/events", p(s.handleJobEvents))
+	mux.HandleFunc("GET /api/v1/events", p(s.handleListEvents))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", p(s.handleCancelJob))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/rerun", p(s.handleRerun))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/download", p(s.handleDownload))

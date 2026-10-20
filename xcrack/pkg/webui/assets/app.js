@@ -60,7 +60,26 @@ async function boot() {
   const gated = await applyAuthGate();
   Editor.set(META.starter_spec || "");
   applySharedConfig();
-  if (!gated) loadDocs();
+  if (!gated) { loadDocs(); wireLiveUpdates(); }
+}
+
+// wireLiveUpdates subscribes to the server-wide "list changed" stream so the
+// History, Statistics, Recovered and Audit lists refresh on their own when a job
+// changes anywhere, instead of waiting for a manual refresh. The browser's
+// EventSource reconnects automatically on a dropped connection.
+function wireLiveUpdates() {
+  let es;
+  try { es = new EventSource(api("/events")); } catch { return; }
+  es.addEventListener("changed", () => {
+    const active = document.querySelector("#tabs button.active");
+    switch (active && active.dataset.tab) {
+      case "history": refreshHistory(); break;
+      case "stats": refreshStats(); break;
+      case "recovered": refreshVault(); break;
+      case "audit": refreshAudit(); break;
+    }
+  });
+  es.onerror = () => {};
 }
 
 // ---- Phase 6: trust banners -------------------------------------------------

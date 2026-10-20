@@ -15,6 +15,14 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — live-updating lists.** The History, Statistics, Recovered and
+  Audit tabs now refresh on their own the moment a job changes anywhere, instead
+  of only on a manual **Refresh** or a tab switch. A new server-wide
+  `GET /api/v1/events` Server-Sent Events stream emits a contentless `changed`
+  nudge on every job create/update/remove, which the SPA uses to re-fetch
+  whatever list it is showing; the nudge carries no job data, and each list
+  re-fetch stays filtered to the requesting user, so the stream leaks nothing
+  about other users' jobs. (The per-job progress stream is unchanged.)
 - **Web GUI — access/action audit trail + admin Audit view.** `xcrack-web` now
   keeps a structured, append-only audit trail (`<workdir>/audit.jsonl`,
   surviving restarts) of who did what, when and from where — job create / cancel

@@ -161,6 +161,7 @@ func (j *Job) setState(s JobState) {
 	j.emit(Event{Type: "state", State: s})
 	if j.mgr != nil {
 		j.mgr.persist(j)
+		j.mgr.hub.notify() // a state change may reorder/re-decorate the lists
 	}
 }
 
@@ -217,6 +218,7 @@ type Manager struct {
 	sem   chan struct{}      // job-concurrency limiter (nil = unlimited)
 	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
 	trail *auditTrail        // access/action audit (set by NewServer; may be nil)
+	hub   *hub               // server-wide "list changed" nudges
 }
 
 // vaultActive reports whether the found-password vault is in use. It is a
@@ -253,7 +255,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o700); err != nil {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
-	m := &Manager{cfg: cfg, jobs: map[string]*Job{}}
+	m := &Manager{cfg: cfg, jobs: map[string]*Job{}, hub: newHub()}
 	if cfg.MaxConcurrentJobs > 0 {
 		m.sem = make(chan struct{}, cfg.MaxConcurrentJobs)
 	}
@@ -431,6 +433,7 @@ func (m *Manager) remove(id string) bool {
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 	}
+	m.hub.notify()
 	return true
 }
 
@@ -485,6 +488,7 @@ func (m *Manager) newJob() (*Job, error) {
 	m.jobs[id] = j
 	m.mu.Unlock()
 	m.persist(j) // a durable record exists from creation, before the run starts
+	m.hub.notify()
 	return j, nil
 }
 
