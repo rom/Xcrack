@@ -522,6 +522,7 @@ async function runJob() {
     jobKeyspace = job.keyspace ?? -1;
   } catch { jobStart = Date.now(); jobKeyspace = -1; }
   $("job-started").textContent = new Date(jobStart).toLocaleString();
+  $("job-ended").textContent = "—";
   startElapsed();
   streamEvents(id);
 }
@@ -591,8 +592,10 @@ function updateProgress(candidates, latest) {
     }
     $("progress-text").textContent = line;
   } else {
-    bar.classList.add("indeterminate");
+    // Animate the sweep only while the event stream is live; a finished run
+    // (finishRun / openHistoryJob close evtSource first) leaves a static bar.
     fill.style.width = "100%";
+    bar.classList.toggle("indeterminate", evtSource != null);
     $("progress-text").textContent = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
   }
   if (evtSource) setTitleProgress(jobKeyspace > 0 ? Math.min(100, candidates / jobKeyspace * 100) : -1);
@@ -620,6 +623,7 @@ async function finishRun(state) {
   if (!currentJob) return;
   const job = await (await fetch(api("/jobs/" + currentJob))).json();
   if (job.ended_at && job.started_at) $("job-elapsed").textContent = fmtDur(job.ended_at - job.started_at);
+  if (job.ended_at) $("job-ended").textContent = new Date(job.ended_at).toLocaleString();
   updateProgress(job.candidates || 0, "");
   renderResults(job);
   const ok = state === "done";
@@ -630,6 +634,8 @@ async function finishRun(state) {
 
 function renderResults(job) {
   const root = $("results"); root.textContent = "";
+  const total = job.files_total || (job.files || []).length;
+  root.append(el("div", { className: "results-summary", textContent: `${job.decrypted || 0} of ${total} decrypted` }));
   if (job.distributed) root.append(el("div", { className: "hint", textContent: "distributed run — passwords recovered on the servers; decrypted content stays there." }));
   (job.results || []).forEach((fr) => {
     const card = el("div", { className: "result" });
@@ -833,13 +839,16 @@ async function openHistoryJob(id) {
   jobKeyspace = job.keyspace ?? -1;
   jobStart = job.started_at || job.created_at || Date.now();
   $("job-started").textContent = jobStart ? new Date(jobStart).toLocaleString() : "—";
+  $("job-ended").textContent = "—";
   if (job.state === "running" || job.state === "queued") {
     setRunStatus("Running…"); $("run").disabled = true; $("cancel").disabled = false;
     startElapsed(); streamEvents(id);
     return;
   }
+  if (evtSource) { evtSource.close(); evtSource = null; }
   stopElapsed(); $("run").disabled = false; $("cancel").disabled = true;
   $("job-elapsed").textContent = (job.ended_at && job.started_at) ? fmtDur(job.ended_at - job.started_at) : "—";
+  $("job-ended").textContent = job.ended_at ? new Date(job.ended_at).toLocaleString() : "—";
   resetBar(); updateProgress(job.candidates || 0, "");
   const label = { done: "✓ Done", canceled: "Canceled", interrupted: "Interrupted" }[job.state] || "Error";
   setRunStatus(label, job.state !== "done");
