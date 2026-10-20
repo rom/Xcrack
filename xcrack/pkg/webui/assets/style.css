@@ -235,6 +235,10 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: 12px; font-weight: 500; }
 .muted { color: var(--muted); font-size: 13px; }
 
+/* A resumable (interrupted) job's re-run button is accented so it reads as
+   "pick up where this left off" rather than a fresh restart. */
+.mini.resume { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
 /* --- accessibility --- */
 /* Visible, consistent keyboard-focus ring (independent of per-control styles),
    drawn only for keyboard/AT focus so a mouse click doesn't ring every button. */

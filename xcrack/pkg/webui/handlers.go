@@ -187,6 +187,26 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	yamlOut, _ := spec.Marshal()
 
+	// Solved-challenge round-trip: any uploaded `recovered` parts (the JSON a
+	// challenge exported here was solved into on an external cracker) are decoded
+	// into priority passwords, tried first on every file — the GUI equivalent of
+	// the CLI's --resume-from. Malformed payloads are rejected so a mistake is
+	// visible rather than silently dropped.
+	var priority []string
+	for _, fh := range r.MultipartForm.File["recovered"] {
+		data, err := readPart(fh)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "recovered upload: "+err.Error())
+			return
+		}
+		pws, err := decodeRecoveredPasswords(data)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "recovered-password file: "+err.Error())
+			return
+		}
+		priority = append(priority, pws...)
+	}
+
 	job.mu.Lock()
 	job.spec = spec
 	job.Files = names
@@ -196,10 +216,15 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	job.Owner = owner.Subject
 	job.CaseID = strings.TrimSpace(r.FormValue("case_id"))
 	job.Examiner = strings.TrimSpace(r.FormValue("examiner"))
+	job.priority = priority
 	job.mu.Unlock()
 
 	s.mgr.start(job)
-	s.audit(r, "job.create", job.ID, fmt.Sprintf("%d file(s)", len(names)))
+	detail := fmt.Sprintf("%d file(s)", len(names))
+	if len(priority) > 0 {
+		detail += fmt.Sprintf(", %d resume password(s)", len(priority))
+	}
+	s.audit(r, "job.create", job.ID, detail)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID})
 }
 

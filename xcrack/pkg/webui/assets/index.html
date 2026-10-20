@@ -221,6 +221,13 @@
       </div>
     </details>
 
+    <details class="card" id="resume-card">
+      <summary>Resume — solved challenges (optional)</summary>
+      <p class="hint">Bring back the <code>recovered.json</code> you solved on an external cracker (exported from <em>Tools → Export challenge</em>). Its password(s) are tried <strong>first</strong> on every file — the GUI equivalent of the CLI's <code>--resume-from</code>. You can attach several.</p>
+      <div class="field"><label>Solved-challenge JSON</label><input type="file" id="recovered" accept=".json,application/json" multiple></div>
+      <p class="hint">Note: an interrupted single-file run can also be resumed from its checkpoint by <strong>re-running</strong> it in History — no re-upload needed.</p>
+    </details>
+
     <div class="runbar">
       <button type="button" id="wizard-open" data-i18n="btn.wizard">✨ Wizard</button>
       <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it" data-i18n="btn.estimate">◴ Estimate</button>

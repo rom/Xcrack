@@ -604,6 +604,7 @@ async function runJob() {
   if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
   if ($("case_id").value.trim()) fd.append("case_id", $("case_id").value.trim());
   if ($("examiner").value.trim()) fd.append("examiner", $("examiner").value.trim());
+  for (const f of $("recovered").files) fd.append("recovered", f);
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
   $("latest-term").textContent = ""; resetBar();
   Charts.reset();
@@ -903,7 +904,12 @@ async function refreshHistory() {
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report"), target: "_blank", rel: "noopener", textContent: "report" }) : "",
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report?format=csv"), textContent: "csv" }) : "",
-        el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
+        el("button", {
+          type: "button", className: j.resumable ? "mini resume" : "mini",
+          textContent: j.resumable ? "⟳ resume" : "re-run",
+          title: j.resumable ? "Resume this interrupted run from its saved checkpoint" : "Start a fresh run from this job's spec and files",
+          onclick: () => rerunJob(j.id),
+        }),
         ownsJob(j) ? el("button", { type: "button", className: "mini", textContent: (j.shared && j.shared.length) ? "shared ✓" : "share", onclick: () => shareJob(j) }) : "",
         el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
       ]),
@@ -1589,7 +1595,7 @@ async function exportChallenge() {
   // body is a JSON {error} explaining why nothing was exported.
   if (res.ok && res.headers.get("Content-Disposition")) {
     downloadBlob(await res.blob(), "challenges.json");
-    out.textContent = "✓ Downloaded challenges.json — solve externally, then xcrack --resume-from";
+    out.textContent = "✓ Downloaded challenges.json — solve it externally, then bring the result back via Crack → Resume (or xcrack --resume-from).";
     return;
   }
   const j = await res.json().catch(() => ({}));

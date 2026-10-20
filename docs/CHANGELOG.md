@@ -15,6 +15,21 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — resume: solved-challenge round-trip + checkpointed re-runs.** Two
+  long-run ergonomics the CLI had and the GUI lacked. **Challenge round-trip:**
+  the *Tools → Export challenge* card already exported a portable JSON envelope
+  to solve on an external cracker; a job's Crack form now has a **Resume** panel
+  to bring the solved `recovered.json` back in (multipart `recovered` parts,
+  one or many). Its passwords are tried **first** on every file — the GUI
+  equivalent of `--resume-from` — and the job view reports how many as
+  `resume_count`. **Checkpointed resume:** a single-target crack now persists its
+  candidate position under the job directory; if the run is interrupted (server
+  restart or cancel) the job is marked **resumable**, and **re-running** it
+  carries the checkpoint forward so it picks up near where it stopped instead of
+  restarting (the History *re-run* button becomes *⟳ resume*). The checkpoint is
+  keyed to the exact spec + file, so a changed attack starts fresh, and a
+  completed run removes its own checkpoint. No engine or spec change — it reuses
+  `candidates.Checkpoint` and the assembler's priority-password seam.
 - **Web GUI — internationalisation framework.** The console now has a small i18n
   layer (`assets/i18n.js`): translatable chrome carries a `data-i18n*` key and
   keeps its English text inline, a catalogue per locale supplies translations,

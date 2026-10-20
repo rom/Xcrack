@@ -387,7 +387,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
 | `GET` | `/api/v1/events` | Server-Sent Events: a contentless `changed` nudge whenever any job is created/updated/removed, so the History/Statistics/Recovered/Audit lists update live (each list re-fetch is still access-filtered) |
 | `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
-| `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads (owner/admin) |
+| `POST` | `/api/v1/jobs/{id}/rerun` | start a new job from a finished/interrupted job's saved spec + uploads (owner/admin). A single-target job's **checkpoint** is carried forward, so re-running an interrupted run **resumes** near where it stopped rather than restarting (the job view's `resumable` flag marks such jobs) |
 | `POST` | `/api/v1/jobs/{id}/share` | set the subjects granted read access to a job (`{subjects:[...]}`; owner/admin, multi-user mode) |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
 | `GET` | `/api/v1/jobs/{id}/report` | a self-contained forensic report for the job — case metadata (`case_id`/`examiner`, set at submission), the per-node recovery results with each node's SHA-256, and the job's chain of custody (its audit-trail entries). `?format=html` (default, printable) or `?format=csv`. Passwords are shown only under `--expose-secrets` |
@@ -413,6 +413,11 @@ A job is `multipart/form-data`:
   inputs the spec references by **base name**.
 - `case_id`, `examiner` — optional forensic case metadata recorded on the job and
   surfaced in its report (`/jobs/{id}/report`).
+- `recovered` — zero or more parts: a solved-challenge payload (a
+  `RecoveredPassword` JSON object, or a JSON array of them) exported earlier via
+  `/tools/export-challenge` and solved on an external cracker. Its passwords are
+  tried **first** on every file (the GUI equivalent of the CLI `--resume-from`);
+  the job view reports how many as `resume_count`.
 
 ```sh
 curl -sS -X POST http://127.0.0.1:8899/api/v1/jobs \

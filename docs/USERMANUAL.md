@@ -1209,7 +1209,18 @@ vanishing.
 
 Any history row can be **re-run**: a fresh job is started from the saved spec
 and the files already uploaded for the original, so a GUI "resume" needs no
-re-upload.
+re-upload. A **single-target** run is also **checkpointed** — its candidate
+position is saved under the job directory — so if it is interrupted (the server
+restarts, or you cancel it) the row is marked **resumable** and its button
+becomes **⟳ resume**: re-running picks up near where it stopped instead of
+starting over. The checkpoint is tied to the exact spec and file, so changing
+the attack starts fresh, and a completed run clears its own checkpoint.
+
+**Resuming a solved challenge.** For an attack better run elsewhere (a GPU
+farm), export a portable challenge from **Tools → Export challenge**, solve it
+externally, then attach the resulting `recovered.json` in the Crack tab's
+**Resume** panel. Its password(s) are tried first on every file — the GUI
+equivalent of the CLI's `--resume-from`.
 
 **Case metadata and the forensic report.** Before a run you can record an
 optional **Case ID** and **examiner** (the *Case details* panel on the Crack

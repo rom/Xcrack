@@ -124,6 +124,29 @@ func TestAccessibilityMarkup(t *testing.T) {
 	}
 }
 
+// TestResumeUI guards the resume affordances in the SPA: the solved-challenge
+// upload field on the Crack form and the JS that posts it as a `recovered` part,
+// so the challenge round-trip stays wired end to end.
+func TestResumeUI(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	if !strings.Contains(string(html), `id="recovered"`) {
+		t.Error("index.html is missing the #recovered solved-challenge upload field")
+	}
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	if !strings.Contains(string(js), `fd.append("recovered"`) {
+		t.Error("app.js no longer posts the solved-challenge file as a `recovered` part")
+	}
+	if !strings.Contains(string(js), "j.resumable") {
+		t.Error("app.js no longer surfaces a resumable job's resume button")
+	}
+}
+
 // TestI18nFramework guards the internationalisation wiring: the page must load
 // i18n.js and carry a language selector, and every data-i18n* key the markup
 // references must be defined in BOTH shipped catalogues (English and Swedish),
