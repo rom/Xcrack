@@ -10,18 +10,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a href="#main" class="skip-link">Skip to main content</a>
 <header>
-  <div class="brand">🔓 <span>Xcrack</span></div>
-  <nav id="tabs">
-    <button data-tab="crack" class="active">Crack</button>
-    <button data-tab="history">History</button>
-    <button data-tab="recovered">Recovered</button>
-    <button data-tab="library">Library</button>
-    <button data-tab="tools">Tools</button>
-    <button data-tab="stats">Statistics</button>
-    <button data-tab="audit" id="tab-btn-audit">Audit</button>
-    <button data-tab="docs">Docs</button>
-    <button data-tab="config">Configuration</button>
+  <div class="brand"><span aria-hidden="true">🔓</span> <span>Xcrack</span></div>
+  <nav id="tabs" role="tablist" aria-label="Sections">
+    <button data-tab="crack" class="active" role="tab" id="tabbtn-crack" aria-controls="tab-crack" aria-selected="true">Crack</button>
+    <button data-tab="history" role="tab" id="tabbtn-history" aria-controls="tab-history" aria-selected="false" tabindex="-1">History</button>
+    <button data-tab="recovered" role="tab" id="tabbtn-recovered" aria-controls="tab-recovered" aria-selected="false" tabindex="-1">Recovered</button>
+    <button data-tab="library" role="tab" id="tabbtn-library" aria-controls="tab-library" aria-selected="false" tabindex="-1">Library</button>
+    <button data-tab="tools" role="tab" id="tabbtn-tools" aria-controls="tab-tools" aria-selected="false" tabindex="-1">Tools</button>
+    <button data-tab="stats" role="tab" id="tabbtn-stats" aria-controls="tab-stats" aria-selected="false" tabindex="-1">Statistics</button>
+    <button data-tab="audit" id="tab-btn-audit" role="tab" aria-controls="tab-audit" aria-selected="false" tabindex="-1">Audit</button>
+    <button data-tab="docs" role="tab" id="tabbtn-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1">Docs</button>
+    <button data-tab="config" role="tab" id="tabbtn-config" aria-controls="tab-config" aria-selected="false" tabindex="-1">Configuration</button>
   </nav>
   <div class="spacer"></div>
   <label class="modeswitch" title="Reveal every engine option in the Crack form"><input type="checkbox" id="advanced"> Advanced</label>
@@ -29,19 +30,19 @@
   <span id="user-area"></span>
 </header>
 
-<div id="banners"></div>
+<div id="banners" role="region" aria-label="Notices" aria-live="polite"></div>
 
-<div id="login-gate" class="login-gate" hidden>
+<div id="login-gate" class="login-gate" role="dialog" aria-modal="true" aria-label="Sign in" hidden>
   <div class="login-box">
-    <div class="brand">🔓 <span>Xcrack</span></div>
+    <div class="brand"><span aria-hidden="true">🔓</span> <span>Xcrack</span></div>
     <p>This console requires you to sign in.</p>
     <button type="button" id="login-btn" class="primary">Sign in</button>
   </div>
 </div>
 
-<main>
+<main id="main">
   <!-- CRACK ------------------------------------------------------------- -->
-  <section id="tab-crack" class="tab active">
+  <section id="tab-crack" class="tab active" role="tabpanel" aria-labelledby="tabbtn-crack" tabindex="0">
     <div class="grid">
       <div class="card">
         <h2>1 · Choose files</h2>
@@ -64,7 +65,7 @@
             <button type="button" class="mb-tok" data-tok="?d">?d 0–9</button>
             <button type="button" class="mb-tok" data-tok="?s">?s sym</button>
             <button type="button" class="mb-tok" data-tok="?a">?a all</button>
-            <button type="button" class="mb-tok mb-ctl" data-tok="backspace">⌫</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="backspace" aria-label="Delete last token">⌫</button>
             <button type="button" class="mb-tok mb-ctl" data-tok="clear">clear</button>
           </div>
           <div class="mb-field"><code id="mb-mask" class="mb-mask">(empty)</code></div>
@@ -225,7 +226,7 @@
       <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it">◴ Estimate</button>
       <button id="run" class="primary">▶ Run</button>
       <button id="cancel" disabled>■ Cancel</button>
-      <span id="run-status"></span>
+      <span id="run-status" role="status" aria-live="polite"></span>
       <span id="run-source"></span>
     </div>
 
@@ -248,22 +249,22 @@
         <div><span class="k">Ended</span> <span id="job-ended">—</span></div>
         <div><span class="k">Elapsed</span> <span id="job-elapsed">—</span></div>
       </div>
-      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
-      <div id="progress-text" class="progress-text">—</div>
-      <div id="latest-term" class="latest"></div>
+      <div class="bar" id="progress-bar" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"><div class="bar-fill" id="bar-fill"></div></div>
+      <div id="progress-text" class="progress-text" role="status" aria-live="polite">—</div>
+      <div id="latest-term" class="latest" aria-live="polite"></div>
       <h3>Results</h3>
       <div id="results"></div>
       <div class="log-head">
-        <h3>Live log</h3>
+        <h3 id="log-label">Live log</h3>
         <label class="check"><input type="checkbox" id="log-autoscroll" checked> autoscroll</label>
         <button type="button" id="log-copy" class="mini">copy</button>
       </div>
-      <pre id="log" class="log"></pre>
+      <pre id="log" class="log" role="log" aria-live="off" aria-labelledby="log-label" tabindex="0"></pre>
     </div>
   </section>
 
   <!-- HISTORY ----------------------------------------------------------- -->
-  <section id="tab-history" class="tab">
+  <section id="tab-history" class="tab" role="tabpanel" aria-labelledby="tabbtn-history" tabindex="0">
     <div class="card">
       <div class="history-head">
         <h2>Job history</h2>
@@ -278,7 +279,7 @@
   </section>
 
   <!-- RECOVERED (potfile vault) ----------------------------------------- -->
-  <section id="tab-recovered" class="tab">
+  <section id="tab-recovered" class="tab" role="tabpanel" aria-labelledby="tabbtn-recovered" tabindex="0">
     <div class="card">
       <div class="history-head">
         <h2>Recovered passwords</h2>
@@ -290,7 +291,7 @@
   </section>
 
   <!-- LIBRARY (server-side wordlists) ----------------------------------- -->
-  <section id="tab-library" class="tab">
+  <section id="tab-library" class="tab" role="tabpanel" aria-labelledby="tabbtn-library" tabindex="0">
     <div class="card">
       <div class="history-head">
         <h2>Wordlist library</h2>
@@ -303,7 +304,7 @@
   </section>
 
   <!-- TOOLS ------------------------------------------------------------- -->
-  <section id="tab-tools" class="tab">
+  <section id="tab-tools" class="tab" role="tabpanel" aria-labelledby="tabbtn-tools" tabindex="0">
     <p class="hint">The specialist, non-cracking operations from the CLI. Inspect/recover tools run in the browser; the long key sweeps and table generation build a ready-to-run CLI command.</p>
     <div class="grid">
       <div class="card tool">
@@ -413,7 +414,7 @@
   </section>
 
   <!-- STATISTICS -------------------------------------------------------- -->
-  <section id="tab-stats" class="tab">
+  <section id="tab-stats" class="tab" role="tabpanel" aria-labelledby="tabbtn-stats" tabindex="0">
     <div class="card" id="sys-info"><h2>System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
     <div class="grid stats-grid" id="stat-cards"></div>
     <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
@@ -424,7 +425,7 @@
   </section>
 
   <!-- AUDIT ------------------------------------------------------------- -->
-  <section id="tab-audit" class="tab">
+  <section id="tab-audit" class="tab" role="tabpanel" aria-labelledby="tab-btn-audit" tabindex="0">
     <div class="card">
       <div class="history-head">
         <h2>Audit trail</h2>
@@ -438,7 +439,7 @@
   </section>
 
   <!-- DOCS -------------------------------------------------------------- -->
-  <section id="tab-docs" class="tab">
+  <section id="tab-docs" class="tab" role="tabpanel" aria-labelledby="tabbtn-docs" tabindex="0">
     <div class="grid docs-grid">
       <div class="card"><h2>Documentation</h2><ul id="doclist" class="doclist"></ul></div>
       <div class="card"><div id="docview" class="doc">Select a document.</div></div>
@@ -446,7 +447,7 @@
   </section>
 
   <!-- CONFIGURATION ----------------------------------------------------- -->
-  <section id="tab-config" class="tab">
+  <section id="tab-config" class="tab" role="tabpanel" aria-labelledby="tabbtn-config" tabindex="0">
     <div class="grid">
       <div class="card">
         <h2>Appearance</h2>
@@ -484,25 +485,25 @@
   </section>
 </main>
 
-<div id="palette-modal" class="modal" hidden>
+<div id="palette-modal" class="modal" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
   <div class="modal-box palette-box">
-    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false">
-    <ul id="palette-list" class="palette-list"></ul>
+    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false" aria-label="Command" role="combobox" aria-expanded="true" aria-controls="palette-list">
+    <ul id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></ul>
   </div>
 </div>
 
-<div id="import-modal" class="modal" hidden>
+<div id="import-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title" hidden>
   <div class="modal-box">
-    <div class="modal-head"><strong>Import configuration</strong><button type="button" id="import-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="import-title">Import configuration</strong><button type="button" id="import-close" class="x" aria-label="Close">✕</button></div>
     <p class="hint">Paste a job configuration (YAML or JSON) shared with you. It is validated, loaded into the editor, and the next run uses it verbatim.</p>
     <textarea id="import-text" rows="10" spellcheck="false" placeholder="candidates:&#10;  use_default_list: true"></textarea>
     <div class="modal-actions"><button type="button" id="import-do" class="primary">Import</button></div>
   </div>
 </div>
 
-<div id="wizard-modal" class="modal" hidden>
+<div id="wizard-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="wizard-title" hidden>
   <div class="modal-box wizard-box">
-    <div class="modal-head"><strong>Attack wizard</strong><button type="button" id="wizard-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="wizard-title">Attack wizard</strong><button type="button" id="wizard-close" class="x" aria-label="Close">✕</button></div>
     <p class="hint">Tell the wizard what you know; it composes the attack and fills the Crack form. Nothing runs until you press Run.</p>
 
     <div class="wz-presets">
@@ -575,9 +576,9 @@
   </div>
 </div>
 
-<div id="preview-modal" class="modal" hidden>
+<div id="preview-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
   <div class="modal-box">
-    <div class="modal-head"><strong id="preview-title">Preview</strong><button type="button" id="preview-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="preview-title">Preview</strong><button type="button" id="preview-close" class="x" aria-label="Close">✕</button></div>
     <div id="preview-meta" class="hint"></div>
     <pre id="preview-body" class="preview-body"></pre>
   </div>

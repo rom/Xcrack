@@ -73,6 +73,56 @@ func TestJobProgressControls(t *testing.T) {
 	}
 }
 
+// TestAccessibilityMarkup guards the accessibility affordances: the ARIA tab
+// pattern (tablist/tab/tabpanel), labelled dialogs, live regions, a labelled
+// progressbar, and a skip link — plus the JS that keeps the tab + modal focus
+// behaviour wired. A future edit that strips these should fail here.
+func TestAccessibilityMarkup(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	h := string(html)
+	for _, want := range []string{
+		`class="skip-link"`,            // skip to content
+		`role="tablist"`, `role="tab"`, // tab semantics
+		`role="tabpanel"`,                    // panel semantics
+		`role="dialog"`, `aria-modal="true"`, // accessible dialogs
+		`role="progressbar"`, `aria-valuemin="0"`, // labelled progress
+		`role="status"`, `aria-live="polite"`, // live regions
+		`id="main"`, // skip-link target
+	} {
+		if !strings.Contains(h, want) {
+			t.Errorf("index.html is missing accessibility markup %q", want)
+		}
+	}
+	// Every section's tab button must point at its panel (aria-controls) and
+	// every panel must be labelled by its button (aria-labelledby).
+	for _, tab := range []string{"crack", "history", "tools", "stats", "config"} {
+		if !strings.Contains(h, `aria-controls="tab-`+tab+`"`) {
+			t.Errorf("tab %q has no aria-controls to its panel", tab)
+		}
+	}
+
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	j := string(js)
+	for _, fn := range []string{"openModal", "closeModal", "wireModalA11y", "setBarAria", "focusablesIn"} {
+		if !strings.Contains(j, fn) {
+			t.Errorf("app.js is missing accessibility helper %q", fn)
+		}
+	}
+	// Tab activation must keep aria-selected in sync, and modals must trap focus.
+	if !strings.Contains(j, "aria-selected") {
+		t.Error("app.js no longer maintains aria-selected on the tabs")
+	}
+	if !strings.Contains(j, `document.activeElement === first`) {
+		t.Error("app.js no longer traps Tab within the open dialog")
+	}
+}
+
 // TestLoginGateHiddenGuard guards against a regression where the full-screen
 // login overlay (`.login-gate`) is styled `display:flex` but has no
 // `[hidden]` rule, so the `hidden` attribute (and the `hidden=true` the SPA

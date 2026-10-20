@@ -52,6 +52,7 @@ async function boot() {
   wirePhase5();
   wireImport();
   wirePalette();
+  wireModalA11y();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
@@ -94,10 +95,9 @@ function renderBanners() {
   }
 }
 function banner(kind, text) {
-  const b = el("div", { className: "banner banner-" + kind }, [
-    el("span", { textContent: text }),
-    el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() }),
-  ]);
+  const close = el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() });
+  close.setAttribute("aria-label", "Dismiss notice");
+  const b = el("div", { className: "banner banner-" + kind }, [el("span", { textContent: text }), close]);
   return b;
 }
 
@@ -161,11 +161,18 @@ function applyTheme(t) {
 
 // ---- tabs / advanced --------------------------------------------------------
 function wireTabs() {
-  document.querySelectorAll("#tabs button").forEach((btn) => {
+  const tabs = [...document.querySelectorAll("#tabs button")];
+  tabs.forEach((btn) => {
+    // Activation (click, or a programmatic .click()): set the visual + ARIA
+    // selected state, roving tabindex, and run the tab's on-open refresh.
     btn.addEventListener("click", () => {
-      document.querySelectorAll("#tabs button").forEach((b) => b.classList.remove("active"));
+      tabs.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+        b.tabIndex = on ? 0 : -1;
+      });
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
       if (btn.dataset.tab === "audit") refreshAudit();
@@ -173,6 +180,20 @@ function wireTabs() {
       if (btn.dataset.tab === "recovered") refreshVault();
       if (btn.dataset.tab === "library") refreshLibrary();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
+    });
+    // Keyboard navigation per the WAI-ARIA tabs pattern: arrows move (and
+    // activate) across the visible tabs, Home/End jump to the ends.
+    btn.addEventListener("keydown", (e) => {
+      const vis = tabs.filter((t) => !t.hidden);
+      let i = vis.indexOf(btn);
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") i = (i + 1) % vis.length;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") i = (i - 1 + vis.length) % vis.length;
+      else if (e.key === "Home") i = 0;
+      else if (e.key === "End") i = vis.length - 1;
+      else return;
+      e.preventDefault();
+      vis[i].click();
+      vis[i].focus();
     });
   });
 }
@@ -209,12 +230,53 @@ function fmtBytes(n) {
   return n + " B";
 }
 
+// ---- accessible modal manager ----------------------------------------------
+// Every .modal dialog opens through openModal / closes through closeModal so
+// that focus moves into the dialog, is trapped inside it (Tab cycles, Escape
+// closes), and returns to whatever opened it — the baseline for a keyboard- or
+// screen-reader-driven dialog. The dialogs carry role="dialog"/aria-modal in
+// the markup; this supplies the focus behaviour a native <dialog> would.
+let modalOpener = null;
+function focusablesIn(root) {
+  const sel = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  return [...root.querySelectorAll(sel)].filter((e) => e.offsetParent !== null || e === document.activeElement);
+}
+function openModal(modal, focusTarget) {
+  modalOpener = document.activeElement;
+  modal.hidden = false;
+  const box = modal.querySelector(".modal-box") || modal;
+  const f = focusTarget || focusablesIn(box)[0] || box;
+  if (f && f.focus) f.focus();
+}
+function closeModal(modal) {
+  if (modal.hidden) return;
+  modal.hidden = true;
+  const back = modalOpener;
+  modalOpener = null;
+  if (back && back.focus && document.contains(back)) back.focus();
+}
+function openDialogEl() { return [...document.querySelectorAll(".modal")].find((m) => !m.hidden) || null; }
+// One global handler drives Escape-to-close and Tab-trapping for the open
+// dialog, so each call site only has to open/close.
+function wireModalA11y() {
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" && e.key !== "Tab") return;
+    const modal = openDialogEl();
+    if (!modal) return;
+    if (e.key === "Escape") { e.preventDefault(); closeModal(modal); return; }
+    const f = focusablesIn(modal.querySelector(".modal-box") || modal);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+}
+
 // ---- wordlist / file preview (client-side) ---------------------------------
 function wirePreview() {
   const modal = $("preview-modal");
-  $("preview-close").addEventListener("click", () => { modal.hidden = true; });
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") modal.hidden = true; });
+  $("preview-close").addEventListener("click", () => closeModal(modal));
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
 }
 async function previewFile(f) {
   const CAP = 256 * 1024, MAXL = 500;
@@ -226,7 +288,7 @@ async function previewFile(f) {
   $("preview-title").textContent = f.name;
   $("preview-meta").textContent = `${fmtBytes(f.size)} · showing ${shown.length} line(s)` + (truncated ? " (truncated)" : "");
   $("preview-body").textContent = shown.join("\n");
-  $("preview-modal").hidden = false;
+  openModal($("preview-modal"));
 }
 
 // ---- inline help (hover tooltips) ------------------------------------------
@@ -445,9 +507,9 @@ function applySharedConfig() {
 }
 
 function wireImport() {
-  $("yaml-import").addEventListener("click", () => { $("import-modal").hidden = false; $("import-text").focus(); });
-  $("import-close").addEventListener("click", () => { $("import-modal").hidden = true; });
-  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) $("import-modal").hidden = true; });
+  $("yaml-import").addEventListener("click", () => openModal($("import-modal"), $("import-text")));
+  $("import-close").addEventListener("click", () => closeModal($("import-modal")));
+  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) closeModal($("import-modal")); });
   $("import-do").addEventListener("click", doImport);
 }
 async function doImport() {
@@ -459,7 +521,7 @@ async function doImport() {
   } catch { toast("Could not validate the configuration."); return; }
   Editor.set(text);
   $("yaml-authoritative").checked = true;
-  $("import-modal").hidden = true;
+  closeModal($("import-modal"));
   document.querySelector('#tabs button[data-tab="config"]').click();
   toast("Imported — the next run uses this configuration.");
 }
@@ -493,14 +555,14 @@ function wirePalette() {
   const inp = $("palette-input");
   inp.addEventListener("input", renderPalette);
   inp.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("palette-modal").hidden = true;
-    else if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
+    // Escape is handled by the global modal trap (which also restores focus).
+    if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); paletteIdx = Math.max(0, paletteIdx - 1); highlightPalette(); }
     else if (e.key === "Enter") { e.preventDefault(); runPalette(paletteIdx); }
   });
-  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) $("palette-modal").hidden = true; });
+  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) closeModal($("palette-modal")); });
 }
-function openPalette() { $("palette-modal").hidden = false; $("palette-input").value = ""; paletteIdx = 0; renderPalette(); $("palette-input").focus(); }
+function openPalette() { $("palette-input").value = ""; paletteIdx = 0; renderPalette(); openModal($("palette-modal"), $("palette-input")); }
 function renderPalette() {
   const q = $("palette-input").value.toLowerCase();
   paletteItems = PALETTE.filter((a) => a.label.toLowerCase().includes(q));
@@ -509,7 +571,7 @@ function renderPalette() {
   paletteItems.forEach((a, i) => ul.append(el("li", { className: i === paletteIdx ? "sel" : "", textContent: a.label, onclick: () => runPalette(i) })));
 }
 function highlightPalette() { [...$("palette-list").children].forEach((li, i) => li.classList.toggle("sel", i === paletteIdx)); }
-function runPalette(i) { $("palette-modal").hidden = true; const a = paletteItems[i]; if (a) a.run(); }
+function runPalette(i) { closeModal($("palette-modal")); const a = paletteItems[i]; if (a) a.run(); }
 function setYamlStatus(msg, ok) { const s = $("yaml-status"); s.textContent = msg; s.className = ok ? "ok" : "err"; }
 
 // ---- run / events -----------------------------------------------------------
@@ -683,12 +745,15 @@ function updateProgress(candidates, latest) {
       if (remain > 365 * 86400) line += " — impractically long at this rate; a wordlist + rules will likely beat brute force";
     }
     $("progress-text").textContent = line;
+    setBarAria(pct, line);
   } else {
     // Animate the sweep only while the event stream is live; a finished run
     // (finishRun / openHistoryJob close evtSource first) leaves a static bar.
     fill.style.width = "100%";
     bar.classList.toggle("indeterminate", evtSource != null);
-    $("progress-text").textContent = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
+    const line = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
+    $("progress-text").textContent = line;
+    setBarAria(-1, line); // indeterminate: no numeric value
   }
   if (evtSource) setTitleProgress(jobKeyspace > 0 ? Math.min(100, candidates / jobKeyspace * 100) : -1);
   if (latest) $("latest-term").innerHTML = "latest: <code>" + escapeHTML(latest) + "</code>";
@@ -698,6 +763,17 @@ function updateProgress(candidates, latest) {
 function resetBar() {
   const fill = $("bar-fill"); fill.style.width = "0%"; fill.parentElement.classList.remove("indeterminate");
   $("progress-text").textContent = "—"; $("run-source").textContent = "";
+  setBarAria(-1, "");
+}
+// setBarAria keeps the progressbar's accessible value in sync with the visual
+// fill. pct < 0 marks an indeterminate bar (no known keyspace), so the numeric
+// value is removed and only a text description is exposed.
+function setBarAria(pct, text) {
+  const bar = $("progress-bar"); if (!bar) return;
+  if (pct >= 0) bar.setAttribute("aria-valuenow", Math.round(pct));
+  else bar.removeAttribute("aria-valuenow");
+  if (text) bar.setAttribute("aria-valuetext", text);
+  else bar.removeAttribute("aria-valuetext");
 }
 function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
@@ -926,7 +1002,7 @@ async function previewLibrary(name) {
   $("preview-title").textContent = name;
   $("preview-meta").textContent = `first ${(v.lines || []).length} line(s)`;
   $("preview-body").textContent = (v.lines || []).join("\n");
-  $("preview-modal").hidden = false;
+  openModal($("preview-modal"));
 }
 async function deleteLibrary(name) {
   if (!confirm("Delete library wordlist " + name + "?")) return;
@@ -1010,7 +1086,12 @@ function notify(title, body) {
 let toastTimer = null;
 function toast(msg) {
   let t = $("toast");
-  if (!t) { t = el("div", { id: "toast", className: "toast" }); document.body.append(t); }
+  if (!t) {
+    t = el("div", { id: "toast", className: "toast" });
+    t.setAttribute("role", "status");
+    t.setAttribute("aria-live", "polite");
+    document.body.append(t);
+  }
   t.textContent = msg; t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
 }
@@ -1229,9 +1310,9 @@ const WZ_PRESETS = {
 
 function wireWizard() {
   const modal = $("wizard-modal");
-  $("wizard-open").addEventListener("click", () => { modal.hidden = false; wzPopulateWordlists(); wzSyncKind(); });
-  $("wizard-close").addEventListener("click", () => { modal.hidden = true; });
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+  $("wizard-open").addEventListener("click", () => { wzPopulateWordlists(); wzSyncKind(); openModal(modal); });
+  $("wizard-close").addEventListener("click", () => closeModal(modal));
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
   $("wizard-build").addEventListener("click", buildFromWizard);
   $("wz-kind").addEventListener("change", wzSyncKind);
   modal.querySelectorAll(".wz-chip").forEach((b) => b.addEventListener("click", () => wzApplyPreset(b.dataset.preset)));
@@ -1409,7 +1490,7 @@ function buildFromWizard() {
   }
 
   if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
-  $("wizard-modal").hidden = true;
+  closeModal($("wizard-modal"));
   toast("Wizard filled the Crack form — review the options and press Run.");
 }
 

@@ -234,3 +234,18 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 .inspect-metrics .k { color: var(--muted); margin-right: 4px; }
 .pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: 12px; font-weight: 500; }
 .muted { color: var(--muted); font-size: 13px; }
+
+/* --- accessibility --- */
+/* Visible, consistent keyboard-focus ring (independent of per-control styles),
+   drawn only for keyboard/AT focus so a mouse click doesn't ring every button. */
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+/* Skip link: off-screen until focused, then pinned top-left over the header. */
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 100; background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: 0 0 8px 8px; transition: top .15s ease; }
+.skip-link:focus { top: 0; }
+/* Screen-reader-only text (visually hidden but announced). */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Respect a reduced-motion preference: drop the bar/toast/skip-link animations
+   and the indeterminate sweep. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}

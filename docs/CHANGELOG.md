@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — accessibility pass (keyboard + screen reader).** The console now
+  follows the WAI-ARIA patterns a keyboard- or screen-reader-driven operator
+  needs: the section nav is a proper **tablist** (`role="tab"`/`tabpanel`,
+  `aria-selected`, roving tab-stop, arrow/Home/End navigation); every dialog
+  (wizard, import, command palette, preview) is a labelled `role="dialog"` with
+  a **focus trap** — focus moves in on open, Tab cycles within, Escape closes,
+  and focus returns to whatever opened it; the job progress bar is a labelled
+  `role="progressbar"` whose `aria-valuenow`/`aria-valuetext` track the run;
+  run status, progress and toasts are **live regions** (`role="status"`) and
+  the live log is a non-chatty `role="log"`; a **skip link** jumps to the main
+  content, icon-only buttons carry text labels, keyboard focus is always
+  visible (`:focus-visible`), and animations honour `prefers-reduced-motion`.
+  No behaviour changed for mouse users.
 - **Web GUI — case management + forensic reporting.** A job can now carry
   optional case metadata — a **Case ID** and **examiner**, captured from a *Case
   details* panel on the Crack tab (multipart `case_id`/`examiner`) and stored on
