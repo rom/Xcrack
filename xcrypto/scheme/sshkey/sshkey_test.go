@@ -2,6 +2,8 @@ package sshkey
 
 import (
 	"bytes"
+	"encoding/binary"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -66,5 +68,36 @@ func TestVerifyAndDecrypt(t *testing.T) {
 		if !bytes.Contains(out, []byte("-----BEGIN PRIVATE KEY-----")) {
 			t.Fatalf("%s: decrypted output is not a PKCS#8 PEM:\n%s", c.file, out)
 		}
+	}
+}
+
+// TestParseRejectsOversizeRounds guards the bcrypt-pbkdf rounds cap: the field
+// is a uint32 read from the kdfoptions and the derivation is linear in it, so an
+// implausible value must be rejected at parse rather than hang. A positive
+// control (sane rounds parse fine) keeps the test from passing vacuously.
+func TestParseRejectsOversizeRounds(t *testing.T) {
+	str := func(b []byte) []byte {
+		n := make([]byte, 4)
+		binary.BigEndian.PutUint32(n, uint32(len(b)))
+		return append(n, b...)
+	}
+	u32 := func(v uint32) []byte {
+		b := make([]byte, 4)
+		binary.BigEndian.PutUint32(b, v)
+		return b
+	}
+	build := func(rounds uint32) []byte {
+		kdfOpts := append(str([]byte("0123456789abcdef")), u32(rounds)...)
+		blob := []byte(magic)
+		blob = append(blob, str([]byte("aes256-ctr"))...)
+		blob = append(blob, str([]byte("bcrypt"))...)
+		blob = append(blob, str(kdfOpts)...)
+		return pem.EncodeToMemory(&pem.Block{Type: pemType, Bytes: blob})
+	}
+	if _, err := Parse(build(16)); err != nil {
+		t.Fatalf("positive control: sane rounds rejected: %v", err)
+	}
+	if _, err := Parse(build(maxRounds + 1)); err == nil {
+		t.Fatal("oversize bcrypt rounds accepted")
 	}
 }

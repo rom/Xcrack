@@ -565,6 +565,15 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   (no `/` or `..`) so it can never redirect the write outside `--out`.
 
 ### Tests
+- **Regression tests for the parser cost/size DoS caps + a `make cover` target.**
+  Added dedicated guard tests for every KDF-cost / allocation cap, each with a
+  positive control so it can't pass vacuously: `rar5` (lg2 exponent), `dmg` and
+  `ethkeystore` (iteration count / dklen / scrypt working set), and parse-level
+  rejection for `p12` (MacData iterations), `privkey` (PBES2 PBKDF2 iters +
+  scrypt N/r/p), `puttykey` (Argon2 memory/passes) and `sshkey` (bcrypt rounds).
+  New `make cover` measures per-module statement coverage (it enumerates only
+  packages with tests, so a no-test package can't break the run on a downloaded
+  Go toolchain); `coverage.out` is git-ignored.
 - **`gold/` cross-validation fixture index.** A top-level `gold/README.md` records
   the provenance (source tool/version or spec, licence, known answer, in-repo
   path) of every externally-sourced cross-validation fixture, so cross-validation

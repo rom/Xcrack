@@ -64,3 +64,24 @@ func TestStandardRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// TestParseRejectsOversizeKeyBits guards the agile KeyBits bound: keyBits/8 sizes
+// per-candidate key buffers, so a crafted huge value must be refused at parse.
+// A real EncryptAgile blob is the positive control; patching its keyBits to an
+// out-of-range value must then be rejected.
+func TestParseRejectsOversizeKeyBits(t *testing.T) {
+	info, _, err := EncryptAgile([]byte("pw"), []byte("PK\x03\x04payload"), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseEncryptionInfo(info); err != nil {
+		t.Fatalf("positive control: baseline agile info rejected: %v", err)
+	}
+	bad := bytes.ReplaceAll(info, []byte(`keyBits="256"`), []byte(`keyBits="99999999"`))
+	if bytes.Equal(bad, info) {
+		t.Fatal("could not patch keyBits in agile info")
+	}
+	if _, err := ParseEncryptionInfo(bad); err == nil {
+		t.Fatal("oversize keyBits accepted")
+	}
+}

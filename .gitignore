@@ -31,3 +31,6 @@ coverage.*
 # Stray CLI binaries built at the module root (use `make build`, which writes to bin/).
 /xcrack/xcrack-web
 /xcrack/xcrackd
+
+# Coverage profile from `make cover`
+coverage.out
