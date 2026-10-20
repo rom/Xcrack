@@ -85,6 +85,10 @@ type Config struct {
 	// already holds at least this many bytes (HTTP 507), so uploads cannot fill
 	// the disk. 0 (default) is unlimited.
 	MaxWorkDirBytes int64
+
+	// Notify configures out-of-band job-finished notifications (webhook/email),
+	// beyond the per-viewer browser toast. Its zero value disables them.
+	Notify NotifyConfig
 }
 
 // AuthConfig turns the console into a multi-user application fronted by an OIDC

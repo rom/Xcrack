@@ -15,6 +15,15 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — out-of-band job-finished notifications (webhook + email).**
+  `xcrack-web` can now notify when a job completes beyond the per-viewer browser
+  toast (which only fires while the SPA is open): an operator-configured
+  **webhook** (`--notify-webhook` POSTs a JSON `job_finished` summary) and/or
+  **email** (`--notify-smtp` host:port, `--notify-from`, `--notify-to`, optional
+  `--notify-smtp-user` with `XCRACK_WEB_SMTP_PASSWORD`). Both targets are set by
+  the operator, not by a request, and delivery is asynchronous and best-effort,
+  so a slow or failing target never blocks or fails a job. They fire once on a
+  terminal `done`/`error` state.
 - **Web GUI — ZipCrypto known-plaintext recovery (`kp`) as a background job.**
   The CLI's `kp` (Biham–Kocher ZipCrypto key-state recovery, with whole-archive
   cross-entry key reuse) had **no GUI presence at all**; it is now a Tools-tab

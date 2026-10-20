@@ -165,6 +165,9 @@ func (j *Job) setState(s JobState) {
 	if j.mgr != nil {
 		j.mgr.persist(j)
 		j.mgr.hub.notify() // a state change may reorder/re-decorate the lists
+		if s == StateDone || s == StateError {
+			j.mgr.notifier.jobFinished(j.snapshot())
+		}
 	}
 }
 
@@ -214,14 +217,15 @@ func (j *Job) subscribe() (history []Event, ch chan Event, done chan struct{}, c
 
 // Manager owns the set of jobs and their on-disk working directories.
 type Manager struct {
-	cfg   Config
-	mu    sync.Mutex
-	jobs  map[string]*Job
-	vault *securecache.Store // found-password vault (potfile)
-	sem   chan struct{}      // job-concurrency limiter (nil = unlimited)
-	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
-	trail *auditTrail        // access/action audit (set by NewServer; may be nil)
-	hub   *hub               // server-wide "list changed" nudges
+	cfg      Config
+	mu       sync.Mutex
+	jobs     map[string]*Job
+	vault    *securecache.Store // found-password vault (potfile)
+	sem      chan struct{}      // job-concurrency limiter (nil = unlimited)
+	wg       sync.WaitGroup     // tracks live runner goroutines, for Shutdown
+	trail    *auditTrail        // access/action audit (set by NewServer; may be nil)
+	hub      *hub               // server-wide "list changed" nudges
+	notifier *notifier          // out-of-band job-finished notifications (may be nil)
 }
 
 // vaultActive reports whether the found-password vault is in use. It is a
@@ -258,7 +262,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o700); err != nil {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
-	m := &Manager{cfg: cfg, jobs: map[string]*Job{}, hub: newHub()}
+	m := &Manager{cfg: cfg, jobs: map[string]*Job{}, hub: newHub(), notifier: newNotifier(cfg.Notify)}
 	if cfg.MaxConcurrentJobs > 0 {
 		m.sem = make(chan struct{}, cfg.MaxConcurrentJobs)
 	}

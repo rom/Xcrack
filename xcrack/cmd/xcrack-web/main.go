@@ -78,6 +78,12 @@ func run() int {
 		auditSyslog  = flag.Bool("audit-syslog", false, "also forward the access/action audit trail to the system logger")
 		auditLogFile = flag.String("audit-log-file", "", "also append the access/action audit trail (JSON) to this file")
 
+		notifyWebhook = flag.String("notify-webhook", "", "POST a JSON job-finished summary to this URL when a job completes")
+		smtpHost      = flag.String("notify-smtp", "", "SMTP server host:port for job-finished emails (point at a local/relay MTA)")
+		smtpFrom      = flag.String("notify-from", "", "From address for job-finished emails")
+		smtpTo        = flag.String("notify-to", "", "comma-separated recipient(s) for job-finished emails")
+		smtpUser      = flag.String("notify-smtp-user", "", "SMTP PLAIN-auth username (optional; password via XCRACK_WEB_SMTP_PASSWORD)")
+
 		tlsCert     = flag.String("tls-cert", "", "serve HTTPS with this PEM certificate chain (requires --tls-key; see scripts/gen-selfsigned-cert.sh)")
 		tlsKey      = flag.String("tls-key", "", "private key (PEM) for --tls-cert")
 		tlsClientCA = flag.String("tls-client-ca", "", "require and verify client certificates against this PEM CA bundle (mutual TLS)")
@@ -140,7 +146,15 @@ func run() int {
 		Version:             version,
 		TLS:                 *tlsCert != "" || *tlsKey != "",
 		AuditLogger:         auditLogger,
-		Accelerator:         gpuAccelerator(logger),
+		Notify: webui.NotifyConfig{
+			WebhookURL:   *notifyWebhook,
+			SMTPHost:     *smtpHost,
+			SMTPFrom:     *smtpFrom,
+			SMTPTo:       splitComma(*smtpTo),
+			SMTPUser:     *smtpUser,
+			SMTPPassword: os.Getenv("XCRACK_WEB_SMTP_PASSWORD"),
+		},
+		Accelerator: gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
 			Enabled:      authEnabled,
 			Issuer:       *oidcIssuer,
