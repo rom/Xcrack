@@ -35,10 +35,29 @@ jobs:
         env:
           XCRACK_QPDF_LIVE: "1"
         run: go test -run='^TestQPDFCrossValidation$' ./xfileformats/formats/pdf/
-      - name: Upload any fuzz crashers
+      - name: Collect new fuzz crashers
+        if: failure()
+        run: |
+          # Only NEW crashers matter: committed seed corpora are tracked, so a
+          # freshly-written crasher is the one untracked file under testdata/fuzz.
+          # Staging just those (instead of all of **/testdata/fuzz/**) makes the
+          # uploaded artifact the actual finding, and names it in the job summary.
+          mkdir -p fuzz-findings
+          mapfile -t new < <(git ls-files --others --exclude-standard | grep '/testdata/fuzz/' || true)
+          if [ ${#new[@]} -eq 0 ]; then
+            echo "No new crasher input was written — the failure was a hang, OOM, or a non-corpus error (the killed worker left no minimized input). See the failing target named in the fuzz step's log/summary." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### New fuzz crashers (commit as regression seeds)" >> "$GITHUB_STEP_SUMMARY"
+            for f in "${new[@]}"; do
+              echo "- \`$f\`" >> "$GITHUB_STEP_SUMMARY"
+              mkdir -p "fuzz-findings/$(dirname "$f")"
+              cp "$f" "fuzz-findings/$f"
+            done
+          fi
+      - name: Upload new fuzz crashers
         if: failure()
         uses: actions/upload-artifact@v4
         with:
           name: fuzz-crashers
-          path: "**/testdata/fuzz/**"
+          path: fuzz-findings/**
           if-no-files-found: ignore

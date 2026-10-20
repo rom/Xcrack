@@ -33,7 +33,7 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 	cryptParams, hasFast := parseRAR5Crypt(r, size)
 	fastVerify := func(pw []byte) (bool, error) { return rar5.Verify(string(pw), cryptParams), nil }
 
-	rr, err := rardecode.NewReader(section(r, size))
+	rr, err := rardecode.NewReader(section(r, size), rardecode.MaxDictionarySize(maxDecompressed))
 	if err != nil {
 		// Encrypted headers (rar -hp) hide the listing; offer a gated entry. With a
 		// parsed RAR5 crypt header the gate uses the fast check value instead of a
@@ -86,7 +86,7 @@ func (rarFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, erro
 // rarHdrVerify returns a verifier for a header-encrypted rar.
 func rarHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
 	return func(pw []byte) (bool, error) {
-		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)))
+		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)), rardecode.MaxDictionarySize(maxDecompressed))
 		if err != nil {
 			return false, nil
 		}
@@ -102,7 +102,7 @@ func rarHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
 // rarHdrTar returns an opener that repacks a header-encrypted rar's members as tar.
 func rarHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
 	return func(pw []byte) ([]byte, error) {
-		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)))
+		rr, err := rardecode.NewReader(section(r, size), rardecode.Password(string(pw)), rardecode.MaxDictionarySize(maxDecompressed))
 		if err != nil {
 			return nil, xcrypto.ErrWrongPassword
 		}
@@ -130,7 +130,7 @@ func rarHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
 }
 
 func rarOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {
-	rr, err := rardecode.NewReader(section(r, size), rardecode.Password(pw))
+	rr, err := rardecode.NewReader(section(r, size), rardecode.Password(pw), rardecode.MaxDictionarySize(maxDecompressed))
 	if err != nil {
 		return nil, xcrypto.ErrWrongPassword
 	}
@@ -146,7 +146,7 @@ func rarOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {
 }
 
 func rarVerify(r io.ReaderAt, size int64, name, pw string) (bool, error) {
-	rr, err := rardecode.NewReader(section(r, size), rardecode.Password(pw))
+	rr, err := rardecode.NewReader(section(r, size), rardecode.Password(pw), rardecode.MaxDictionarySize(maxDecompressed))
 	if err != nil {
 		return false, nil
 	}

@@ -206,6 +206,37 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   stays the default and is unchanged.
 
 ### Fixed / performance
+- **Third-party archive-parser allocation DoS hardening (7z + RAR).** The
+  KDF/allocation sweep above covered Xcrack's own parsers; this follow-up audited
+  the two bundled C-library ports that parse untrusted archive headers,
+  `bodgit/sevenzip` and `nwaples/rardecode/v2`, for the same unbounded-allocation
+  class.
+  - **7z (`bodgit/sevenzip`): unbounded.** Header count fields (file/stream/
+    folder/coder counts) are capped only at `MaxUint32`, never against the
+    archive length, so a ~40-byte crafted archive can drive a single
+    `make([]FileHeader, 4.29e9)` ≈ 480 GiB (and several lesser multi-GiB
+    allocations). The engine's `recover()` guard does not help: an allocation
+    that large does not panic — the Go runtime instead throws a fatal,
+    unrecoverable out-of-memory. Added a bounded, size-proportional header
+    pre-scan (`szWithinSize`, `sevenzip_guard.go`) that every 7z open now passes
+    through; it mirrors the library's header grammar far enough to reject any
+    count that exceeds the file size — provably impossible for a real archive, so
+    no valid archive is turned away — on the plaintext-header path and in the
+    outer StreamsInfo of an encoded header. Residual: the *inner* metadata of an
+    encoded (compressed) header is decompressed by the library before it is
+    parsed, so its counts remain out of reach of a size-based outer gate; fully
+    closing that needs an upstream proportionality fix or OS-level memory
+    isolation for untrusted-upload deployments (see docs/threat-model.md).
+  - **RAR (`nwaples/rardecode/v2`): bounded parse, one capped window.** The
+    block/header parse is input-proportional, but the decode-window buffer is
+    sized from a header dictionary-size field and allocated during enumeration up
+    to the library default of 4 GiB from a tiny file. All RAR readers are now
+    built with `MaxDictionarySize(maxDecompressed)` (1 GiB, matching the per-
+    stream read backstop — Xcrack never reads more than that from an entry), cutting
+    the worst-case window from 4 GiB to 1 GiB with no functional loss.
+  - Adds a crafted-oversize-header regression test and a `FuzzEntries` seed for
+    the 7z vector, and an invariant test that the RAR cap stays below the library
+    default.
 - **Parser KDF-cost/allocation DoS hardening (sweep prompted by the RAR5 fix).**
   An audit of every scheme for the same bug class — an untrusted header value
   driving a KDF/hash loop or an allocation without an upper bound — found and
