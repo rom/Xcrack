@@ -30,6 +30,16 @@ const PswCheckLen = 8
 // SaltLen is the RAR5 PBKDF2 salt length.
 const SaltLen = 16
 
+// MaxLg2Count caps the KDF iteration exponent. RAR5 stores the count as a
+// base-2 logarithm in a single byte (0..255), but WinRAR/UnRAR only ever
+// produce and accept values up to 24 (unrar's CRYPT5_KDF_LG2_COUNT_MAX, i.e.
+// 2^24 iterations); the nwaples/rardecode decoder rejects anything larger too.
+// An out-of-range value is therefore a corrupt or hostile header, not a real
+// archive — and left unchecked it turns the derivation into ~2^lg2 HMAC rounds
+// (a trivially triggered denial of service). The verification boundary refuses
+// such params rather than running the loop.
+const MaxLg2Count = 24
+
 // Params are the fields a RAR5 crypt record carries that are needed to verify a
 // password without decrypting anything.
 type Params struct {
@@ -114,7 +124,7 @@ func VerifyDK(dk []byte, p Params) bool {
 // error) when the params carry no check value, since then no fast verification
 // is possible.
 func Verify(password string, p Params) bool {
-	if len(p.PswCheck) != PswCheckLen || len(p.Salt) == 0 {
+	if len(p.PswCheck) != PswCheckLen || len(p.Salt) == 0 || p.Lg2Count > MaxLg2Count {
 		return false
 	}
 	got := PswCheckValue(password, p.Salt, p.Lg2Count)

@@ -206,6 +206,18 @@ Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
   stays the default and is unchanged.
 
 ### Fixed / performance
+- **RAR5 KDF-cost denial of service fixed (found by nightly fuzzing).** A RAR5
+  crypt header stores its PBKDF2 iteration count as a one-byte base-2 logarithm,
+  which `parseRAR5CryptRecord` accepted unchecked. A corrupt or hostile header
+  claiming e.g. `lg2=48` drove the fast password verifier (`rar5.PswCheckValue`)
+  to ~2^48 HMAC-SHA256 rounds — an effectively infinite hang on any RAR5 input,
+  reachable from the archive `FuzzEntries` target (it surfaced there as a
+  "fuzzing process hung" failure). The exponent is now capped at `MaxLg2Count`
+  (24, matching WinRAR/UnRAR's `CRYPT5_KDF_LG2_COUNT_MAX` and the rardecode
+  decoder): the parser refuses an out-of-range record (falling back to the
+  decoder, which rejects it too) and `rar5.Verify` returns false instead of
+  running the loop. Adds a scheme-level regression test and commits the fuzzer's
+  crashing input as a `FuzzEntries` seed.
 - **7z content-encryption detection and password check are now deterministic.**
   A content-encrypted 7z (`7z a -p`, plaintext headers) could intermittently be
   read as plaintext, or a wrong password accepted: 7z has no password MAC, the
