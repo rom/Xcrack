@@ -39,6 +39,18 @@ var ErrNotEncrypted = errors.New("privkey: key is not encrypted")
 // ErrUnsupported means the key is encrypted with a scheme not handled here.
 var ErrUnsupported = errors.New("privkey: unsupported encryption scheme")
 
+// Bounds on the attacker-controlled PBES2 KDF cost parameters, so a crafted
+// PKCS#8 header cannot turn verification into an unbounded CPU hang (PBKDF2
+// iterations) or a multi-GiB allocation (scrypt, whose working set is
+// ~128*N*r bytes). Real keys stay far below these.
+const (
+	maxPBKDF2Iter       = 1 << 24
+	maxScryptN          = 1 << 20
+	maxScryptR          = 64
+	maxScryptP          = 16
+	maxScryptMem  int64 = 1 << 30 // 1 GiB
+)
+
 // OIDs for PBES2 / PBKDF2 / scrypt / ciphers / PRFs.
 var (
 	oidPBES2      = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
@@ -218,6 +230,10 @@ func parsePBES2(epki encryptedPrivateKeyInfo) (d pbdk, iv []byte, blkSize int, e
 		if _, err = asn1.Unmarshal(p.KDF.Params.FullBytes, &kp); err != nil {
 			return
 		}
+		if kp.Iter < 1 || kp.Iter > maxPBKDF2Iter {
+			err = ErrUnsupported // implausible PBKDF2 cost: refuse rather than hang
+			return
+		}
 		h := prfHash(kp.PRF.Algorithm)
 		salt, iter = kp.Salt, kp.Iter
 		scheme = "pbes2-pbkdf2-aes" + bits(keyLen)
@@ -225,6 +241,12 @@ func parsePBES2(epki encryptedPrivateKeyInfo) (d pbdk, iv []byte, blkSize int, e
 	case p.KDF.Algorithm.Equal(oidScrypt):
 		var sp scryptParams
 		if _, err = asn1.Unmarshal(p.KDF.Params.FullBytes, &sp); err != nil {
+			return
+		}
+		if sp.N < 2 || sp.N > maxScryptN || sp.N&(sp.N-1) != 0 || // N a power of two > 1
+			sp.R < 1 || sp.R > maxScryptR || sp.P < 1 || sp.P > maxScryptP ||
+			int64(128)*int64(sp.N)*int64(sp.R) > maxScryptMem { // bound the working set
+			err = ErrUnsupported
 			return
 		}
 		salt, iter = sp.Salt, sp.N

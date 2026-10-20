@@ -182,6 +182,12 @@ func parseRAR5CryptRecord(rec []byte, withIV bool) (rar5.Params, bool) {
 	}
 	lg2 := uint(rec[pos])
 	pos++
+	if lg2 > rar5.MaxLg2Count {
+		// Out-of-spec KDF cost (a corrupt or hostile header): refuse the fast
+		// verifier so the engine falls back to the decoder, which rejects it too,
+		// rather than building a verifier that runs ~2^lg2 HMAC rounds per guess.
+		return rar5.Params{}, false
+	}
 	if pos+rar5.SaltLen > len(rec) {
 		return rar5.Params{}, false
 	}

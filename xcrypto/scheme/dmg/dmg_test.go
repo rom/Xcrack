@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestJohnVectors cross-validates the DMG verifier against John the Ripper's
@@ -65,5 +66,22 @@ func TestParseJohnRejects(t *testing.T) {
 		if _, err := ParseJohn(bad); err == nil {
 			t.Errorf("ParseJohn(%q) = nil error, want rejection", bad)
 		}
+	}
+}
+
+// TestVerifyRejectsOversizeIterations guards the PBKDF2 cost cap: the iteration
+// count is read straight from the encrcdsa header (a uint32), so an implausible
+// value must be refused promptly rather than running billions of rounds.
+func TestVerifyRejectsOversizeIterations(t *testing.T) {
+	p := Params{Version: 2, Iterations: 1 << 30, Salt: make([]byte, 20)}
+	done := make(chan bool, 1)
+	go func() { ok, _ := Verify([]byte("x"), p); done <- ok }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("Verify accepted an out-of-range iteration count")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Verify did not reject an oversize iteration count promptly (CPU DoS)")
 	}
 }

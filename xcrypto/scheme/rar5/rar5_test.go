@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/rom/xcrypto/prim"
 )
@@ -50,6 +51,34 @@ func TestKnownAnswer(t *testing.T) {
 	}
 	if Verify("wrongpassword", p) {
 		t.Fatal("Verify(wrong) = true, want false")
+	}
+}
+
+// TestVerifyRejectsOversizeLg2Count guards against a KDF-cost denial of service:
+// RAR5 stores the iteration count as a one-byte base-2 logarithm, so a corrupt
+// or hostile header can claim e.g. lg2=48 (2^48 HMAC rounds) and hang Verify
+// forever. Verify must refuse any exponent above MaxLg2Count promptly instead of
+// running the loop. Fails (rather than hangs) via a watchdog if the guard
+// regresses.
+func TestVerifyRejectsOversizeLg2Count(t *testing.T) {
+	salt, _ := hex.DecodeString("4d09db306505c5cd1b29f0cb4c2bc5aa")
+	check, _ := hex.DecodeString("b17fbe6cc603d208")
+	p := Params{Salt: salt, Lg2Count: 48, PswCheck: check} // 2^48 => never run
+
+	done := make(chan bool, 1)
+	go func() { done <- Verify("opensesame", p) }()
+	select {
+	case ok := <-done:
+		if ok {
+			t.Fatal("Verify accepted an out-of-range Lg2Count")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("Verify did not reject an oversize Lg2Count promptly (KDF-cost DoS)")
+	}
+
+	// A conformant count at the cap still verifies normally.
+	if p := (Params{Salt: salt, Lg2Count: 15, PswCheck: check}); !Verify("opensesame", p) {
+		t.Fatal("Verify(correct, lg2=15) = false")
 	}
 }
 

@@ -26,6 +26,12 @@ var ErrNotEncrypted = errors.New("sshkey: key is not encrypted")
 const pemType = "OPENSSH PRIVATE KEY"
 const magic = "openssh-key-v1\x00"
 
+// maxRounds bounds the bcrypt-pbkdf round count from the kdfoptions. The field
+// is a uint32, and the derivation is linear in it, so an unbounded value hangs.
+// golang.org/x/crypto caps it at 1<<11 internally; enforcing it here keeps the
+// bound independent of the dependency version. Real keys use ~16.
+const maxRounds = 1 << 11
+
 // Info describes a parsed OpenSSH private key's encryption parameters.
 type Info struct {
 	Cipher string // e.g. "aes256-ctr"
@@ -64,6 +70,9 @@ func Parse(data []byte) (*Info, error) {
 		info.Salt = append([]byte(nil), salt...)
 	}
 	if rounds, ok := or.readUint32(); ok {
+		if rounds > maxRounds {
+			return nil, ErrNotSSHKey // implausible bcrypt-pbkdf cost: refuse rather than hang
+		}
 		info.Rounds = rounds
 	}
 	return info, nil
