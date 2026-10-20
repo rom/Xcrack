@@ -10,19 +10,19 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<a href="#main" class="skip-link">Skip to main content</a>
+<a href="#main" class="skip-link" data-i18n="skip.main">Skip to main content</a>
 <header>
   <div class="brand"><span aria-hidden="true">🔓</span> <span>Xcrack</span></div>
   <nav id="tabs" role="tablist" aria-label="Sections">
-    <button data-tab="crack" class="active" role="tab" id="tabbtn-crack" aria-controls="tab-crack" aria-selected="true">Crack</button>
-    <button data-tab="history" role="tab" id="tabbtn-history" aria-controls="tab-history" aria-selected="false" tabindex="-1">History</button>
-    <button data-tab="recovered" role="tab" id="tabbtn-recovered" aria-controls="tab-recovered" aria-selected="false" tabindex="-1">Recovered</button>
-    <button data-tab="library" role="tab" id="tabbtn-library" aria-controls="tab-library" aria-selected="false" tabindex="-1">Library</button>
-    <button data-tab="tools" role="tab" id="tabbtn-tools" aria-controls="tab-tools" aria-selected="false" tabindex="-1">Tools</button>
-    <button data-tab="stats" role="tab" id="tabbtn-stats" aria-controls="tab-stats" aria-selected="false" tabindex="-1">Statistics</button>
-    <button data-tab="audit" id="tab-btn-audit" role="tab" aria-controls="tab-audit" aria-selected="false" tabindex="-1">Audit</button>
-    <button data-tab="docs" role="tab" id="tabbtn-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1">Docs</button>
-    <button data-tab="config" role="tab" id="tabbtn-config" aria-controls="tab-config" aria-selected="false" tabindex="-1">Configuration</button>
+    <button data-tab="crack" class="active" role="tab" id="tabbtn-crack" aria-controls="tab-crack" aria-selected="true" data-i18n="nav.crack">Crack</button>
+    <button data-tab="history" role="tab" id="tabbtn-history" aria-controls="tab-history" aria-selected="false" tabindex="-1" data-i18n="nav.history">History</button>
+    <button data-tab="recovered" role="tab" id="tabbtn-recovered" aria-controls="tab-recovered" aria-selected="false" tabindex="-1" data-i18n="nav.recovered">Recovered</button>
+    <button data-tab="library" role="tab" id="tabbtn-library" aria-controls="tab-library" aria-selected="false" tabindex="-1" data-i18n="nav.library">Library</button>
+    <button data-tab="tools" role="tab" id="tabbtn-tools" aria-controls="tab-tools" aria-selected="false" tabindex="-1" data-i18n="nav.tools">Tools</button>
+    <button data-tab="stats" role="tab" id="tabbtn-stats" aria-controls="tab-stats" aria-selected="false" tabindex="-1" data-i18n="nav.stats">Statistics</button>
+    <button data-tab="audit" id="tab-btn-audit" role="tab" aria-controls="tab-audit" aria-selected="false" tabindex="-1" data-i18n="nav.audit">Audit</button>
+    <button data-tab="docs" role="tab" id="tabbtn-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1" data-i18n="nav.docs">Docs</button>
+    <button data-tab="config" role="tab" id="tabbtn-config" aria-controls="tab-config" aria-selected="false" tabindex="-1" data-i18n="nav.config">Configuration</button>
   </nav>
   <div class="spacer"></div>
   <label class="modeswitch" title="Reveal every engine option in the Crack form"><input type="checkbox" id="advanced"> Advanced</label>
@@ -45,14 +45,14 @@
   <section id="tab-crack" class="tab active" role="tabpanel" aria-labelledby="tabbtn-crack" tabindex="0">
     <div class="grid">
       <div class="card">
-        <h2>1 · Choose files</h2>
+        <h2 data-i18n="crack.step1">1 · Choose files</h2>
         <div id="dropzone" class="dropzone">
           <input type="file" id="files" multiple hidden>
           <p>Drop locked files here, or <button type="button" id="pick">choose files</button></p>
           <ul id="filelist"></ul>
         </div>
 
-        <h2>2 · Candidate sources</h2>
+        <h2 data-i18n="crack.step2">2 · Candidate sources</h2>
         <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
         <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
         <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
@@ -222,10 +222,10 @@
     </details>
 
     <div class="runbar">
-      <button type="button" id="wizard-open">✨ Wizard</button>
-      <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it">◴ Estimate</button>
-      <button id="run" class="primary">▶ Run</button>
-      <button id="cancel" disabled>■ Cancel</button>
+      <button type="button" id="wizard-open" data-i18n="btn.wizard">✨ Wizard</button>
+      <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it" data-i18n="btn.estimate">◴ Estimate</button>
+      <button id="run" class="primary" data-i18n="btn.run">▶ Run</button>
+      <button id="cancel" disabled data-i18n="btn.cancel">■ Cancel</button>
       <span id="run-status" role="status" aria-live="polite"></span>
       <span id="run-source"></span>
     </div>
@@ -267,7 +267,7 @@
   <section id="tab-history" class="tab" role="tabpanel" aria-labelledby="tabbtn-history" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Job history</h2>
+        <h2 data-i18n="head.history">Job history</h2>
         <div class="history-actions">
           <label class="check"><input type="checkbox" id="notify-toggle"> Notify me when a job finishes</label>
           <button type="button" id="history-refresh" class="mini">Refresh</button>
@@ -282,7 +282,7 @@
   <section id="tab-recovered" class="tab" role="tabpanel" aria-labelledby="tabbtn-recovered" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Recovered passwords</h2>
+        <h2 data-i18n="head.recovered">Recovered passwords</h2>
         <button type="button" id="vault-refresh" class="mini">Refresh</button>
       </div>
       <p class="hint">The server's found-password vault (potfile). Every recovered password is kept here and fed back into new jobs' loopback pass, so a reused or previously found password is caught fast. On a multi-user instance the vault is disabled to avoid leaking passwords between users.</p>
@@ -294,7 +294,7 @@
   <section id="tab-library" class="tab" role="tabpanel" aria-labelledby="tabbtn-library" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Wordlist library</h2>
+        <h2 data-i18n="head.library">Wordlist library</h2>
         <button type="button" id="lib-refresh" class="mini">Refresh</button>
       </div>
       <p class="hint">Dictionaries saved on the server and reused by name across jobs — no re-upload. In the Crack form's <em>Library wordlists</em> field, list the names you want a job to use.</p>
@@ -415,7 +415,7 @@
 
   <!-- STATISTICS -------------------------------------------------------- -->
   <section id="tab-stats" class="tab" role="tabpanel" aria-labelledby="tabbtn-stats" tabindex="0">
-    <div class="card" id="sys-info"><h2>System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
+    <div class="card" id="sys-info"><h2 data-i18n="head.stats_sys">System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
     <div class="grid stats-grid" id="stat-cards"></div>
     <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
     <div class="grid">
@@ -428,7 +428,7 @@
   <section id="tab-audit" class="tab" role="tabpanel" aria-labelledby="tab-btn-audit" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Audit trail</h2>
+        <h2 data-i18n="head.audit">Audit trail</h2>
         <div class="history-actions">
           <span class="muted">Who ran what, when, and from where. Recovered secrets are never recorded here.</span>
           <button type="button" id="audit-refresh" class="mini">Refresh</button>
@@ -441,7 +441,7 @@
   <!-- DOCS -------------------------------------------------------------- -->
   <section id="tab-docs" class="tab" role="tabpanel" aria-labelledby="tabbtn-docs" tabindex="0">
     <div class="grid docs-grid">
-      <div class="card"><h2>Documentation</h2><ul id="doclist" class="doclist"></ul></div>
+      <div class="card"><h2 data-i18n="head.docs">Documentation</h2><ul id="doclist" class="doclist"></ul></div>
       <div class="card"><div id="docview" class="doc">Select a document.</div></div>
     </div>
   </section>
@@ -450,9 +450,16 @@
   <section id="tab-config" class="tab" role="tabpanel" aria-labelledby="tabbtn-config" tabindex="0">
     <div class="grid">
       <div class="card">
-        <h2>Appearance</h2>
+        <h2 data-i18n="head.appearance">Appearance</h2>
         <div class="field">
-          <label>Theme</label>
+          <label data-i18n="cfg.language">Language</label>
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="sv">Svenska</option>
+          </select>
+        </div>
+        <div class="field">
+          <label data-i18n="cfg.theme">Theme</label>
           <select id="theme">
             <option value="">System</option>
             <option value="light">Light</option>
@@ -469,7 +476,7 @@
         <p class="hint">Off: the Crack form builds the job. On: the configuration document here is used verbatim.</p>
       </div>
       <div class="card">
-        <h2>Configuration (YAML)</h2>
+        <h2 data-i18n="head.config">Configuration (YAML)</h2>
         <p class="hint">The exact schema the <code>xcrack --config</code> CLI accepts — see the config reference in Docs.</p>
         <div class="editor-toolbar">
           <button type="button" id="yaml-validate">Validate</button>
@@ -588,6 +595,7 @@
 <script src="vendor/codemirror-yaml.js"></script>
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/uPlot.iife.min.js"></script>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

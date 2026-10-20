@@ -38,7 +38,9 @@ const THEMES = ["", "light", "dark", "glow", "gold", "autumn", "spring"];
 async function boot() {
   Editor.init();
   if (window.marked) window.XcrackMarkdown = (md) => window.marked.parse(md);
+  if (window.XI18N) XI18N.init();
   initTheme();
+  wireLang();
   wireTabs();
   wireAdvanced();
   wireFiles();
@@ -157,6 +159,15 @@ function initTheme() {
 function applyTheme(t) {
   if (t) document.documentElement.dataset.theme = t;
   else document.documentElement.removeAttribute("data-theme");
+}
+
+// wireLang binds the Appearance → Language selector to the i18n module: the
+// select shows the active locale and switching it re-translates the page and
+// persists the choice. A no-op when i18n is unavailable.
+function wireLang() {
+  const sel = $("lang"); if (!sel || !window.XI18N) return;
+  sel.value = XI18N.locale;
+  sel.addEventListener("change", () => XI18N.setLocale(sel.value));
 }
 
 // ---- tabs / advanced --------------------------------------------------------

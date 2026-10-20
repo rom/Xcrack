@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — internationalisation framework.** The console now has a small i18n
+  layer (`assets/i18n.js`): translatable chrome carries a `data-i18n*` key and
+  keeps its English text inline, a catalogue per locale supplies translations,
+  and a **Language** selector (Appearance tab) switches the UI live and
+  remembers the choice; the starting language follows the browser's preference.
+  A missing key falls back to English, so a partial translation is always safe,
+  and `document.lang` tracks the active locale. English (base) and Swedish ship;
+  adding a language is a catalogue plus an `<option>`. A `t(key)` helper is
+  exposed for runtime-built strings. The instrumented set covers the navigation,
+  primary headings and the run controls today; other strings stay English until
+  keyed. (A regression test ties every `data-i18n` key to both catalogues.)
 - **Web GUI — accessibility pass (keyboard + screen reader).** The console now
   follows the WAI-ARIA patterns a keyboard- or screen-reader-driven operator
   needs: the section nav is a proper **tablist** (`role="tab"`/`tabpanel`,

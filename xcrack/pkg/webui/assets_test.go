@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,63 @@ func TestAccessibilityMarkup(t *testing.T) {
 	}
 	if !strings.Contains(j, `document.activeElement === first`) {
 		t.Error("app.js no longer traps Tab within the open dialog")
+	}
+}
+
+// TestI18nFramework guards the internationalisation wiring: the page must load
+// i18n.js and carry a language selector, and every data-i18n* key the markup
+// references must be defined in BOTH shipped catalogues (English and Swedish),
+// so a newly instrumented node can never ship with a missing translation key.
+func TestI18nFramework(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	h := string(html)
+	for _, want := range []string{`src="i18n.js"`, `id="lang"`, `value="sv"`, `data-i18n=`} {
+		if !strings.Contains(h, want) {
+			t.Errorf("index.html is missing i18n wiring %q", want)
+		}
+	}
+
+	js, err := staticFS.ReadFile("assets/i18n.js")
+	if err != nil {
+		t.Fatalf("read i18n.js: %v", err)
+	}
+	j := string(js)
+	for _, want := range []string{"window.XI18N", "function t(", "setLocale", "en:", "sv:"} {
+		if !strings.Contains(j, want) {
+			t.Errorf("i18n.js is missing %q", want)
+		}
+	}
+
+	// Every key referenced in the markup must be defined in both catalogues.
+	// Each catalogue carries the key once, so `"key":` must appear twice.
+	keyRe := regexp.MustCompile(`data-i18n(?:-[a-z]+)?="([^"]+)"`)
+	seen := map[string]bool{}
+	for _, m := range keyRe.FindAllStringSubmatch(h, -1) {
+		key := m[1]
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if n := strings.Count(j, `"`+key+`":`); n < 2 {
+			t.Errorf("i18n key %q is referenced in the markup but defined %d time(s) in i18n.js (want it in both en and sv)", key, n)
+		}
+	}
+	if len(seen) == 0 {
+		t.Error("no data-i18n keys found in index.html")
+	}
+
+	// app.js must initialise i18n and wire the selector.
+	appjs, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	for _, want := range []string{"XI18N.init()", "wireLang"} {
+		if !strings.Contains(string(appjs), want) {
+			t.Errorf("app.js is missing i18n wiring %q", want)
+		}
 	}
 }
 
