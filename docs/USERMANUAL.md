@@ -1211,6 +1211,16 @@ Any history row can be **re-run**: a fresh job is started from the saved spec
 and the files already uploaded for the original, so a GUI "resume" needs no
 re-upload.
 
+**Case metadata and the forensic report.** Before a run you can record an
+optional **Case ID** and **examiner** (the *Case details* panel on the Crack
+tab); they are stored on the job. Any finished job then has a self-contained
+**report** (the *report* and *csv* links on its History row, or
+`GET /api/v1/jobs/{id}/report?format=html|csv`): a printable document with the
+case metadata, the full per-node result tree — each node identified by its
+**SHA-256** for evidence integrity — and the job's **chain of custody** (its
+audit-trail entries: who acted on it, when, from where). Recovered passwords
+appear in the report only when the server runs with `--expose-secrets`.
+
 ### 10.7 Recovered passwords (the vault)
 
 `xcrack-web` keeps a server-side **vault** (a potfile) under its working
@@ -1295,8 +1305,15 @@ and usable down to a phone-width screen.
 The **Configuration** tab's Appearance picker offers six themes plus System
 (which follows your OS light/dark setting): **Light**, **Dark**, **Glow**,
 **Gold**, **Autumn** and **Spring**. The choice is remembered in the browser.
+The same panel has a **Language** selector (English and Swedish ship today); the
+console starts in your browser's preferred language and remembers the choice.
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
+
+The console is built for **keyboard and screen-reader** use: the section nav is
+a proper ARIA tablist (arrow-key navigable), dialogs trap focus and close on
+Escape, the run status and progress are announced as live regions, keyboard
+focus is always visible, and motion honours your reduced-motion preference.
 
 ### 10.13 Security
 
