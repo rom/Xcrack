@@ -15,6 +15,18 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — expanded attack wizard.** The `xcrack-web` wizard now composes a
+  whole attack from what you know, not just a prefix/suffix and length. It adds
+  **presets** (Personal, Corporate policy, Passphrase, PIN/numeric, Keyboard
+  pattern); an **attack-kind** selector (recognisable word → dictionary + rules,
+  random → brute force, number → digits, or both); **mangling → rules** —
+  capitalise/ALL-CAPS/leet/append-digits/append-`!` and significant years
+  compiled into the cross-product of real hashcat rules plus a hybrid digit
+  append; a **wordlist picker** (built-in list or a saved Library list); more
+  **extra sources** (keyboard walks, PRINCE, case toggles, loopback); and a
+  **live feasibility estimate** that shows the brute-force keyspace and a plain
+  verdict (small/moderate/large/impractical) before you run. Frontend-only —
+  every option maps to existing engine capabilities via the Crack form.
 - **Web GUI — explicit `--mode single|multi` run-mode switch.** `xcrack-web`
   now selects single- vs multi-user access with a first-class `--mode` flag
   (`single`, the default no-login console, or `multi`, per-user access via

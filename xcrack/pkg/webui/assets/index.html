@@ -448,26 +448,76 @@
 </div>
 
 <div id="wizard-modal" class="modal" hidden>
-  <div class="modal-box">
+  <div class="modal-box wizard-box">
     <div class="modal-head"><strong>Attack wizard</strong><button type="button" id="wizard-close" class="x">✕</button></div>
-    <p class="hint">Tell the wizard what you know; it fills the Crack form. Nothing runs until you press Run.</p>
+    <p class="hint">Tell the wizard what you know; it composes the attack and fills the Crack form. Nothing runs until you press Run.</p>
+
+    <div class="wz-presets">
+      <span>Start from a preset:</span>
+      <button type="button" class="wz-chip" data-preset="personal">Personal</button>
+      <button type="button" class="wz-chip" data-preset="corporate">Corporate policy</button>
+      <button type="button" class="wz-chip" data-preset="passphrase">Passphrase</button>
+      <button type="button" class="wz-chip" data-preset="pin">PIN / numeric</button>
+      <button type="button" class="wz-chip" data-preset="keyboard">Keyboard pattern</button>
+    </div>
+
+    <div class="field">
+      <label>What is the password based on?</label>
+      <select id="wz-kind">
+        <option value="word">A word, name or phrase they'd recognise — dictionary + rules</option>
+        <option value="brute">Random characters — brute force</option>
+        <option value="pin">A number / PIN — digits only</option>
+        <option value="unsure">Not sure — try a wordlist and a brute force</option>
+      </select>
+    </div>
+
     <div class="row">
       <div class="field"><label>Known start (prefix)</label><input type="text" id="wz-prefix" placeholder="Acme"></div>
       <div class="field"><label>Known end (suffix)</label><input type="text" id="wz-suffix" placeholder="!"></div>
     </div>
     <div class="row">
       <div class="field"><label>Min length</label><input type="number" id="wz-min" min="0" value="6"></div>
-      <div class="field"><label>Max length</label><input type="number" id="wz-max" min="0" value="10"></div>
+      <div class="field"><label>Max length</label><input type="number" id="wz-max" min="0" value="12"></div>
     </div>
-    <fieldset class="generators">
-      <legend>Character types</legend>
+
+    <fieldset class="generators wz-brute-only">
+      <legend>Character types (brute force / mask)</legend>
       <label><input type="checkbox" id="wz-l" checked> lowercase</label>
       <label><input type="checkbox" id="wz-u"> UPPERCASE</label>
       <label><input type="checkbox" id="wz-d" checked> digits</label>
       <label><input type="checkbox" id="wz-s"> symbols</label>
     </fieldset>
-    <div class="field"><label>Personal / org words <small>(comma-separated: names, company, pet…)</small></label><input type="text" id="wz-tokens" placeholder="acme,rex,anna"></div>
-    <label class="check"><input type="checkbox" id="wz-brute"> Also brute-force the character types over the length range (can be huge)</label>
+
+    <div class="row">
+      <div class="field"><label>Personal / org words <small>(names, company, pet…)</small></label><input type="text" id="wz-tokens" placeholder="acme,rex,anna"></div>
+      <div class="field"><label>Significant years <small>(comma-separated)</small></label><input type="text" id="wz-years" placeholder="2023,2024"></div>
+    </div>
+
+    <fieldset class="generators wz-dict-only">
+      <legend>How might they mangle a word? <small>(→ hashcat rules)</small></legend>
+      <label><input type="checkbox" id="wz-cap" checked> Capitalise first letter (rex → Rex)</label>
+      <label><input type="checkbox" id="wz-upper"> ALL CAPS (rex → REX)</label>
+      <label><input type="checkbox" id="wz-leet"> Leet (a→@ e→3 i→1 o→0 s→$)</label>
+      <label><input type="checkbox" id="wz-digit" checked> Append 1–2 digits (rex → rex12)</label>
+      <label><input type="checkbox" id="wz-bang" checked> Append ! (rex → rex!)</label>
+    </fieldset>
+
+    <div class="field wz-dict-only">
+      <label>Wordlist</label>
+      <select id="wz-wordlist"><option value="__default__">Built-in common list</option></select>
+    </div>
+
+    <fieldset class="generators">
+      <legend>Extra guess sources</legend>
+      <label><input type="checkbox" id="wz-markov" checked> Markov (statistical best-first)</label>
+      <label><input type="checkbox" id="wz-kw"> Keyboard walks (qwerty, 1q2w3e)</label>
+      <label class="wz-dict-only"><input type="checkbox" id="wz-prince"> Multiple words joined (PRINCE)</label>
+      <label class="wz-dict-only"><input type="checkbox" id="wz-toggle"> Case toggles (pAsSwOrd)</label>
+      <label><input type="checkbox" id="wz-loopback"> Reuse previously-found passwords (loopback)</label>
+    </fieldset>
+
+    <div id="wz-estimate" class="wz-estimate"></div>
+
     <div class="modal-actions"><button type="button" id="wizard-build" class="primary">Build the attack</button></div>
   </div>
 </div>

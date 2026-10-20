@@ -5,6 +5,43 @@ import (
 	"testing"
 )
 
+// TestWizardControls guards the expanded attack wizard's controls and wiring:
+// the markup must carry the preset chips, the attack-kind selector, the
+// mangling (rule) and extra-source toggles, the wordlist picker and the
+// feasibility-estimate host, and app.js must map them to the Crack form.
+func TestWizardControls(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	for _, id := range []string{
+		`data-preset="personal"`, `data-preset="pin"`, `data-preset="passphrase"`,
+		`id="wz-kind"`, `id="wz-cap"`, `id="wz-leet"`, `id="wz-digit"`, `id="wz-bang"`,
+		`id="wz-years"`, `id="wz-wordlist"`, `id="wz-kw"`, `id="wz-prince"`, `id="wz-loopback"`,
+		`id="wz-estimate"`,
+	} {
+		if !strings.Contains(string(html), id) {
+			t.Errorf("index.html is missing wizard control %q", id)
+		}
+	}
+
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	for _, fn := range []string{"WZ_PRESETS", "wzApplyPreset", "wzUpdateEstimate", "wzRules", "wzPopulateWordlists", "buildFromWizard"} {
+		if !strings.Contains(string(js), fn) {
+			t.Errorf("app.js is missing wizard function/const %q", fn)
+		}
+	}
+	// The build step must drive real Crack-form fields the engine consumes.
+	for _, field := range []string{`$("rules")`, `$("hybrid_append")`, `$("spray_years")`, `$("lib_names")`, `$("masks")`} {
+		if !strings.Contains(string(js), field) {
+			t.Errorf("buildFromWizard no longer writes %s", field)
+		}
+	}
+}
+
 // TestLoginGateHiddenGuard guards against a regression where the full-screen
 // login overlay (`.login-gate`) is styled `display:flex` but has no
 // `[hidden]` rule, so the `hidden` attribute (and the `hidden=true` the SPA
