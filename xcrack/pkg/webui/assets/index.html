@@ -348,6 +348,21 @@
       </div>
 
       <div class="card tool">
+        <h3>ZipCrypto known-plaintext (kp)</h3>
+        <p class="hint">Recover a ZipCrypto archive's key state from aligned known plaintext and its ciphertext — no password. Add the archive and the known-plaintext entry to decrypt <em>every</em> entry from one recovery (cross-entry key reuse). Runs as a background job (the in-process attack is compute-heavy).</p>
+        <div class="field"><label>Known plaintext (≥12 bytes)</label><input type="file" id="kp-plain"></div>
+        <div class="field"><label>Ciphertext for those same bytes (equal length)</label><input type="file" id="kp-cipher"></div>
+        <details>
+          <summary>Whole-archive decrypt (optional)</summary>
+          <div class="field"><label>ZipCrypto archive (.zip)</label><input type="file" id="kp-zip"></div>
+          <div class="field"><label>Known-plaintext entry — the full entry (12-byte header + data)</label><input type="file" id="kp-entry"></div>
+          <div class="field"><label>Offset of the known plaintext within the entry data</label><input type="number" id="kp-offset" min="0" value="0"></div>
+        </details>
+        <button class="tool-run primary" id="kp-run">Recover key state</button>
+        <div class="tool-out" data-out="kp"></div>
+      </div>
+
+      <div class="card tool">
         <h3>Wordlist utilities</h3>
         <p class="hint">Length-filter, dedupe, sort, or split a wordlist.</p>
         <div class="field"><label>Upload a wordlist</label><input type="file" id="wl-file"></div>

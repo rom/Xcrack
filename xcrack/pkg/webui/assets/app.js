@@ -1100,7 +1100,44 @@ function wireTools() {
   $("pdf-table-run").addEventListener("click", pdfTable);
   $("wl-run").addEventListener("click", wordlistTool);
   $("rt-run").addEventListener("click", ruleTest);
+  $("kp-run").addEventListener("click", runKP);
   wireCLI();
+}
+
+// runKP launches the ZipCrypto known-plaintext recovery as a background job and
+// streams its progress into the tool card (with a download link on success).
+async function runKP() {
+  const out = toolOut("kp");
+  const plain = $("kp-plain").files[0], cipher = $("kp-cipher").files[0];
+  if (!plain || !cipher) { out.textContent = "Choose the known plaintext and its ciphertext."; return; }
+  const fd = new FormData();
+  fd.append("plain", plain);
+  fd.append("cipher", cipher);
+  if ($("kp-zip").files[0]) fd.append("zip", $("kp-zip").files[0]);
+  if ($("kp-entry").files[0]) fd.append("entry", $("kp-entry").files[0]);
+  fd.append("offset", $("kp-offset").value || "0");
+  out.textContent = "Starting…";
+  let res;
+  try { res = await fetch(api("/tools/kp"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  const { id } = await res.json();
+  out.textContent = "";
+  const log = el("pre", { className: "log" });
+  out.append(log);
+  const append = (s) => { log.textContent += s + "\n"; };
+  const es = new EventSource(api("/jobs/" + id + "/events"));
+  es.onmessage = (m) => {
+    let e; try { e = JSON.parse(m.data); } catch { return; }
+    if (e.type === "log") append("[" + (e.level || "info") + "] " + e.message);
+    else if (e.type === "found") append("🔓 " + (e.file || "") + (e.password ? " → " + e.password : ""));
+    else if (e.type === "state" && ["done", "error", "canceled"].includes(e.state)) {
+      es.close();
+      append("[" + e.state + "]");
+      if (e.state === "done") out.append(el("a", { href: api("/jobs/" + id + "/download"), className: "mini", textContent: "download decrypted output" }));
+    }
+  };
+  es.onerror = () => {};
 }
 
 // ruleTest shows what mangling rules do to a sample word (engine rule compiler).

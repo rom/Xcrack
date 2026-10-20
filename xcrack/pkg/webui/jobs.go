@@ -77,6 +77,7 @@ type FileResult struct {
 // API. It never embeds the job's mutex, channels or internal paths.
 type JobView struct {
 	ID          string       `json:"id"`
+	Kind        string       `json:"kind,omitempty"` // "" = crack; else a specialist tool, e.g. "kp"
 	State       JobState     `json:"state"`
 	CreatedAt   int64        `json:"created_at"` // unix ms
 	StartedAt   int64        `json:"started_at,omitempty"`
@@ -98,6 +99,7 @@ type JobView struct {
 // state is guarded by mu; the API only ever sees a JobView snapshot.
 type Job struct {
 	ID        string
+	Kind      string // "" = crack; else a specialist tool
 	State     JobState
 	CreatedAt int64 // unix ms
 	StartedAt int64
@@ -115,16 +117,17 @@ type Job struct {
 	SpecYAML    string
 	Owner       string
 
-	mu      sync.Mutex
-	mgr     *Manager // back-reference, for persistence on state change
-	spec    *jobspec.Spec
-	dir     string
-	sources []string // absolute paths of uploaded source files, index-aligned with Files
-	cancel  context.CancelFunc
-	history []Event
-	subs    map[int]chan Event
-	nextSub int
-	done    chan struct{}
+	mu         sync.Mutex
+	mgr        *Manager // back-reference, for persistence on state change
+	spec       *jobspec.Spec
+	dir        string
+	sources    []string                          // absolute paths of uploaded source files, index-aligned with Files
+	specialist func(context.Context, *Job) error // non-nil for a specialist (non-crack) job
+	cancel     context.CancelFunc
+	history    []Event
+	subs       map[int]chan Event
+	nextSub    int
+	done       chan struct{}
 }
 
 // snapshot returns the job's externally-visible state, safe to serialize while
@@ -133,7 +136,7 @@ func (j *Job) snapshot() JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return JobView{
-		ID: j.ID, State: j.State, CreatedAt: j.CreatedAt, StartedAt: j.StartedAt,
+		ID: j.ID, Kind: j.Kind, State: j.State, CreatedAt: j.CreatedAt, StartedAt: j.StartedAt,
 		EndedAt: j.EndedAt, Files: append([]string(nil), j.Files...), Error: j.Error,
 		FilesTotal: j.FilesTotal, FilesDone: j.FilesDone, Candidates: atomic.LoadInt64(&j.Candidates),
 		Keyspace: j.Keyspace, Decrypted: j.Decrypted, Distributed: j.Distributed,
@@ -402,7 +405,7 @@ func (m *Manager) jobFromView(v JobView, dir string) *Job {
 		}
 	}
 	return &Job{
-		ID: v.ID, State: state, CreatedAt: v.CreatedAt, StartedAt: v.StartedAt, EndedAt: v.EndedAt,
+		ID: v.ID, Kind: v.Kind, State: state, CreatedAt: v.CreatedAt, StartedAt: v.StartedAt, EndedAt: v.EndedAt,
 		Files: v.Files, Error: errMsg, FilesTotal: v.FilesTotal, FilesDone: v.FilesDone,
 		Candidates: v.Candidates, Keyspace: v.Keyspace, Decrypted: v.Decrypted,
 		Distributed: v.Distributed, Results: v.Results, SpecYAML: v.SpecYAML, Owner: v.Owner,
@@ -609,6 +612,24 @@ func (m *Manager) run(j *Job) {
 	}
 
 	j.setState(StateRunning)
+
+	// Specialist (non-crack) jobs — the ZipCrypto known-plaintext attack and the
+	// key-recovery tools — supply their own work function and reuse all of the
+	// job machinery (durability, SSE, cancel, history, download).
+	if j.specialist != nil {
+		err := j.specialist(ctx, j)
+		if ctx.Err() != nil {
+			j.setState(StateCanceled)
+			return
+		}
+		if err != nil {
+			j.fail(err.Error())
+			return
+		}
+		j.setState(StateDone)
+		j.emit(Event{Type: "done"})
+		return
+	}
 
 	opts, err := spec.BuildOptions()
 	if err != nil {

@@ -397,6 +397,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `DELETE` | `/api/v1/library/{name}` | delete a library wordlist |
 | `POST` | `/api/v1/cluster/health` | ping configured `xcrackd` servers (`--allow-server-paths`) |
 | `POST` | `/api/v1/tools/{hashline,vba-recover,access-recover,export-challenge,wordlist,rule-test,pdf-keyattack-table}` | specialist, mostly-stateless tools (see §10.9) |
+| `POST` | `/api/v1/tools/kp` | ZipCrypto known-plaintext (Biham–Kocher) key recovery, run as a background **job** (multipart: `plain` + `cipher`, optional `zip` + `entry` + `offset` for whole-archive decrypt). Returns a job `id`; stream `/jobs/{id}/events` and download via `/jobs/{id}/download`. The in-process attack is compute-heavy; the external bkcrack offload stays CLI-only |
 | `GET` | `/api/v1/docs` / `/api/v1/docs/{name}` | in-app documentation listing / Markdown |
 
 ### Submitting a job

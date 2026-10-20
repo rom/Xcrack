@@ -101,6 +101,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/tools/wordlist", p(s.handleToolWordlist))
 	mux.HandleFunc("POST /api/v1/tools/rule-test", p(s.handleToolRuleTest))
 	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
+	mux.HandleFunc("POST /api/v1/tools/kp", p(s.handleToolKP))
 	mux.Handle("/", assets)
 	s.mux = mux
 	// Wrap the whole application in transport hardening: CSRF guard innermost

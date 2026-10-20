@@ -15,6 +15,21 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — ZipCrypto known-plaintext recovery (`kp`) as a background job.**
+  The CLI's `kp` (Biham–Kocher ZipCrypto key-state recovery, with whole-archive
+  cross-entry key reuse) had **no GUI presence at all**; it is now a Tools-tab
+  card and a `POST /api/v1/tools/kp` endpoint. From aligned known plaintext and
+  its ciphertext it recovers the 96-bit key state (no password); given the
+  archive and the known-plaintext entry it rolls back to the entry start and
+  decrypts *every* ZipCrypto entry from one recovery, into the job's downloadable
+  output tree. It runs as a real background job (progress/cancel/history/
+  download via the standard job machinery) because the in-process attack is
+  compute-heavy — implemented via a new specialist-job path that any non-crack
+  tool can reuse. The external bkcrack offload is intentionally CLI-only
+  (executing an operator-named binary from a web request is an exec risk). This
+  is the first of the specialist-tools-as-jobs work; `office-keyattack`,
+  `pdf-keyattack` (full sweep) and `thunder-gen` still build a copyable CLI
+  command.
 - **Web GUI — live-updating lists.** The History, Statistics, Recovered and
   Audit tabs now refresh on their own the moment a job changes anywhere, instead
   of only on a manual **Refresh** or a tab switch. A new server-wide
