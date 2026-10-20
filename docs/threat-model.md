@@ -69,6 +69,18 @@ pathological allocation in our parsers.
   converts a panic into a per-node `StatusError` (scan continues); defensive
   bounds checks; **fuzzing** every parser with the invariant *no panic / bounded
   memory / terminates*; no `unsafe`, no cgo in format parsers.
+- **Third-party parser ports — allocation DoS the `recover()` boundary cannot
+  catch.** The bundled 7z (`bodgit/sevenzip`) and RAR (`nwaples/rardecode/v2`)
+  header parsers size slice allocations straight from untrusted header counts,
+  capped only at `MaxUint32`. A `make` that large does not panic — it is well
+  under the runtime's `maxAlloc`, so Go instead *throws* a fatal, unrecoverable
+  out-of-memory that `recover()` cannot convert into a `StatusError`. A ~40-byte
+  crafted 7z can request ~480 GiB this way. Mitigations: a bounded,
+  size-proportional header pre-scan (`szWithinSize`) that rejects any count a
+  real archive of that length could not back, run before every 7z open; and
+  `MaxDictionarySize(maxDecompressed)` on every RAR reader to bound the decode
+  window. See the "Third-party archive-parser allocation DoS hardening" entry in
+  docs/CHANGELOG.md.
 
 ### T4 — Path traversal / filesystem escape on extraction (STRIDE: Tampering)
 A container entry named `../../etc/cron.d/x` tries to write outside `--out`.
@@ -116,6 +128,14 @@ A third-party decompression/crypto dependency carries a vulnerability.
 - **Residual:** extremely slow legitimate KDFs (by design) mean a large-keyspace
   search is inherently slow; this is a performance characteristic, not a defect —
   the budget model turns it into a bounded "undetermined" result.
+- **Residual:** an *encoded* (compressed) 7z header is decompressed by the
+  `bodgit/sevenzip` port before it is parsed, so the oversize-count counts inside
+  it are out of reach of the `szWithinSize` pre-scan (which sees only the outer
+  header). A decompression-bomb header can still request an oversize allocation.
+  The pre-scan closes the plaintext-header and outer-StreamsInfo vectors; fully
+  closing the inner-header one needs an upstream proportionality fix in the port,
+  or running untrusted-archive parsing under an OS memory limit (cgroup/`RLIMIT`)
+  in multi-tenant upload deployments of the service tier.
 - **Out of model:** host OS hardening, container escape, and Impex's own network
   exposure are the responsibility of the deployment, not Xcrack.
 

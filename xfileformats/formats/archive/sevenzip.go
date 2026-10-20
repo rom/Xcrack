@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"errors"
 	"hash/crc32"
 	"io"
 	"strings"
@@ -31,8 +32,13 @@ func szIsDir(f *sevenzip.File) bool {
 // hidden) becomes a single password-gated entry whose Open repacks the
 // decrypted members as a tar.
 func (sevenzipFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry, error) {
-	rd, err := sevenzip.NewReaderWithPassword(r, size, "")
+	rd, err := szNewReader(r, size, "")
 	if err != nil {
+		if errors.Is(err, errSzOversizeHeader) {
+			// The header declares impossibly much structure (a memory-DoS attempt);
+			// refuse it rather than allocate. See szWithinSize.
+			return nil, xfileformats.ErrMalformed
+		}
 		// The header is encrypted (or the archive is invalid); offer a gated entry.
 		return []*xfileformats.Entry{gatedEntry("7z-aes256-header", szHdrVerify(r, size), szHdrTar(r, size))}, nil
 	}
@@ -95,7 +101,7 @@ func szSmallestMember(rd *sevenzip.Reader) string {
 // the decompression backstop cannot be CRC-verified, so there we fall back to
 // "decoded without error".
 func szReadOK(r io.ReaderAt, size int64, name, pw string) bool {
-	rd, err := sevenzip.NewReaderWithPassword(r, size, pw)
+	rd, err := szNewReader(r, size, pw)
 	if err != nil {
 		return false
 	}
@@ -125,7 +131,7 @@ func szReadOK(r io.ReaderAt, size int64, name, pw string) bool {
 // the archive and the first member reads cleanly.
 func szHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
 	return func(pw []byte) (bool, error) {
-		rd, err := sevenzip.NewReaderWithPassword(r, size, string(pw))
+		rd, err := szNewReader(r, size, string(pw))
 		if err != nil {
 			return false, nil
 		}
@@ -148,7 +154,7 @@ func szHdrVerify(r io.ReaderAt, size int64) func(pw []byte) (bool, error) {
 // szHdrTar returns an opener that repacks a header-encrypted 7z's members as tar.
 func szHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
 	return func(pw []byte) ([]byte, error) {
-		rd, err := sevenzip.NewReaderWithPassword(r, size, string(pw))
+		rd, err := szNewReader(r, size, string(pw))
 		if err != nil {
 			return nil, xcrypto.ErrWrongPassword
 		}
@@ -177,7 +183,7 @@ func szHdrTar(r io.ReaderAt, size int64) func(pw []byte) ([]byte, error) {
 }
 
 func szOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {
-	rd, err := sevenzip.NewReaderWithPassword(r, size, pw)
+	rd, err := szNewReader(r, size, pw)
 	if err != nil {
 		return nil, xcrypto.ErrWrongPassword
 	}

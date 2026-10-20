@@ -29,6 +29,15 @@ func FuzzEntries(f *testing.F) {
 	f.Add([]byte("From: a\r\nMIME-Version: 1.0\r\nContent-Type: multipart/mixed; boundary=B\r\n\r\n--B--\r\n"))
 	f.Add([]byte("BZh9"))
 	f.Add([]byte("7z\xbc\xaf\x27\x1c"))
+	// Memory-DoS regression: a ~40-byte 7z whose plaintext header declares
+	// NumFiles = MaxUint32. Unguarded, bodgit/sevenzip would make([]FileHeader,
+	// 4.29e9) ≈ 480 GiB; szWithinSize rejects it (see sevenzip_guard.go).
+	f.Add([]byte("7z\xbc\xaf\x27\x1c\x00\x04" + // signature + version
+		"\x00\x00\x00\x00" + // start-header CRC (unchecked by the pre-scan)
+		"\x00\x00\x00\x00\x00\x00\x00\x00" + // NextHeaderOffset = 0
+		"\x08\x00\x00\x00\x00\x00\x00\x00" + // NextHeaderSize = 8
+		"\x00\x00\x00\x00" + // next-header CRC (unchecked by the pre-scan)
+		"\x01\x05\xf0\xff\xff\xff\xff\x00")) // idHeader, idFilesInfo, NumFiles=0xFFFFFFFF, idEnd
 	f.Add([]byte("Rar!\x1a\x07\x00"))
 	f.Add([]byte{0x1f, 0x8b})
 	f.Add([]byte{})
