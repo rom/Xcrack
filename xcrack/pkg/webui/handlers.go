@@ -127,6 +127,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.mgr.overQuota() {
+		writeErr(w, http.StatusInsufficientStorage, "the server's work directory is full; delete finished jobs or raise --max-workdir-bytes")
+		return
+	}
+
 	owner, _ := s.currentUser(r)
 
 	job, err := s.mgr.newJob()

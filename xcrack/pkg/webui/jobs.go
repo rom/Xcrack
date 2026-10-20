@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -263,7 +264,83 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	m.vault = vault
 	m.loadPersisted()
+	m.prune() // apply the age/count retention policy to reloaded history at startup
 	return m, nil
+}
+
+// dirSize sums the bytes of regular files under root (best-effort).
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// overQuota reports whether the work directory already holds at least
+// MaxWorkDirBytes (0 = unlimited).
+func (m *Manager) overQuota() bool {
+	if m.cfg.MaxWorkDirBytes <= 0 {
+		return false
+	}
+	return dirSize(m.cfg.WorkDir) >= m.cfg.MaxWorkDirBytes
+}
+
+// prune enforces the retention policy: finished jobs older than MaxJobAge, and
+// finished jobs beyond MaxRetainedJobs (oldest first), are removed and their
+// working directories deleted. Running/queued jobs are never touched, and a job
+// still finishing (its done channel not yet closed) is skipped so prune can
+// never deadlock removing the job that triggered it.
+func (m *Manager) prune() {
+	if m.cfg.MaxRetainedJobs <= 0 && m.cfg.MaxJobAge <= 0 {
+		return
+	}
+	type fin struct {
+		id    string
+		ended int64
+	}
+	m.mu.Lock()
+	var finished []fin
+	for id, j := range m.jobs {
+		select {
+		case <-j.done: // only a fully-settled job is eligible
+		default:
+			continue
+		}
+		j.mu.Lock()
+		terminal := j.State == StateDone || j.State == StateError || j.State == StateCanceled || j.State == StateInterrupted
+		ended := j.EndedAt
+		if ended == 0 {
+			ended = j.CreatedAt
+		}
+		j.mu.Unlock()
+		if terminal {
+			finished = append(finished, fin{id, ended})
+		}
+	}
+	m.mu.Unlock()
+
+	sort.Slice(finished, func(a, b int) bool { return finished[a].ended < finished[b].ended }) // oldest first
+	remove := map[string]bool{}
+	if m.cfg.MaxJobAge > 0 {
+		cutoff := nowMS() - m.cfg.MaxJobAge.Milliseconds()
+		for _, f := range finished {
+			if f.ended < cutoff {
+				remove[f.id] = true
+			}
+		}
+	}
+	if m.cfg.MaxRetainedJobs > 0 && len(finished) > m.cfg.MaxRetainedJobs {
+		for i := 0; i < len(finished)-m.cfg.MaxRetainedJobs; i++ {
+			remove[finished[i].id] = true
+		}
+	}
+	for id := range remove {
+		m.remove(id)
+	}
 }
 
 // persist writes the job's current view to <dir>/job.json atomically (temp +
@@ -388,6 +465,7 @@ func (m *Manager) list() []JobView {
 
 // newJob allocates a job with its own working directory.
 func (m *Manager) newJob() (*Job, error) {
+	m.prune() // bound history growth before adding another job
 	id, err := randID()
 	if err != nil {
 		return nil, err

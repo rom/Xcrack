@@ -15,6 +15,22 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — transport hardening & retention (CSRF, rate limiting, work-dir
+  caps).** `xcrack-web` now wraps the whole application in two always-on guards
+  (active in single- and multi-user mode alike, since a localhost instance is
+  still reachable by a malicious page via DNS-rebinding/localhost CSRF): a
+  **CSRF guard** that refuses a cross-origin state-changing request using the
+  `Sec-Fetch-Site`/`Origin`/`Referer` headers the browser sets itself (a
+  non-browser client such as `curl` or the CLI, which sends none, is unaffected
+  — there is nothing to forge), replacing the previous reliance on
+  `SameSite=Lax` alone; and a per-client-IP **rate limiter** (`--rate-limit`,
+  default 1200/min, with a stricter `--auth-rate-limit`, default 20/min, on the
+  login endpoint; `--trust-proxy` to read `X-Forwarded-For` behind a trusted
+  proxy). It also adds **retention** so a long-lived shared instance's work
+  directory cannot grow without bound: `--max-retained-jobs` (prune the oldest
+  finished jobs beyond a cap), `--max-job-age` (prune finished jobs older than a
+  duration), and `--max-workdir-bytes` (reject a new job/inspect with HTTP 507
+  once the work directory is full). None require any change to the SPA.
 - **Web GUI — server-side feasibility estimate (`◴ Estimate`).** A new
   `POST /api/v1/inspect` endpoint and an **Estimate** button in the Crack tab
   answer "how long will this take, is it even worth starting" *before* a job

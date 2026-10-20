@@ -67,6 +67,10 @@ func (s *Server) handleInspect(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, "no source files uploaded (need at least one 'source' part)")
 		return
 	}
+	if s.mgr.overQuota() {
+		writeErr(w, http.StatusInsufficientStorage, "the server's work directory is full")
+		return
+	}
 
 	// Ephemeral working directory: holds uploads + aux just long enough to build
 	// the assembler, then is removed. It carries no job.json, so a server restart

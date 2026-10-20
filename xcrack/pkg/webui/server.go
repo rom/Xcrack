@@ -18,14 +18,18 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // Server is the HTTP application: the SPA assets plus the JSON/SSE API.
 type Server struct {
-	cfg  Config
-	mgr  *Manager
-	auth *authenticator
-	mux  *http.ServeMux
+	cfg         Config
+	mgr         *Manager
+	auth        *authenticator
+	mux         *http.ServeMux
+	handler     http.Handler // mux wrapped in the CSRF + rate-limit middleware
+	limiter     *rateLimiter
+	authLimiter *rateLimiter
 }
 
 // NewServer builds the web application. It fails if the work directory cannot be
@@ -42,6 +46,12 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, mgr: mgr, auth: auth}
+	if cfg.RateLimitPerMin > 0 {
+		s.limiter = newRateLimiter(cfg.RateLimitPerMin, time.Minute)
+	}
+	if cfg.AuthRateLimitPerMin > 0 {
+		s.authLimiter = newRateLimiter(cfg.AuthRateLimitPerMin, time.Minute)
+	}
 	assets, err := assetHandler()
 	if err != nil {
 		return nil, err
@@ -88,11 +98,14 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
 	mux.Handle("/", assets)
 	s.mux = mux
+	// Wrap the whole application in transport hardening: CSRF guard innermost
+	// (so rejected requests never reach a handler), rate limiter outermost.
+	s.handler = s.rateLimit(s.csrf(mux))
 	return s, nil
 }
 
 // Handler returns the HTTP handler for the whole application.
-func (s *Server) Handler() http.Handler { return s.mux }
+func (s *Server) Handler() http.Handler { return s.handler }
 
 // Close cancels any in-flight jobs and waits for their runner goroutines to
 // exit. After it returns, nothing is still touching the work directory, so a

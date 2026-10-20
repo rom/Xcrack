@@ -2,6 +2,7 @@ package webui
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/securecache"
@@ -54,6 +55,31 @@ type Config struct {
 	// binary provides a TPM sealer so the webui package stays free of the TPM
 	// build tag. Nil keeps a plaintext vault.
 	Sealer securecache.Sealer
+
+	// --- transport hardening & retention (see security.go, jobs.go) ---
+
+	// TrustProxyHeaders makes rate limiting read the client IP from the first
+	// X-Forwarded-For hop. Enable it only behind a trusted reverse proxy that
+	// sets the header; otherwise a client can spoof its rate-limit identity.
+	TrustProxyHeaders bool
+	// RateLimitPerMin bounds requests per client IP per minute (0 = unlimited).
+	// Default 600 (10/s sustained), far above interactive use.
+	RateLimitPerMin int
+	// AuthRateLimitPerMin bounds /auth/login starts per client IP per minute
+	// (0 = unlimited). Default 20.
+	AuthRateLimitPerMin int
+	// MaxRetainedJobs caps how many finished jobs are kept on disk; when a new
+	// job finishes, the oldest finished jobs beyond the cap are pruned (their
+	// working directories deleted). 0 (default) keeps all — set it on a
+	// long-lived shared instance so the work directory cannot grow forever.
+	MaxRetainedJobs int
+	// MaxJobAge prunes finished jobs older than this on each prune pass and at
+	// startup. 0 (default) disables age-based pruning.
+	MaxJobAge time.Duration
+	// MaxWorkDirBytes rejects a new job or inspect when the work directory
+	// already holds at least this many bytes (HTTP 507), so uploads cannot fill
+	// the disk. 0 (default) is unlimited.
+	MaxWorkDirBytes int64
 }
 
 // AuthConfig turns the console into a multi-user application fronted by an OIDC
@@ -90,5 +116,18 @@ func (c *Config) applyDefaults() {
 	}
 	if c.MaxUploadBytes <= 0 {
 		c.MaxUploadBytes = 512 << 20
+	}
+	// Rate limits default on with generous budgets (well above interactive use);
+	// a negative value is the explicit opt-out. Retention and the disk cap stay
+	// off by default so a single-user console keeps its full history.
+	if c.RateLimitPerMin == 0 {
+		c.RateLimitPerMin = 1200
+	} else if c.RateLimitPerMin < 0 {
+		c.RateLimitPerMin = 0
+	}
+	if c.AuthRateLimitPerMin == 0 {
+		c.AuthRateLimitPerMin = 20
+	} else if c.AuthRateLimitPerMin < 0 {
+		c.AuthRateLimitPerMin = 0
 	}
 }
