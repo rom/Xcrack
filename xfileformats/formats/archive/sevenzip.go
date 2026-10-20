@@ -1,6 +1,7 @@
 package archive
 
 import (
+	"hash/crc32"
 	"io"
 	"strings"
 
@@ -35,23 +36,12 @@ func (sevenzipFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry,
 		// The header is encrypted (or the archive is invalid); offer a gated entry.
 		return []*xfileformats.Entry{gatedEntry("7z-aes256-header", szHdrVerify(r, size), szHdrTar(r, size))}, nil
 	}
-	// probe whether content is encrypted (uniform for `7z a -p`): opening without
-	// a password may succeed lazily, so actually attempt to read a byte.
+	// Probe whether content is encrypted (uniform for `7z a -p`): the smallest
+	// member must decode and match its stored CRC under the empty password, else
+	// it is password-gated. See szReadOK.
 	encrypted := false
-	for _, f := range rd.File {
-		if szIsDir(f) {
-			continue
-		}
-		rc, oerr := f.Open()
-		if oerr != nil {
-			encrypted = true
-		} else {
-			if _, rerr := io.Copy(io.Discard, io.LimitReader(rc, 1)); rerr != nil {
-				encrypted = true
-			}
-			rc.Close()
-		}
-		break
+	if name := szSmallestMember(rd); name != "" {
+		encrypted = !szReadOK(r, size, name, "")
 	}
 	var entries []*xfileformats.Entry
 	for _, f := range rd.File {
@@ -75,6 +65,60 @@ func (sevenzipFormat) Entries(r io.ReaderAt, size int64) ([]*xfileformats.Entry,
 		entries = append(entries, e)
 	}
 	return entries, nil
+}
+
+// szSmallestMember returns the name of the smallest non-empty, non-directory
+// member — the cheapest to decode-and-CRC when probing/verifying a password —
+// or "" when the archive has none. In a `7z a -p` archive every member shares
+// one encrypted folder, so any member settles whether content is encrypted.
+func szSmallestMember(rd *sevenzip.Reader) string {
+	name := ""
+	var best uint64
+	for _, f := range rd.File {
+		if szIsDir(f) || f.UncompressedSize == 0 {
+			continue
+		}
+		if name == "" || f.UncompressedSize < best {
+			name, best = f.Name, f.UncompressedSize
+		}
+	}
+	return name
+}
+
+// szReadOK reports whether member `name` decrypts and decompresses cleanly under
+// pw. 7z content encryption has no password MAC, and a wrong password yields
+// garbage that can still "decode" without error — especially for short or stored
+// members, and varying with the per-archive random AES IV — so a clean read is
+// not proof on its own (this made a naive read-probe flaky). The authoritative
+// check is the member's stored CRC32: recompute it over the decoded bytes and
+// require a match. A member with no stored CRC (CRC32 == 0) or one larger than
+// the decompression backstop cannot be CRC-verified, so there we fall back to
+// "decoded without error".
+func szReadOK(r io.ReaderAt, size int64, name, pw string) bool {
+	rd, err := sevenzip.NewReaderWithPassword(r, size, pw)
+	if err != nil {
+		return false
+	}
+	for _, f := range rd.File {
+		if f.Name != name || szIsDir(f) {
+			continue
+		}
+		rc, oerr := f.Open()
+		if oerr != nil {
+			return false
+		}
+		h := crc32.NewIEEE()
+		_, rerr := io.Copy(h, io.LimitReader(rc, maxDecompressed))
+		rc.Close()
+		if rerr != nil {
+			return false
+		}
+		if f.CRC32 == 0 || f.UncompressedSize > uint64(maxDecompressed) {
+			return true // cannot CRC-verify; the clean decode is the best signal
+		}
+		return h.Sum32() == f.CRC32
+	}
+	return false
 }
 
 // szHdrVerify returns a verifier for a header-encrypted 7z: the password opens
@@ -149,24 +193,11 @@ func szOpen(r io.ReaderAt, size int64, name, pw string) (io.Reader, error) {
 	return nil, xfileformats.ErrMalformed
 }
 
-// szVerify authoritatively checks a password by fully reading the entry (7z
-// validates the CRC at end-of-stream), streaming to discard so it stays
-// memory-bounded.
+// szVerify authoritatively checks a password by fully reading the entry and
+// matching its stored CRC32 (see szReadOK), streaming to a hash so it stays
+// memory-bounded. The library does not check the per-member CRC itself, so
+// without this a wrong password whose garbage happens to decode is wrongly
+// accepted.
 func szVerify(r io.ReaderAt, size int64, name, pw string) (bool, error) {
-	rd, err := sevenzip.NewReaderWithPassword(r, size, pw)
-	if err != nil {
-		return false, nil
-	}
-	for _, f := range rd.File {
-		if f.Name == name && !szIsDir(f) {
-			rc, err := f.Open()
-			if err != nil {
-				return false, nil
-			}
-			_, rerr := io.Copy(io.Discard, io.LimitReader(rc, maxDecompressed))
-			rc.Close()
-			return rerr == nil, nil
-		}
-	}
-	return false, nil
+	return szReadOK(r, size, name, pw), nil
 }
