@@ -1277,13 +1277,19 @@ right away:
   exactly what the engine's rule compiler does to the word (the transformed
   output, or a rejection), so you can check a rule before adding it to a job.
 
-The long compute jobs — a full 2⁴⁰ `pdf-keyattack` / `office-keyattack` sweep
-and `thunder-gen` table generation — are **not** run from the browser; instead
-the tab builds the exact CLI command from a small form (with `--gpu`, workers,
-sharding, progress, table-generation knobs, …) for you to copy and run on the
-CLI or the distributed tier. Recovered secrets (keys, VBA/Access passwords) are
-shown only when the server was started with `--expose-secrets`; otherwise a
-redaction marker stands in, exactly as on the crack path.
+The long compute jobs — a 2⁴⁰ `pdf-keyattack` / `office-keyattack` key sweep and
+`thunder-gen` table generation — can be run **either way** from the one Tools
+card. **Run as job** launches it on the server as a cancelable background job
+with live progress (the recovered key, or the generated table, lands in the
+job's output for download); it reuses all the crack job machinery (History,
+cancel, download, SSE). A full 2⁴⁰ sweep is genuinely long, so the key sweeps
+also accept a bounded range, and the same card still builds the exact **CLI
+command** (with `--gpu`, workers, sharding, progress, table knobs, …) to copy
+and run on the CLI or distributed/GPU tier. These run in-process in pure Go — no
+external binary is executed from a web request. Recovered secrets (keys,
+VBA/Access passwords) are shown only when the server was started with
+`--expose-secrets`; otherwise a redaction marker stands in, exactly as on the
+crack path.
 
 ### 10.10 Statistics
 

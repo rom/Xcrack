@@ -124,6 +124,30 @@ func TestAccessibilityMarkup(t *testing.T) {
 	}
 }
 
+// TestKeyAttackJobUI guards the "run as job" wiring for the long key attacks:
+// the upload field and run button in the markup, and the JS that posts to the
+// three new tool-job endpoints.
+func TestKeyAttackJobUI(t *testing.T) {
+	html, err := staticFS.ReadFile("assets/index.html")
+	if err != nil {
+		t.Fatalf("read index.html: %v", err)
+	}
+	for _, want := range []string{`id="cli-upload"`, `id="cli-run"`} {
+		if !strings.Contains(string(html), want) {
+			t.Errorf("index.html is missing key-attack job control %q", want)
+		}
+	}
+	js, err := staticFS.ReadFile("assets/app.js")
+	if err != nil {
+		t.Fatalf("read app.js: %v", err)
+	}
+	for _, want := range []string{"runCLIAsJob", "/tools/thunder-gen", "/tools/pdf-keyattack", "/tools/office-keyattack"} {
+		if !strings.Contains(string(js), want) {
+			t.Errorf("app.js is missing key-attack job wiring %q", want)
+		}
+	}
+}
+
 // TestResumeUI guards the resume affordances in the SPA: the solved-challenge
 // upload field on the Crack form and the JS that posts it as a `recovered` part,
 // so the challenge round-trip stays wired end to end.

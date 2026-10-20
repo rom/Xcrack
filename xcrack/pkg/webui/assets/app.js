@@ -1694,7 +1694,12 @@ const flagId = (fl) => "cli-f-" + fl.flag.replace(/^--/, "").replace(/[^a-z0-9]/
 
 function wireCLI() {
   const op = $("cli-op"), fields = $("cli-fields");
-  const render = () => { renderCLIFields(CLI_SPECS[op.value], fields); updateCLI(); };
+  const render = () => {
+    renderCLIFields(CLI_SPECS[op.value], fields);
+    // thunder-gen generates a table from parameters; the key attacks need a file.
+    $("cli-upload-field").style.display = op.value === "thunder-gen" ? "none" : "";
+    updateCLI();
+  };
   op.addEventListener("change", render);
   fields.addEventListener("input", updateCLI);
   fields.addEventListener("change", updateCLI);
@@ -1704,7 +1709,39 @@ function wireCLI() {
     $("cli-copy-status").textContent = ok ? "copied" : "copy failed — select the command manually";
     setTimeout(() => { $("cli-copy-status").textContent = ""; }, 1800);
   });
+  $("cli-run").addEventListener("click", runCLIAsJob);
   render();
+}
+
+// runCLIAsJob launches the selected long-running attack as a server-side job and
+// opens it, so the browser-only operator gets live progress + cancel + download
+// without a shell. Numeric fields are read from the same inputs the CLI command
+// builder uses; the key attacks also take the uploaded document.
+async function runCLIAsJob() {
+  const opv = $("cli-op").value;
+  const status = $("cli-run-status");
+  const numField = (flag) => { const e = $("cli-f-" + flag); return e && e.value.trim() ? e.value.trim() : ""; };
+  const fd = new FormData();
+  let endpoint;
+  if (opv === "thunder-gen") {
+    endpoint = "/tools/thunder-gen";
+    for (const k of ["bits", "length", "chains", "tables", "workers"]) { const v = numField(k); if (v) fd.append(k, v); }
+  } else {
+    endpoint = opv === "pdf-keyattack" ? "/tools/pdf-keyattack" : "/tools/office-keyattack";
+    const f = $("cli-upload").files[0];
+    if (!f) { status.textContent = "Choose a document to attack first."; return; }
+    fd.append("source", f);
+    const wk = numField("workers"); if (wk) fd.append("workers", wk);
+  }
+  status.textContent = "Submitting…";
+  let res;
+  try { res = await fetch(api(endpoint), { method: "POST", body: fd }); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); status.textContent = "✕ " + (e.error || res.status); return; }
+  const { id } = await res.json();
+  status.textContent = "";
+  toast("Started — opening the job.");
+  openHistoryJob(id);
 }
 
 function renderCLIFields(spec, host) {

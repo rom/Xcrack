@@ -104,6 +104,9 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/tools/rule-test", p(s.handleToolRuleTest))
 	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
 	mux.HandleFunc("POST /api/v1/tools/kp", p(s.handleToolKP))
+	mux.HandleFunc("POST /api/v1/tools/office-keyattack", p(s.handleToolOfficeKey))
+	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack", p(s.handleToolPDFKey))
+	mux.HandleFunc("POST /api/v1/tools/thunder-gen", p(s.handleToolThunderGen))
 	mux.Handle("/", assets)
 	s.mux = mux
 	// Wrap the whole application in transport hardening: CSRF guard innermost

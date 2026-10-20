@@ -399,6 +399,9 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `DELETE` | `/api/v1/library/{name}` | delete a library wordlist |
 | `POST` | `/api/v1/cluster/health` | ping configured `xcrackd` servers (`--allow-server-paths`) |
 | `POST` | `/api/v1/tools/{hashline,vba-recover,access-recover,export-challenge,wordlist,rule-test,pdf-keyattack-table}` | specialist, mostly-stateless tools (see §10.9) |
+| `POST` | `/api/v1/tools/office-keyattack` | Office 97/2000 40-bit RC4 key sweep (multipart: `source`, optional `workers`/`start`/`count`), run as a cancelable background **job** with live progress; writes the recovered key under the job output. A full 2⁴⁰ sweep is a long compute job — the Tools card also builds the CLI command for the distributed/GPU tier |
+| `POST` | `/api/v1/tools/pdf-keyattack` | PDF V1/R2 40-bit RC4 file-key sweep (the full sweep; multipart `source`, optional `workers`/`start`/`count`), run as a background **job**. For the instant precomputed-table path use `/tools/pdf-keyattack-table` |
+| `POST` | `/api/v1/tools/thunder-gen` | precompute a PDF V1/R2 thunder table (form: `bits`/`length`/`chains`/`tables`/`workers`), run as a background **job** with live progress; the table is written to the job output for download |
 | `POST` | `/api/v1/tools/kp` | ZipCrypto known-plaintext (Biham–Kocher) key recovery, run as a background **job** (multipart: `plain` + `cipher`, optional `zip` + `entry` + `offset` for whole-archive decrypt). Returns a job `id`; stream `/jobs/{id}/events` and download via `/jobs/{id}/download`. The in-process attack is compute-heavy; the external bkcrack offload stays CLI-only |
 | `GET` | `/api/v1/docs` / `/api/v1/docs/{name}` | in-app documentation listing / Markdown |
 

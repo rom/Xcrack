@@ -403,8 +403,8 @@
       </div>
 
       <div class="card tool">
-        <h3>Long-running attacks → CLI command</h3>
-        <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs best run on the CLI / distributed tier. Pick one, set the options, and copy the exact command.</p>
+        <h3>Long-running attacks (40-bit key sweeps · thunder tables)</h3>
+        <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs. Run one <strong>here as a background job</strong> (cancelable, with live progress — best for a modest sweep or a smaller table), or copy the exact <strong>CLI command</strong> for the distributed / GPU tier.</p>
         <div class="field"><label>Operation</label>
           <select id="cli-op">
             <option value="pdf-keyattack">pdf-keyattack (full 40-bit sweep)</option>
@@ -412,8 +412,13 @@
             <option value="thunder-gen">thunder-gen (precompute a PDF V1/R2 table)</option>
           </select>
         </div>
+        <div class="field" id="cli-upload-field"><label>Document to attack <small>(for a server-side job)</small></label><input type="file" id="cli-upload"></div>
         <div id="cli-fields"></div>
-        <div class="field"><label>Command</label><pre id="cli-cmd" class="preview-body"></pre></div>
+        <div class="runbar cli-runbar">
+          <button type="button" id="cli-run" class="primary">▶ Run as job</button>
+          <span id="cli-run-status" class="hint"></span>
+        </div>
+        <div class="field"><label>…or copy the CLI command</label><pre id="cli-cmd" class="preview-body"></pre></div>
         <button type="button" id="cli-copy">Copy</button>
         <span id="cli-copy-status" class="hint"></span>
       </div>

@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — long-running key attacks as server-side jobs.** The three
+  compute-heavy specialist operations that were CLI-command-only in the Tools tab
+  — **office-keyattack** (Office 97/2000 40-bit RC4 key sweep), **pdf-keyattack**
+  (full PDF V1/R2 40-bit RC4 file-key sweep) and **thunder-gen** (precompute a
+  PDF V1/R2 thunder table) — can now be launched as **cancelable background jobs
+  with live progress** (`POST /api/v1/tools/{office-keyattack,pdf-keyattack,
+  thunder-gen}`), reusing the same job machinery (durability, SSE, cancel,
+  download) as a crack. A recovered key is written to the job output; a generated
+  table is downloaded from it. The sweeps accept an optional `start`/`count`
+  window so a modest run stays bounded, and the Tools card still builds the exact
+  CLI command for the distributed/GPU tier. These are pure-Go, in-process
+  computations — no external binary is ever executed from a web request (the
+  bkcrack offload remains CLI-only for that reason).
 - **Web GUI — resume: solved-challenge round-trip + checkpointed re-runs.** Two
   long-run ergonomics the CLI had and the GUI lacked. **Challenge round-trip:**
   the *Tools → Export challenge* card already exported a portable JSON envelope
