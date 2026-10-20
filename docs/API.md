@@ -390,6 +390,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads (owner/admin) |
 | `POST` | `/api/v1/jobs/{id}/share` | set the subjects granted read access to a job (`{subjects:[...]}`; owner/admin, multi-user mode) |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
+| `GET` | `/api/v1/jobs/{id}/report` | a self-contained forensic report for the job — case metadata (`case_id`/`examiner`, set at submission), the per-node recovery results with each node's SHA-256, and the job's chain of custody (its audit-trail entries). `?format=html` (default, printable) or `?format=csv`. Passwords are shown only under `--expose-secrets` |
 | `GET` | `/api/v1/stats` | aggregate counters across jobs |
 | `GET` | `/api/v1/audit` | the access/action audit trail (admin-only; newest first) — who ran what, when, from where; never records recovered secrets |
 | `GET` | `/api/v1/vault` | the recovered-password vault (single-user, `--expose-secrets`; off under multi-user) |
@@ -410,6 +411,8 @@ A job is `multipart/form-data`:
 - `source` — one or more parts: the files to recover.
 - `aux` — zero or more parts: wordlists / breach corpora / combinator / hcmask
   inputs the spec references by **base name**.
+- `case_id`, `examiner` — optional forensic case metadata recorded on the job and
+  surfaced in its report (`/jobs/{id}/report`).
 
 ```sh
 curl -sS -X POST http://127.0.0.1:8899/api/v1/jobs \

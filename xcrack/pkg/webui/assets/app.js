@@ -529,6 +529,8 @@ async function runJob() {
   for (const f of $("wordlists").files) fd.append("aux", f);
   for (const f of $("aux").files) fd.append("aux", f);
   if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
+  if ($("case_id").value.trim()) fd.append("case_id", $("case_id").value.trim());
+  if ($("examiner").value.trim()) fd.append("examiner", $("examiner").value.trim());
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
   $("latest-term").textContent = ""; resetBar();
   Charts.reset();
@@ -812,6 +814,8 @@ async function refreshHistory() {
       el("td", { textContent: j.created_at ? new Date(j.created_at).toLocaleString() : "—" }),
       el("td", {}, [
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report"), target: "_blank", rel: "noopener", textContent: "report" }) : "",
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report?format=csv"), textContent: "csv" }) : "",
         el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
         ownsJob(j) ? el("button", { type: "button", className: "mini", textContent: (j.shared && j.shared.length) ? "shared ✓" : "share", onclick: () => shareJob(j) }) : "",
         el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),

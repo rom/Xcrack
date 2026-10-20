@@ -15,6 +15,17 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — case management + forensic reporting.** A job can now carry
+  optional case metadata — a **Case ID** and **examiner**, captured from a *Case
+  details* panel on the Crack tab (multipart `case_id`/`examiner`) and stored on
+  the job. Any finished job renders a self-contained **forensic report** at
+  `GET /api/v1/jobs/{id}/report` (linked as *report* / *csv* on History rows): a
+  printable HTML document (or CSV) with the case metadata, the full per-node
+  recovery result tree — each node identified by its **SHA-256** for evidence
+  integrity — and the job's **chain of custody** (its audit-trail entries: who
+  acted on it, when, from where). It closes the operator/casework gap versus
+  Passware/Elcomsoft reporting. Recovered passwords appear in the report only
+  under `--expose-secrets`; otherwise they read `(hidden)`.
 - **Web GUI — RBAC depth: per-job sharing + a read-only viewer role.** Multi-user
   access was previously binary (owner, or an admin who sees everything). It now
   distinguishes **read** from **modify** and adds two ways to widen read access

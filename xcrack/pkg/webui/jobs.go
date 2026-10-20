@@ -94,6 +94,8 @@ type JobView struct {
 	SpecYAML    string       `json:"spec_yaml,omitempty"` // the (sanitized) spec the job ran
 	Owner       string       `json:"owner,omitempty"`     // owning user's subject (multi-user mode)
 	Shared      []string     `json:"shared,omitempty"`    // subjects the owner granted read access (multi-user)
+	CaseID      string       `json:"case_id,omitempty"`   // optional forensic case identifier
+	Examiner    string       `json:"examiner,omitempty"`  // optional examiner name
 }
 
 // Job is a single recovery run over one or more uploaded files. Its mutable
@@ -118,6 +120,8 @@ type Job struct {
 	SpecYAML    string
 	Owner       string
 	Shared      []string
+	CaseID      string
+	Examiner    string
 
 	mu         sync.Mutex
 	mgr        *Manager // back-reference, for persistence on state change
@@ -143,7 +147,7 @@ func (j *Job) snapshot() JobView {
 		FilesTotal: j.FilesTotal, FilesDone: j.FilesDone, Candidates: atomic.LoadInt64(&j.Candidates),
 		Keyspace: j.Keyspace, Decrypted: j.Decrypted, Distributed: j.Distributed,
 		Results: append([]FileResult(nil), j.Results...), SpecYAML: j.SpecYAML, Owner: j.Owner,
-		Shared: append([]string(nil), j.Shared...),
+		Shared: append([]string(nil), j.Shared...), CaseID: j.CaseID, Examiner: j.Examiner,
 	}
 }
 
@@ -423,8 +427,8 @@ func (m *Manager) jobFromView(v JobView, dir string) *Job {
 		Files: v.Files, Error: errMsg, FilesTotal: v.FilesTotal, FilesDone: v.FilesDone,
 		Candidates: v.Candidates, Keyspace: v.Keyspace, Decrypted: v.Decrypted,
 		Distributed: v.Distributed, Results: v.Results, SpecYAML: v.SpecYAML, Owner: v.Owner,
-		Shared: v.Shared,
-		dir:    dir, done: closedChan, mgr: m,
+		Shared: v.Shared, CaseID: v.CaseID, Examiner: v.Examiner,
+		dir: dir, done: closedChan, mgr: m,
 	}
 }
 

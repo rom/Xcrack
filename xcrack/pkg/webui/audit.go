@@ -107,6 +107,19 @@ func (a *auditTrail) tail(n int) []auditEntry {
 	return out
 }
 
+// forTarget returns the audit entries whose Target is id (a job's chain of
+// custody), newest first.
+func (a *auditTrail) forTarget(id string) []auditEntry {
+	all := a.tail(maxAuditReturn)
+	out := make([]auditEntry, 0, 8)
+	for _, e := range all {
+		if e.Target == id {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 // audit records an action for the request's user. actor/ip are resolved from the
 // request; it is a no-op when no trail is configured.
 func (s *Server) audit(r *http.Request, action, target, detail string) {

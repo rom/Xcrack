@@ -194,6 +194,8 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	job.FilesTotal = len(paths)
 	job.SpecYAML = string(yamlOut)
 	job.Owner = owner.Subject
+	job.CaseID = strings.TrimSpace(r.FormValue("case_id"))
+	job.Examiner = strings.TrimSpace(r.FormValue("examiner"))
 	job.mu.Unlock()
 
 	s.mgr.start(job)
