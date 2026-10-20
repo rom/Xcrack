@@ -60,6 +60,7 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/config/validate", p(s.handleValidate))
 	mux.HandleFunc("POST /api/v1/config/format", p(s.handleFormat))
 	mux.HandleFunc("POST /api/v1/identify", p(s.handleIdentify))
+	mux.HandleFunc("POST /api/v1/inspect", p(s.handleInspect))
 	mux.HandleFunc("POST /api/v1/jobs", p(s.handleCreateJob))
 	mux.HandleFunc("GET /api/v1/jobs", p(s.handleListJobs))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", p(s.handleGetJob))

@@ -491,6 +491,8 @@ function setYamlStatus(msg, ok) { const s = $("yaml-status"); s.textContent = ms
 // ---- run / events -----------------------------------------------------------
 function wireRun() {
   $("run").addEventListener("click", runJob);
+  $("estimate").addEventListener("click", inspectJob);
+  $("inspect-close").addEventListener("click", () => { $("inspect-card").hidden = true; });
   $("cancel").addEventListener("click", async () => { if (currentJob) await fetch(api("/jobs/" + currentJob + "/cancel"), { method: "POST" }); });
 }
 
@@ -525,6 +527,70 @@ async function runJob() {
   $("job-ended").textContent = "—";
   startElapsed();
   streamEvents(id);
+}
+
+// inspectJob posts the current candidate configuration and targets to /inspect
+// and shows a feasibility estimate (per-file keyspace, verify rate, and
+// time-to-exhaust) plus a preview of the exact candidate stream — the CLI's
+// --keyspace/--benchmark/--estimate/--stdout — without starting a job.
+async function inspectJob() {
+  if (pickedSources.length === 0) { setRunStatus("Choose at least one file first.", true); return; }
+  const fd = new FormData();
+  fd.append("spec", specForRun());
+  for (const f of pickedSources) fd.append("source", f);
+  for (const f of $("wordlists").files) fd.append("aux", f);
+  for (const f of $("aux").files) fd.append("aux", f);
+  if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
+  const btn = $("estimate");
+  btn.disabled = true; setRunStatus("Estimating…");
+  let res;
+  try { res = await fetch(api("/inspect"), { method: "POST", body: fd }); }
+  catch (e) { btn.disabled = false; return setRunStatus("Network error: " + e, true); }
+  btn.disabled = false;
+  if (!res.ok) { const e = await res.json().catch(() => ({})); return setRunStatus("✕ " + (e.error || res.status), true); }
+  renderInspect(await res.json());
+  setRunStatus("");
+}
+
+function fmtInt(n) { return (n == null ? 0 : n).toLocaleString(); }
+
+function renderInspect(data) {
+  const host = $("inspect-files");
+  host.textContent = "";
+  for (const f of (data.files || [])) {
+    const row = document.createElement("div");
+    row.className = "inspect-row";
+    const ks = f.keyspace < 0 ? "open-ended" : (f.keyspace_capped ? "≥" : "") + fmtInt(f.keyspace);
+    const rate = f.encrypted ? ((f.rate_text || fmtInt(Math.round(f.rate))) + "/s") : "—";
+    const time = f.time_to_exhaust
+      ? ("~" + f.time_to_exhaust + " to exhaust, ~" + (f.time_expected || "?") + " expected")
+      : (f.note || "—");
+    row.innerHTML =
+      '<div class="inspect-name">' + escapeHTML(f.name) +
+        (f.scheme ? ' <span class="pill">' + escapeHTML(f.scheme) + '</span>' : '') + '</div>' +
+      '<div class="inspect-metrics">' +
+        '<span><span class="k">keyspace</span> ' + escapeHTML(ks) + '</span>' +
+        '<span><span class="k">rate</span> ' + escapeHTML(rate) + '</span>' +
+        '<span><span class="k">time</span> ' + escapeHTML(time) + '</span>' +
+      '</div>';
+    host.appendChild(row);
+  }
+  if (data.files_truncated) {
+    const n = document.createElement("p"); n.className = "muted";
+    n.textContent = "Only the first " + (data.files || []).length + " files were estimated.";
+    host.appendChild(n);
+  }
+  const prev = data.candidate_preview || [];
+  const wrap = $("inspect-preview-wrap");
+  if (prev.length) {
+    wrap.hidden = false;
+    $("inspect-preview").textContent = prev.join("\n");
+    $("inspect-preview-count").textContent = prev.length;
+    $("inspect-preview-more").textContent = data.candidate_preview_truncated ? "+" : "";
+  } else {
+    wrap.hidden = true;
+  }
+  $("inspect-card").hidden = false;
 }
 
 function startElapsed() {

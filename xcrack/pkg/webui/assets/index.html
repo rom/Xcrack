@@ -213,10 +213,24 @@
 
     <div class="runbar">
       <button type="button" id="wizard-open">✨ Wizard</button>
+      <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it">◴ Estimate</button>
       <button id="run" class="primary">▶ Run</button>
       <button id="cancel" disabled>■ Cancel</button>
       <span id="run-status"></span>
       <span id="run-source"></span>
+    </div>
+
+    <div class="card" id="inspect-card" hidden>
+      <div class="inspect-head">
+        <h3>Feasibility estimate</h3>
+        <button type="button" id="inspect-close" class="x" aria-label="Close estimate">✕</button>
+      </div>
+      <p class="muted" id="inspect-note">How long this attack would take, before you commit to running it.</p>
+      <div id="inspect-files" class="inspect-files"></div>
+      <details id="inspect-preview-wrap" hidden>
+        <summary>Candidate preview — the exact stream this attack would try (<span id="inspect-preview-count">0</span><span id="inspect-preview-more"></span>)</summary>
+        <pre id="inspect-preview" class="log"></pre>
+      </details>
     </div>
 
     <div class="card" id="results-card" hidden>

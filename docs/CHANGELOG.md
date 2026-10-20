@@ -15,6 +15,19 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — server-side feasibility estimate (`◴ Estimate`).** A new
+  `POST /api/v1/inspect` endpoint and an **Estimate** button in the Crack tab
+  answer "how long will this take, is it even worth starting" *before* a job
+  runs — the CLI's `--keyspace`/`--benchmark`/`--estimate`/`--stdout`, which had
+  no server-side equivalent (the wizard's existing readout is client-side
+  keyspace math only). It takes the same submission as a job (spec + source +
+  aux + library), and per target reports the detected scheme, the candidate
+  **keyspace** (exact for finite sources, counted to a cap otherwise), the
+  measured **verify rate** for that file's format, and the resulting
+  **time-to-exhaust** (and ~half that expected to a hit), plus a bounded preview
+  of the exact candidate stream the attack would try. It runs nothing
+  destructive and persists no job — all work happens in an ephemeral temp
+  directory removed before the response.
 - **Web GUI — expanded attack wizard.** The `xcrack-web` wizard now composes a
   whole attack from what you know, not just a prefix/suffix and length. It adds
   **presets** (Personal, Corporate policy, Passphrase, PIN/numeric, Keyboard

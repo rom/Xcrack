@@ -224,3 +224,13 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 
 /* --- results summary (X of Y decrypted) --- */
 .results-summary { font-weight: 600; margin: 2px 0 10px; }
+
+/* --- feasibility estimate (inspect) --- */
+.inspect-head { display: flex; justify-content: space-between; align-items: center; }
+.inspect-files { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.inspect-row { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.inspect-name { font-weight: 600; margin-bottom: 4px; }
+.inspect-metrics { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.inspect-metrics .k { color: var(--muted); margin-right: 4px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: 12px; font-weight: 500; }
+.muted { color: var(--muted); font-size: 13px; }

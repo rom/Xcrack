@@ -380,6 +380,7 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `POST` | `/api/v1/config/validate` | strict-parse + validate a YAML spec (`{valid, error}`) |
 | `POST` | `/api/v1/config/format` | re-emit a spec tidied (`{yaml}`) |
 | `POST` | `/api/v1/identify` | detect format/encryption of uploaded files (no cracking) |
+| `POST` | `/api/v1/inspect` | feasibility estimate (multipart: `spec` + `source` + `aux`): per-file keyspace, verify rate, time-to-exhaust, and a bounded candidate-stream preview — the CLI's `--keyspace`/`--benchmark`/`--estimate`/`--stdout`, runs nothing and persists no job |
 | `POST` | `/api/v1/jobs` | create a job (multipart: `spec` + `source` files + `aux` files) |
 | `GET` | `/api/v1/jobs` / `/api/v1/jobs/{id}` | list jobs / one job's state + results |
 | `DELETE` | `/api/v1/jobs/{id}` | remove a finished job from the history |
