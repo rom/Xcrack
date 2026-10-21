@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -76,6 +77,7 @@ type FileResult struct {
 // API. It never embeds the job's mutex, channels or internal paths.
 type JobView struct {
 	ID          string       `json:"id"`
+	Kind        string       `json:"kind,omitempty"` // "" = crack; else a specialist tool, e.g. "kp"
 	State       JobState     `json:"state"`
 	CreatedAt   int64        `json:"created_at"` // unix ms
 	StartedAt   int64        `json:"started_at,omitempty"`
@@ -89,14 +91,20 @@ type JobView struct {
 	Decrypted   int          `json:"decrypted"`
 	Distributed bool         `json:"distributed,omitempty"`
 	Results     []FileResult `json:"results,omitempty"`
-	SpecYAML    string       `json:"spec_yaml,omitempty"` // the (sanitized) spec the job ran
-	Owner       string       `json:"owner,omitempty"`     // owning user's subject (multi-user mode)
+	SpecYAML    string       `json:"spec_yaml,omitempty"`    // the (sanitized) spec the job ran
+	Owner       string       `json:"owner,omitempty"`        // owning user's subject (multi-user mode)
+	Shared      []string     `json:"shared,omitempty"`       // subjects the owner granted read access (multi-user)
+	CaseID      string       `json:"case_id,omitempty"`      // optional forensic case identifier
+	Examiner    string       `json:"examiner,omitempty"`     // optional examiner name
+	Resumable   bool         `json:"resumable,omitempty"`    // an interrupted/canceled job with a saved checkpoint
+	ResumeCount int          `json:"resume_count,omitempty"` // priority passwords injected from a solved challenge
 }
 
 // Job is a single recovery run over one or more uploaded files. Its mutable
 // state is guarded by mu; the API only ever sees a JobView snapshot.
 type Job struct {
 	ID        string
+	Kind      string // "" = crack; else a specialist tool
 	State     JobState
 	CreatedAt int64 // unix ms
 	StartedAt int64
@@ -113,17 +121,23 @@ type Job struct {
 	Results     []FileResult
 	SpecYAML    string
 	Owner       string
+	Shared      []string
+	CaseID      string
+	Examiner    string
+	Resumable   bool // a saved checkpoint exists so an interrupted/canceled run can resume
 
-	mu      sync.Mutex
-	mgr     *Manager // back-reference, for persistence on state change
-	spec    *jobspec.Spec
-	dir     string
-	sources []string // absolute paths of uploaded source files, index-aligned with Files
-	cancel  context.CancelFunc
-	history []Event
-	subs    map[int]chan Event
-	nextSub int
-	done    chan struct{}
+	mu         sync.Mutex
+	mgr        *Manager // back-reference, for persistence on state change
+	spec       *jobspec.Spec
+	dir        string
+	sources    []string                          // absolute paths of uploaded source files, index-aligned with Files
+	priority   []string                          // resume-from passwords (solved challenges), tried first on every file
+	specialist func(context.Context, *Job) error // non-nil for a specialist (non-crack) job
+	cancel     context.CancelFunc
+	history    []Event
+	subs       map[int]chan Event
+	nextSub    int
+	done       chan struct{}
 }
 
 // snapshot returns the job's externally-visible state, safe to serialize while
@@ -132,11 +146,13 @@ func (j *Job) snapshot() JobView {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return JobView{
-		ID: j.ID, State: j.State, CreatedAt: j.CreatedAt, StartedAt: j.StartedAt,
+		ID: j.ID, Kind: j.Kind, State: j.State, CreatedAt: j.CreatedAt, StartedAt: j.StartedAt,
 		EndedAt: j.EndedAt, Files: append([]string(nil), j.Files...), Error: j.Error,
 		FilesTotal: j.FilesTotal, FilesDone: j.FilesDone, Candidates: atomic.LoadInt64(&j.Candidates),
 		Keyspace: j.Keyspace, Decrypted: j.Decrypted, Distributed: j.Distributed,
 		Results: append([]FileResult(nil), j.Results...), SpecYAML: j.SpecYAML, Owner: j.Owner,
+		Shared: append([]string(nil), j.Shared...), CaseID: j.CaseID, Examiner: j.Examiner,
+		Resumable: j.Resumable, ResumeCount: len(j.priority),
 	}
 }
 
@@ -145,6 +161,13 @@ func (j *Job) ownerID() string {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.Owner
+}
+
+// ownerAndShared returns the job's owner and the subjects it is shared with.
+func (j *Job) ownerAndShared() (string, []string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.Owner, append([]string(nil), j.Shared...)
 }
 
 func (j *Job) setState(s JobState) {
@@ -160,6 +183,10 @@ func (j *Job) setState(s JobState) {
 	j.emit(Event{Type: "state", State: s})
 	if j.mgr != nil {
 		j.mgr.persist(j)
+		j.mgr.hub.notify() // a state change may reorder/re-decorate the lists
+		if s == StateDone || s == StateError {
+			j.mgr.notifier.jobFinished(j.snapshot())
+		}
 	}
 }
 
@@ -209,12 +236,15 @@ func (j *Job) subscribe() (history []Event, ch chan Event, done chan struct{}, c
 
 // Manager owns the set of jobs and their on-disk working directories.
 type Manager struct {
-	cfg   Config
-	mu    sync.Mutex
-	jobs  map[string]*Job
-	vault *securecache.Store // found-password vault (potfile)
-	sem   chan struct{}      // job-concurrency limiter (nil = unlimited)
-	wg    sync.WaitGroup     // tracks live runner goroutines, for Shutdown
+	cfg      Config
+	mu       sync.Mutex
+	jobs     map[string]*Job
+	vault    *securecache.Store // found-password vault (potfile)
+	sem      chan struct{}      // job-concurrency limiter (nil = unlimited)
+	wg       sync.WaitGroup     // tracks live runner goroutines, for Shutdown
+	trail    *auditTrail        // access/action audit (set by NewServer; may be nil)
+	hub      *hub               // server-wide "list changed" nudges
+	notifier *notifier          // out-of-band job-finished notifications (may be nil)
 }
 
 // vaultActive reports whether the found-password vault is in use. It is a
@@ -251,7 +281,7 @@ func NewManager(cfg Config) (*Manager, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o700); err != nil {
 		return nil, fmt.Errorf("work dir: %w", err)
 	}
-	m := &Manager{cfg: cfg, jobs: map[string]*Job{}}
+	m := &Manager{cfg: cfg, jobs: map[string]*Job{}, hub: newHub(), notifier: newNotifier(cfg.Notify)}
 	if cfg.MaxConcurrentJobs > 0 {
 		m.sem = make(chan struct{}, cfg.MaxConcurrentJobs)
 	}
@@ -263,7 +293,83 @@ func NewManager(cfg Config) (*Manager, error) {
 	}
 	m.vault = vault
 	m.loadPersisted()
+	m.prune() // apply the age/count retention policy to reloaded history at startup
 	return m, nil
+}
+
+// dirSize sums the bytes of regular files under root (best-effort).
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
+		if err == nil && !info.IsDir() {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
+}
+
+// overQuota reports whether the work directory already holds at least
+// MaxWorkDirBytes (0 = unlimited).
+func (m *Manager) overQuota() bool {
+	if m.cfg.MaxWorkDirBytes <= 0 {
+		return false
+	}
+	return dirSize(m.cfg.WorkDir) >= m.cfg.MaxWorkDirBytes
+}
+
+// prune enforces the retention policy: finished jobs older than MaxJobAge, and
+// finished jobs beyond MaxRetainedJobs (oldest first), are removed and their
+// working directories deleted. Running/queued jobs are never touched, and a job
+// still finishing (its done channel not yet closed) is skipped so prune can
+// never deadlock removing the job that triggered it.
+func (m *Manager) prune() {
+	if m.cfg.MaxRetainedJobs <= 0 && m.cfg.MaxJobAge <= 0 {
+		return
+	}
+	type fin struct {
+		id    string
+		ended int64
+	}
+	m.mu.Lock()
+	var finished []fin
+	for id, j := range m.jobs {
+		select {
+		case <-j.done: // only a fully-settled job is eligible
+		default:
+			continue
+		}
+		j.mu.Lock()
+		terminal := j.State == StateDone || j.State == StateError || j.State == StateCanceled || j.State == StateInterrupted
+		ended := j.EndedAt
+		if ended == 0 {
+			ended = j.CreatedAt
+		}
+		j.mu.Unlock()
+		if terminal {
+			finished = append(finished, fin{id, ended})
+		}
+	}
+	m.mu.Unlock()
+
+	sort.Slice(finished, func(a, b int) bool { return finished[a].ended < finished[b].ended }) // oldest first
+	remove := map[string]bool{}
+	if m.cfg.MaxJobAge > 0 {
+		cutoff := nowMS() - m.cfg.MaxJobAge.Milliseconds()
+		for _, f := range finished {
+			if f.ended < cutoff {
+				remove[f.id] = true
+			}
+		}
+	}
+	if m.cfg.MaxRetainedJobs > 0 && len(finished) > m.cfg.MaxRetainedJobs {
+		for i := 0; i < len(finished)-m.cfg.MaxRetainedJobs; i++ {
+			remove[finished[i].id] = true
+		}
+	}
+	for id := range remove {
+		m.remove(id)
+	}
 }
 
 // persist writes the job's current view to <dir>/job.json atomically (temp +
@@ -322,11 +428,15 @@ func (m *Manager) jobFromView(v JobView, dir string) *Job {
 		}
 	}
 	return &Job{
-		ID: v.ID, State: state, CreatedAt: v.CreatedAt, StartedAt: v.StartedAt, EndedAt: v.EndedAt,
+		ID: v.ID, Kind: v.Kind, State: state, CreatedAt: v.CreatedAt, StartedAt: v.StartedAt, EndedAt: v.EndedAt,
 		Files: v.Files, Error: errMsg, FilesTotal: v.FilesTotal, FilesDone: v.FilesDone,
 		Candidates: v.Candidates, Keyspace: v.Keyspace, Decrypted: v.Decrypted,
 		Distributed: v.Distributed, Results: v.Results, SpecYAML: v.SpecYAML, Owner: v.Owner,
-		dir: dir, done: closedChan, mgr: m,
+		Shared: v.Shared, CaseID: v.CaseID, Examiner: v.Examiner,
+		// A job interrupted by a server restart keeps its checkpoint on disk, so
+		// re-running it resumes; surface that even though its run never finished.
+		Resumable: v.Resumable || hasCheckpoint(dir),
+		dir:       dir, done: closedChan, mgr: m,
 	}
 }
 
@@ -353,6 +463,7 @@ func (m *Manager) remove(id string) bool {
 	if dir != "" {
 		_ = os.RemoveAll(dir)
 	}
+	m.hub.notify()
 	return true
 }
 
@@ -388,12 +499,13 @@ func (m *Manager) list() []JobView {
 
 // newJob allocates a job with its own working directory.
 func (m *Manager) newJob() (*Job, error) {
+	m.prune() // bound history growth before adding another job
 	id, err := randID()
 	if err != nil {
 		return nil, err
 	}
 	dir := filepath.Join(m.cfg.WorkDir, id)
-	for _, sub := range []string{"uploads", "aux", "out"} {
+	for _, sub := range []string{"uploads", "aux", "out", checkpointSubdir} {
 		if err := os.MkdirAll(filepath.Join(dir, sub), 0o700); err != nil {
 			return nil, err
 		}
@@ -406,6 +518,7 @@ func (m *Manager) newJob() (*Job, error) {
 	m.jobs[id] = j
 	m.mu.Unlock()
 	m.persist(j) // a durable record exists from creation, before the run starts
+	m.hub.notify()
 	return j, nil
 }
 
@@ -486,6 +599,10 @@ func (m *Manager) rerun(old *Job, owner string) (*Job, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Carry the original's checkpoint forward so a single-target re-run resumes
+	// near where the interrupted run stopped instead of restarting (the spec and
+	// files are identical, so the checkpoint signature matches).
+	_ = copyCheckpoints(dir, nj.dir)
 	nj.mu.Lock()
 	nj.spec = spec
 	nj.Files = names
@@ -527,6 +644,24 @@ func (m *Manager) run(j *Job) {
 
 	j.setState(StateRunning)
 
+	// Specialist (non-crack) jobs — the ZipCrypto known-plaintext attack and the
+	// key-recovery tools — supply their own work function and reuse all of the
+	// job machinery (durability, SSE, cancel, history, download).
+	if j.specialist != nil {
+		err := j.specialist(ctx, j)
+		if ctx.Err() != nil {
+			j.setState(StateCanceled)
+			return
+		}
+		if err != nil {
+			j.fail(err.Error())
+			return
+		}
+		j.setState(StateDone)
+		j.emit(Event{Type: "done"})
+		return
+	}
+
 	opts, err := spec.BuildOptions()
 	if err != nil {
 		j.fail(fmt.Sprintf("build options: %v", err))
@@ -564,12 +699,24 @@ func (m *Manager) run(j *Job) {
 		if f.Password != "" {
 			m.recordFound(f.Password) // persist to the vault (gated by vaultActive)
 		}
+		if m.trail != nil { // audit the recovery, never the secret itself
+			actor := j.Owner
+			if actor == "" {
+				actor = "local"
+			}
+			m.trail.record(auditEntry{Actor: actor, Action: "found", Target: f.Path, Detail: f.Format})
+		}
 		j.emit(ev)
 	}
 
 	// Seed the loopback pass with the vault's known passwords, so a reused or
 	// previously recovered password is caught fast (single-user, secrets-exposed).
+	// Priority passwords brought back from a solved challenge (--resume-from) are
+	// tried first on every file.
 	rt := jobspec.Runtime{}
+	j.mu.Lock()
+	rt.PriorityPasswords = append([]string(nil), j.priority...)
+	j.mu.Unlock()
 	if m.vaultActive() {
 		rt.LoopbackPasswords = m.vault.Passwords()
 	}
@@ -625,6 +772,16 @@ func (m *Manager) run(j *Job) {
 	j.Distributed = distributed
 	j.mu.Unlock()
 
+	// A single-target crack is resumable: its candidate position is checkpointed
+	// under the job directory so an interrupted run can pick up near where it
+	// stopped (a re-run copies the checkpoint forward). ckSpecSig ties the
+	// checkpoint to this exact spec; a multi-file or distributed run is not
+	// checkpointed (the checkpoint models one linear pass over one target).
+	ckSpecSig := ""
+	if len(names) == 1 && !distributed {
+		ckSpecSig = specSig(specYAMLOf(j))
+	}
+
 	var results []FileResult
 	if distributed {
 		results = m.runDistributed(ctx, j, spec, asm, names, sources, ps, &found)
@@ -644,7 +801,7 @@ func (m *Manager) run(j *Job) {
 			go func(i int) {
 				defer wg.Done()
 				defer func() { <-sem }()
-				results[i] = m.processOne(ctx, j, pool, asm, names[i], sources[i], ps)
+				results[i] = m.processOne(ctx, j, pool, asm, names[i], sources[i], ps, ckSpecSig)
 				j.mu.Lock()
 				j.FilesDone++
 				done, total := j.FilesDone, j.FilesTotal
@@ -657,10 +814,15 @@ func (m *Manager) run(j *Job) {
 
 	stopProgress()
 
+	// Record whether a resumable checkpoint survived the run (left behind only by
+	// an interruption/cancel; a completed file removes its own checkpoint).
+	resumable := ckSpecSig != "" && hasCheckpoint(j.dir)
+
 	j.mu.Lock()
 	j.Results = results
 	j.Decrypted = int(atomic.LoadInt64(&found))
 	j.Candidates = ps.candidates.Load()
+	j.Resumable = resumable
 	j.mu.Unlock()
 
 	if ctx.Err() != nil {
@@ -669,6 +831,13 @@ func (m *Manager) run(j *Job) {
 	}
 	j.setState(StateDone)
 	j.emit(Event{Type: "done"})
+}
+
+// specYAMLOf reads a job's sanitized spec YAML under its lock.
+func specYAMLOf(j *Job) string {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.SpecYAML
 }
 
 // progressState is the live counter/latest-candidate a recorder feeds and the
@@ -713,12 +882,28 @@ func (r *recorder) Reset() error { return r.src.Reset() }
 // processOne cracks a single file and writes any decrypted tree under the job's
 // output directory. It never returns an error; a failure is recorded on the
 // FileResult so the other files still run.
-func (m *Manager) processOne(ctx context.Context, j *Job, pool *xcrack.Pool, asm *jobspec.Assembler, name, path string, ps *progressState) FileResult {
+func (m *Manager) processOne(ctx context.Context, j *Job, pool *xcrack.Pool, asm *jobspec.Assembler, name, path string, ps *progressState, ckSpecSig string) FileResult {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return FileResult{Name: name, Error: fmt.Sprintf("read: %v", err)}
 	}
-	src := &recorder{src: asm.Candidates(name), ps: ps}
+	var base candidates.Source = asm.Candidates(name)
+	// Checkpoint a single-target run so it can resume after an interruption.
+	// candidates.Checkpoint resumes only when the stored signature matches, so a
+	// changed spec or file starts fresh. On clean completion the checkpoint is
+	// removed; an interruption leaves it for a re-run to pick up.
+	var ckSaver candidates.Saver
+	if ckSpecSig != "" {
+		ckPath := checkpointPath(j.dir, name)
+		if ck, cerr := candidates.Checkpoint(base, ckPath, checkpointSig(ckSpecSig, name, int64(len(data))), 0, -1); cerr == nil {
+			base = ck
+			ckSaver, _ = ck.(candidates.Saver)
+			if rf, ok := ck.(candidates.Resumable); ok && rf.ResumeFrom() > 0 {
+				j.emit(Event{Type: "log", Message: fmt.Sprintf("%s: resuming from checkpoint at candidate %d", name, rf.ResumeFrom())})
+			}
+		}
+	}
+	src := &recorder{src: base, ps: ps}
 	res, err := pool.Process(ctx, byteReaderAt(data), int64(len(data)), src)
 	if err != nil {
 		if ctx.Err() != nil {
@@ -727,6 +912,12 @@ func (m *Manager) processOne(ctx context.Context, j *Job, pool *xcrack.Pool, asm
 		return FileResult{Name: name, Error: fmt.Sprintf("process: %v", err)}
 	}
 	defer res.Close()
+	// The search over this target finished: flush and drop its checkpoint so a
+	// later re-run starts cleanly rather than resuming a completed sweep.
+	if ckSaver != nil {
+		_ = ckSaver.Save()
+		_ = os.Remove(checkpointPath(j.dir, name))
+	}
 	res.Root.Path = name
 	rep := xcrack.BuildReport(res)
 	// Extract any decrypted content to the per-file output dir so it can be

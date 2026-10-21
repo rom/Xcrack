@@ -10,17 +10,20 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a href="#main" class="skip-link" data-i18n="skip.main">Skip to main content</a>
 <header>
-  <div class="brand">🔓 <span>Xcrack</span></div>
-  <nav id="tabs">
-    <button data-tab="crack" class="active">Crack</button>
-    <button data-tab="history">History</button>
-    <button data-tab="recovered">Recovered</button>
-    <button data-tab="library">Library</button>
-    <button data-tab="tools">Tools</button>
-    <button data-tab="stats">Statistics</button>
-    <button data-tab="docs">Docs</button>
-    <button data-tab="config">Configuration</button>
+  <div class="brand"><span aria-hidden="true">🔓</span> <span>Xcrack</span></div>
+  <nav id="tabs" role="tablist" aria-label="Sections">
+    <button data-tab="crack" class="active" role="tab" id="tabbtn-crack" aria-controls="tab-crack" aria-selected="true" data-i18n="nav.crack">Crack</button>
+    <button data-tab="history" role="tab" id="tabbtn-history" aria-controls="tab-history" aria-selected="false" tabindex="-1" data-i18n="nav.history">History</button>
+    <button data-tab="recovered" role="tab" id="tabbtn-recovered" aria-controls="tab-recovered" aria-selected="false" tabindex="-1" data-i18n="nav.recovered">Recovered</button>
+    <button data-tab="library" role="tab" id="tabbtn-library" aria-controls="tab-library" aria-selected="false" tabindex="-1" data-i18n="nav.library">Library</button>
+    <button data-tab="tools" role="tab" id="tabbtn-tools" aria-controls="tab-tools" aria-selected="false" tabindex="-1" data-i18n="nav.tools">Tools</button>
+    <button data-tab="stats" role="tab" id="tabbtn-stats" aria-controls="tab-stats" aria-selected="false" tabindex="-1" data-i18n="nav.stats">Statistics</button>
+    <button data-tab="fleet" role="tab" id="tabbtn-fleet" aria-controls="tab-fleet" aria-selected="false" tabindex="-1" data-i18n="nav.fleet">Fleet</button>
+    <button data-tab="audit" id="tab-btn-audit" role="tab" aria-controls="tab-audit" aria-selected="false" tabindex="-1" data-i18n="nav.audit">Audit</button>
+    <button data-tab="docs" role="tab" id="tabbtn-docs" aria-controls="tab-docs" aria-selected="false" tabindex="-1" data-i18n="nav.docs">Docs</button>
+    <button data-tab="config" role="tab" id="tabbtn-config" aria-controls="tab-config" aria-selected="false" tabindex="-1" data-i18n="nav.config">Configuration</button>
   </nav>
   <div class="spacer"></div>
   <label class="modeswitch" title="Reveal every engine option in the Crack form"><input type="checkbox" id="advanced"> Advanced</label>
@@ -28,29 +31,29 @@
   <span id="user-area"></span>
 </header>
 
-<div id="banners"></div>
+<div id="banners" role="region" aria-label="Notices" aria-live="polite"></div>
 
-<div id="login-gate" class="login-gate" hidden>
+<div id="login-gate" class="login-gate" role="dialog" aria-modal="true" aria-label="Sign in" hidden>
   <div class="login-box">
-    <div class="brand">🔓 <span>Xcrack</span></div>
+    <div class="brand"><span aria-hidden="true">🔓</span> <span>Xcrack</span></div>
     <p>This console requires you to sign in.</p>
     <button type="button" id="login-btn" class="primary">Sign in</button>
   </div>
 </div>
 
-<main>
+<main id="main">
   <!-- CRACK ------------------------------------------------------------- -->
-  <section id="tab-crack" class="tab active">
+  <section id="tab-crack" class="tab active" role="tabpanel" aria-labelledby="tabbtn-crack" tabindex="0">
     <div class="grid">
       <div class="card">
-        <h2>1 · Choose files</h2>
+        <h2 data-i18n="crack.step1">1 · Choose files</h2>
         <div id="dropzone" class="dropzone">
           <input type="file" id="files" multiple hidden>
           <p>Drop locked files here, or <button type="button" id="pick">choose files</button></p>
           <ul id="filelist"></ul>
         </div>
 
-        <h2>2 · Candidate sources</h2>
+        <h2 data-i18n="crack.step2">2 · Candidate sources</h2>
         <div class="field"><label><input type="checkbox" id="use_default" checked> Built-in common-password list</label></div>
         <div class="field"><label>Explicit guesses (one per line, tried first)</label><textarea id="passwords" rows="2" placeholder="hunter2"></textarea></div>
         <div class="field"><label>Wordlists <small>(uploaded with the job)</small></label><input type="file" id="wordlists" multiple><ul id="wordlist-list" class="filepreview"></ul></div>
@@ -63,7 +66,7 @@
             <button type="button" class="mb-tok" data-tok="?d">?d 0–9</button>
             <button type="button" class="mb-tok" data-tok="?s">?s sym</button>
             <button type="button" class="mb-tok" data-tok="?a">?a all</button>
-            <button type="button" class="mb-tok mb-ctl" data-tok="backspace">⌫</button>
+            <button type="button" class="mb-tok mb-ctl" data-tok="backspace" aria-label="Delete last token">⌫</button>
             <button type="button" class="mb-tok mb-ctl" data-tok="clear">clear</button>
           </div>
           <div class="mb-field"><code id="mb-mask" class="mb-mask">(empty)</code></div>
@@ -211,12 +214,41 @@
       </div>
     </div>
 
+    <details class="card" id="case-card">
+      <summary>Case details (optional) — recorded on the job and in its forensic report</summary>
+      <div class="row">
+        <div class="field"><label>Case ID</label><input type="text" id="case_id" placeholder="2026-0042"></div>
+        <div class="field"><label>Examiner</label><input type="text" id="examiner" placeholder="your name"></div>
+      </div>
+    </details>
+
+    <details class="card" id="resume-card">
+      <summary>Resume — solved challenges (optional)</summary>
+      <p class="hint">Bring back the <code>recovered.json</code> you solved on an external cracker (exported from <em>Tools → Export challenge</em>). Its password(s) are tried <strong>first</strong> on every file — the GUI equivalent of the CLI's <code>--resume-from</code>. You can attach several.</p>
+      <div class="field"><label>Solved-challenge JSON</label><input type="file" id="recovered" accept=".json,application/json" multiple></div>
+      <p class="hint">Note: an interrupted single-file run can also be resumed from its checkpoint by <strong>re-running</strong> it in History — no re-upload needed.</p>
+    </details>
+
     <div class="runbar">
-      <button type="button" id="wizard-open">✨ Wizard</button>
-      <button id="run" class="primary">▶ Run</button>
-      <button id="cancel" disabled>■ Cancel</button>
-      <span id="run-status"></span>
+      <button type="button" id="wizard-open" data-i18n="btn.wizard">✨ Wizard</button>
+      <button type="button" id="estimate" title="Measure the verify rate, count the keyspace, and estimate how long this attack would take — without starting it" data-i18n="btn.estimate">◴ Estimate</button>
+      <button id="run" class="primary" data-i18n="btn.run">▶ Run</button>
+      <button id="cancel" disabled data-i18n="btn.cancel">■ Cancel</button>
+      <span id="run-status" role="status" aria-live="polite"></span>
       <span id="run-source"></span>
+    </div>
+
+    <div class="card" id="inspect-card" hidden>
+      <div class="inspect-head">
+        <h3>Feasibility estimate</h3>
+        <button type="button" id="inspect-close" class="x" aria-label="Close estimate">✕</button>
+      </div>
+      <p class="muted" id="inspect-note">How long this attack would take, before you commit to running it.</p>
+      <div id="inspect-files" class="inspect-files"></div>
+      <details id="inspect-preview-wrap" hidden>
+        <summary>Candidate preview — the exact stream this attack would try (<span id="inspect-preview-count">0</span><span id="inspect-preview-more"></span>)</summary>
+        <pre id="inspect-preview" class="log"></pre>
+      </details>
     </div>
 
     <div class="card" id="results-card" hidden>
@@ -225,25 +257,25 @@
         <div><span class="k">Ended</span> <span id="job-ended">—</span></div>
         <div><span class="k">Elapsed</span> <span id="job-elapsed">—</span></div>
       </div>
-      <div class="bar"><div class="bar-fill" id="bar-fill"></div></div>
-      <div id="progress-text" class="progress-text">—</div>
-      <div id="latest-term" class="latest"></div>
+      <div class="bar" id="progress-bar" role="progressbar" aria-label="Job progress" aria-valuemin="0" aria-valuemax="100"><div class="bar-fill" id="bar-fill"></div></div>
+      <div id="progress-text" class="progress-text" role="status" aria-live="polite">—</div>
+      <div id="latest-term" class="latest" aria-live="polite"></div>
       <h3>Results</h3>
       <div id="results"></div>
       <div class="log-head">
-        <h3>Live log</h3>
+        <h3 id="log-label">Live log</h3>
         <label class="check"><input type="checkbox" id="log-autoscroll" checked> autoscroll</label>
         <button type="button" id="log-copy" class="mini">copy</button>
       </div>
-      <pre id="log" class="log"></pre>
+      <pre id="log" class="log" role="log" aria-live="off" aria-labelledby="log-label" tabindex="0"></pre>
     </div>
   </section>
 
   <!-- HISTORY ----------------------------------------------------------- -->
-  <section id="tab-history" class="tab">
+  <section id="tab-history" class="tab" role="tabpanel" aria-labelledby="tabbtn-history" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Job history</h2>
+        <h2 data-i18n="head.history">Job history</h2>
         <div class="history-actions">
           <label class="check"><input type="checkbox" id="notify-toggle"> Notify me when a job finishes</label>
           <button type="button" id="history-refresh" class="mini">Refresh</button>
@@ -255,10 +287,10 @@
   </section>
 
   <!-- RECOVERED (potfile vault) ----------------------------------------- -->
-  <section id="tab-recovered" class="tab">
+  <section id="tab-recovered" class="tab" role="tabpanel" aria-labelledby="tabbtn-recovered" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Recovered passwords</h2>
+        <h2 data-i18n="head.recovered">Recovered passwords</h2>
         <button type="button" id="vault-refresh" class="mini">Refresh</button>
       </div>
       <p class="hint">The server's found-password vault (potfile). Every recovered password is kept here and fed back into new jobs' loopback pass, so a reused or previously found password is caught fast. On a multi-user instance the vault is disabled to avoid leaking passwords between users.</p>
@@ -267,10 +299,10 @@
   </section>
 
   <!-- LIBRARY (server-side wordlists) ----------------------------------- -->
-  <section id="tab-library" class="tab">
+  <section id="tab-library" class="tab" role="tabpanel" aria-labelledby="tabbtn-library" tabindex="0">
     <div class="card">
       <div class="history-head">
-        <h2>Wordlist library</h2>
+        <h2 data-i18n="head.library">Wordlist library</h2>
         <button type="button" id="lib-refresh" class="mini">Refresh</button>
       </div>
       <p class="hint">Dictionaries saved on the server and reused by name across jobs — no re-upload. In the Crack form's <em>Library wordlists</em> field, list the names you want a job to use.</p>
@@ -280,7 +312,7 @@
   </section>
 
   <!-- TOOLS ------------------------------------------------------------- -->
-  <section id="tab-tools" class="tab">
+  <section id="tab-tools" class="tab" role="tabpanel" aria-labelledby="tabbtn-tools" tabindex="0">
     <p class="hint">The specialist, non-cracking operations from the CLI. Inspect/recover tools run in the browser; the long key sweeps and table generation build a ready-to-run CLI command.</p>
     <div class="grid">
       <div class="card tool">
@@ -333,6 +365,21 @@
       </div>
 
       <div class="card tool">
+        <h3>ZipCrypto known-plaintext (kp)</h3>
+        <p class="hint">Recover a ZipCrypto archive's key state from aligned known plaintext and its ciphertext — no password. Add the archive and the known-plaintext entry to decrypt <em>every</em> entry from one recovery (cross-entry key reuse). Runs as a background job (the in-process attack is compute-heavy).</p>
+        <div class="field"><label>Known plaintext (≥12 bytes)</label><input type="file" id="kp-plain"></div>
+        <div class="field"><label>Ciphertext for those same bytes (equal length)</label><input type="file" id="kp-cipher"></div>
+        <details>
+          <summary>Whole-archive decrypt (optional)</summary>
+          <div class="field"><label>ZipCrypto archive (.zip)</label><input type="file" id="kp-zip"></div>
+          <div class="field"><label>Known-plaintext entry — the full entry (12-byte header + data)</label><input type="file" id="kp-entry"></div>
+          <div class="field"><label>Offset of the known plaintext within the entry data</label><input type="number" id="kp-offset" min="0" value="0"></div>
+        </details>
+        <button class="tool-run primary" id="kp-run">Recover key state</button>
+        <div class="tool-out" data-out="kp"></div>
+      </div>
+
+      <div class="card tool">
         <h3>Wordlist utilities</h3>
         <p class="hint">Length-filter, dedupe, sort, or split a wordlist.</p>
         <div class="field"><label>Upload a wordlist</label><input type="file" id="wl-file"></div>
@@ -357,8 +404,8 @@
       </div>
 
       <div class="card tool">
-        <h3>Long-running attacks → CLI command</h3>
-        <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs best run on the CLI / distributed tier. Pick one, set the options, and copy the exact command.</p>
+        <h3>Long-running attacks (40-bit key sweeps · thunder tables)</h3>
+        <p class="hint">A full 2⁴⁰ key sweep and thunder-table generation are long compute jobs. Run one <strong>here as a background job</strong> (cancelable, with live progress — best for a modest sweep or a smaller table), or copy the exact <strong>CLI command</strong> for the distributed / GPU tier.</p>
         <div class="field"><label>Operation</label>
           <select id="cli-op">
             <option value="pdf-keyattack">pdf-keyattack (full 40-bit sweep)</option>
@@ -366,8 +413,13 @@
             <option value="thunder-gen">thunder-gen (precompute a PDF V1/R2 table)</option>
           </select>
         </div>
+        <div class="field" id="cli-upload-field"><label>Document to attack <small>(for a server-side job)</small></label><input type="file" id="cli-upload"></div>
         <div id="cli-fields"></div>
-        <div class="field"><label>Command</label><pre id="cli-cmd" class="preview-body"></pre></div>
+        <div class="runbar cli-runbar">
+          <button type="button" id="cli-run" class="primary">▶ Run as job</button>
+          <span id="cli-run-status" class="hint"></span>
+        </div>
+        <div class="field"><label>…or copy the CLI command</label><pre id="cli-cmd" class="preview-body"></pre></div>
         <button type="button" id="cli-copy">Copy</button>
         <span id="cli-copy-status" class="hint"></span>
       </div>
@@ -375,8 +427,8 @@
   </section>
 
   <!-- STATISTICS -------------------------------------------------------- -->
-  <section id="tab-stats" class="tab">
-    <div class="card" id="sys-info"><h2>System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
+  <section id="tab-stats" class="tab" role="tabpanel" aria-labelledby="tabbtn-stats" tabindex="0">
+    <div class="card" id="sys-info"><h2 data-i18n="head.stats_sys">System &amp; acceleration</h2><div id="sys-body"><p class="hint">—</p></div></div>
     <div class="grid stats-grid" id="stat-cards"></div>
     <div class="card"><h2>Current run — throughput</h2><div id="run-charts" class="charts"><p class="hint">Run a job to see live throughput.</p></div></div>
     <div class="grid">
@@ -385,21 +437,63 @@
     </div>
   </section>
 
+  <!-- FLEET (managed distributed workers) ------------------------------- -->
+  <section id="tab-fleet" class="tab" role="tabpanel" aria-labelledby="tabbtn-fleet" tabindex="0">
+    <div class="card">
+      <div class="history-head">
+        <h2 data-i18n="head.fleet">Worker fleet</h2>
+        <div class="history-actions">
+          <button type="button" id="fleet-health" class="mini">Check health</button>
+          <button type="button" id="fleet-save" class="mini primary">Save fleet</button>
+        </div>
+      </div>
+      <p class="hint">The <code>xcrackd</code> / <code>xcrack-web</code> worker nodes a distributed crack fans out to. Save the fleet once here, see each node's live health, and apply it to a job instead of retyping URLs. Distributed cracking and these probes require the server to run with <code>--allow-server-paths</code>.</p>
+      <div id="fleet-disabled" class="banner banner-warn" hidden><span>Distributed cracking is disabled: start the server with <code>--allow-server-paths</code> (a trusted local instance) to manage and probe a fleet.</span></div>
+      <div id="fleet-list"></div>
+      <div class="runbar">
+        <button type="button" id="fleet-add" class="mini">+ Add node</button>
+        <button type="button" id="fleet-use" class="mini">Use fleet in a job →</button>
+        <span id="fleet-status" class="hint"></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- AUDIT ------------------------------------------------------------- -->
+  <section id="tab-audit" class="tab" role="tabpanel" aria-labelledby="tab-btn-audit" tabindex="0">
+    <div class="card">
+      <div class="history-head">
+        <h2 data-i18n="head.audit">Audit trail</h2>
+        <div class="history-actions">
+          <span class="muted">Who ran what, when, and from where. Recovered secrets are never recorded here.</span>
+          <button type="button" id="audit-refresh" class="mini">Refresh</button>
+        </div>
+      </div>
+      <div id="audit-body"><p class="hint">—</p></div>
+    </div>
+  </section>
+
   <!-- DOCS -------------------------------------------------------------- -->
-  <section id="tab-docs" class="tab">
+  <section id="tab-docs" class="tab" role="tabpanel" aria-labelledby="tabbtn-docs" tabindex="0">
     <div class="grid docs-grid">
-      <div class="card"><h2>Documentation</h2><ul id="doclist" class="doclist"></ul></div>
+      <div class="card"><h2 data-i18n="head.docs">Documentation</h2><ul id="doclist" class="doclist"></ul></div>
       <div class="card"><div id="docview" class="doc">Select a document.</div></div>
     </div>
   </section>
 
   <!-- CONFIGURATION ----------------------------------------------------- -->
-  <section id="tab-config" class="tab">
+  <section id="tab-config" class="tab" role="tabpanel" aria-labelledby="tabbtn-config" tabindex="0">
     <div class="grid">
       <div class="card">
-        <h2>Appearance</h2>
+        <h2 data-i18n="head.appearance">Appearance</h2>
         <div class="field">
-          <label>Theme</label>
+          <label data-i18n="cfg.language">Language</label>
+          <select id="lang">
+            <option value="en">English</option>
+            <option value="sv">Svenska</option>
+          </select>
+        </div>
+        <div class="field">
+          <label data-i18n="cfg.theme">Theme</label>
           <select id="theme">
             <option value="">System</option>
             <option value="light">Light</option>
@@ -416,7 +510,7 @@
         <p class="hint">Off: the Crack form builds the job. On: the configuration document here is used verbatim.</p>
       </div>
       <div class="card">
-        <h2>Configuration (YAML)</h2>
+        <h2 data-i18n="head.config">Configuration (YAML)</h2>
         <p class="hint">The exact schema the <code>xcrack --config</code> CLI accepts — see the config reference in Docs.</p>
         <div class="editor-toolbar">
           <button type="button" id="yaml-validate">Validate</button>
@@ -432,25 +526,25 @@
   </section>
 </main>
 
-<div id="palette-modal" class="modal" hidden>
+<div id="palette-modal" class="modal" role="dialog" aria-modal="true" aria-label="Command palette" hidden>
   <div class="modal-box palette-box">
-    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false">
-    <ul id="palette-list" class="palette-list"></ul>
+    <input type="text" id="palette-input" placeholder="Type a command… (tabs, run, wizard, validate, copy link)" autocomplete="off" spellcheck="false" aria-label="Command" role="combobox" aria-expanded="true" aria-controls="palette-list">
+    <ul id="palette-list" class="palette-list" role="listbox" aria-label="Commands"></ul>
   </div>
 </div>
 
-<div id="import-modal" class="modal" hidden>
+<div id="import-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="import-title" hidden>
   <div class="modal-box">
-    <div class="modal-head"><strong>Import configuration</strong><button type="button" id="import-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="import-title">Import configuration</strong><button type="button" id="import-close" class="x" aria-label="Close">✕</button></div>
     <p class="hint">Paste a job configuration (YAML or JSON) shared with you. It is validated, loaded into the editor, and the next run uses it verbatim.</p>
     <textarea id="import-text" rows="10" spellcheck="false" placeholder="candidates:&#10;  use_default_list: true"></textarea>
     <div class="modal-actions"><button type="button" id="import-do" class="primary">Import</button></div>
   </div>
 </div>
 
-<div id="wizard-modal" class="modal" hidden>
+<div id="wizard-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="wizard-title" hidden>
   <div class="modal-box wizard-box">
-    <div class="modal-head"><strong>Attack wizard</strong><button type="button" id="wizard-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="wizard-title">Attack wizard</strong><button type="button" id="wizard-close" class="x" aria-label="Close">✕</button></div>
     <p class="hint">Tell the wizard what you know; it composes the attack and fills the Crack form. Nothing runs until you press Run.</p>
 
     <div class="wz-presets">
@@ -523,9 +617,9 @@
   </div>
 </div>
 
-<div id="preview-modal" class="modal" hidden>
+<div id="preview-modal" class="modal" role="dialog" aria-modal="true" aria-labelledby="preview-title" hidden>
   <div class="modal-box">
-    <div class="modal-head"><strong id="preview-title">Preview</strong><button type="button" id="preview-close" class="x">✕</button></div>
+    <div class="modal-head"><strong id="preview-title">Preview</strong><button type="button" id="preview-close" class="x" aria-label="Close">✕</button></div>
     <div id="preview-meta" class="hint"></div>
     <pre id="preview-body" class="preview-body"></pre>
   </div>
@@ -535,6 +629,7 @@
 <script src="vendor/codemirror-yaml.js"></script>
 <script src="vendor/marked.min.js"></script>
 <script src="vendor/uPlot.iife.min.js"></script>
+<script src="i18n.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

@@ -38,7 +38,9 @@ const THEMES = ["", "light", "dark", "glow", "gold", "autumn", "spring"];
 async function boot() {
   Editor.init();
   if (window.marked) window.XcrackMarkdown = (md) => window.marked.parse(md);
+  if (window.XI18N) XI18N.init();
   initTheme();
+  wireLang();
   wireTabs();
   wireAdvanced();
   wireFiles();
@@ -52,6 +54,8 @@ async function boot() {
   wirePhase5();
   wireImport();
   wirePalette();
+  wireModalA11y();
+  wireFleet();
   applyHelp();
   $("login-btn").addEventListener("click", () => { location.href = "/auth/login"; });
   try { META = await (await fetch(api("/meta"))).json(); } catch { META = {}; }
@@ -60,7 +64,26 @@ async function boot() {
   const gated = await applyAuthGate();
   Editor.set(META.starter_spec || "");
   applySharedConfig();
-  if (!gated) loadDocs();
+  if (!gated) { loadDocs(); wireLiveUpdates(); }
+}
+
+// wireLiveUpdates subscribes to the server-wide "list changed" stream so the
+// History, Statistics, Recovered and Audit lists refresh on their own when a job
+// changes anywhere, instead of waiting for a manual refresh. The browser's
+// EventSource reconnects automatically on a dropped connection.
+function wireLiveUpdates() {
+  let es;
+  try { es = new EventSource(api("/events")); } catch { return; }
+  es.addEventListener("changed", () => {
+    const active = document.querySelector("#tabs button.active");
+    switch (active && active.dataset.tab) {
+      case "history": refreshHistory(); break;
+      case "stats": refreshStats(); break;
+      case "recovered": refreshVault(); break;
+      case "audit": refreshAudit(); break;
+    }
+  });
+  es.onerror = () => {};
 }
 
 // ---- Phase 6: trust banners -------------------------------------------------
@@ -75,10 +98,9 @@ function renderBanners() {
   }
 }
 function banner(kind, text) {
-  const b = el("div", { className: "banner banner-" + kind }, [
-    el("span", { textContent: text }),
-    el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() }),
-  ]);
+  const close = el("button", { type: "button", className: "x", textContent: "✕", onclick: () => b.remove() });
+  close.setAttribute("aria-label", "Dismiss notice");
+  const b = el("div", { className: "banner banner-" + kind }, [el("span", { textContent: text }), close]);
   return b;
 }
 
@@ -97,6 +119,10 @@ async function applyAuthGate() {
   return false;
 }
 function renderUser(me) {
+  // The audit trail is admin-only; hide its tab for a non-admin signed-in user
+  // (single-user mode has no auth and is implicitly admin, so it stays visible).
+  const auditBtn = $("tab-btn-audit");
+  if (auditBtn) auditBtn.hidden = !!(me && me.auth_enabled && me.user && !me.user.admin);
   const area = $("user-area"); area.textContent = "";
   if (!me || !me.auth_enabled || !me.user) return;
   const who = me.user.email || me.user.name || me.user.subject || "signed in";
@@ -136,19 +162,51 @@ function applyTheme(t) {
   else document.documentElement.removeAttribute("data-theme");
 }
 
+// wireLang binds the Appearance → Language selector to the i18n module: the
+// select shows the active locale and switching it re-translates the page and
+// persists the choice. A no-op when i18n is unavailable.
+function wireLang() {
+  const sel = $("lang"); if (!sel || !window.XI18N) return;
+  sel.value = XI18N.locale;
+  sel.addEventListener("change", () => XI18N.setLocale(sel.value));
+}
+
 // ---- tabs / advanced --------------------------------------------------------
 function wireTabs() {
-  document.querySelectorAll("#tabs button").forEach((btn) => {
+  const tabs = [...document.querySelectorAll("#tabs button")];
+  tabs.forEach((btn) => {
+    // Activation (click, or a programmatic .click()): set the visual + ARIA
+    // selected state, roving tabindex, and run the tab's on-open refresh.
     btn.addEventListener("click", () => {
-      document.querySelectorAll("#tabs button").forEach((b) => b.classList.remove("active"));
+      tabs.forEach((b) => {
+        const on = b === btn;
+        b.classList.toggle("active", on);
+        b.setAttribute("aria-selected", on ? "true" : "false");
+        b.tabIndex = on ? 0 : -1;
+      });
       document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-      btn.classList.add("active");
       $("tab-" + btn.dataset.tab).classList.add("active");
       if (btn.dataset.tab === "stats") { refreshStats(); Charts.show(); }
+      if (btn.dataset.tab === "audit") refreshAudit();
       if (btn.dataset.tab === "history") refreshHistory();
       if (btn.dataset.tab === "recovered") refreshVault();
       if (btn.dataset.tab === "library") refreshLibrary();
+      if (btn.dataset.tab === "fleet") refreshFleet();
       if (btn.dataset.tab === "config") setTimeout(() => Editor.refresh(), 0);
+    });
+    // Keyboard navigation per the WAI-ARIA tabs pattern: arrows move (and
+    // activate) across the visible tabs, Home/End jump to the ends.
+    btn.addEventListener("keydown", (e) => {
+      const vis = tabs.filter((t) => !t.hidden);
+      let i = vis.indexOf(btn);
+      if (e.key === "ArrowRight" || e.key === "ArrowDown") i = (i + 1) % vis.length;
+      else if (e.key === "ArrowLeft" || e.key === "ArrowUp") i = (i - 1 + vis.length) % vis.length;
+      else if (e.key === "Home") i = 0;
+      else if (e.key === "End") i = vis.length - 1;
+      else return;
+      e.preventDefault();
+      vis[i].click();
+      vis[i].focus();
     });
   });
 }
@@ -185,12 +243,53 @@ function fmtBytes(n) {
   return n + " B";
 }
 
+// ---- accessible modal manager ----------------------------------------------
+// Every .modal dialog opens through openModal / closes through closeModal so
+// that focus moves into the dialog, is trapped inside it (Tab cycles, Escape
+// closes), and returns to whatever opened it — the baseline for a keyboard- or
+// screen-reader-driven dialog. The dialogs carry role="dialog"/aria-modal in
+// the markup; this supplies the focus behaviour a native <dialog> would.
+let modalOpener = null;
+function focusablesIn(root) {
+  const sel = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+  return [...root.querySelectorAll(sel)].filter((e) => e.offsetParent !== null || e === document.activeElement);
+}
+function openModal(modal, focusTarget) {
+  modalOpener = document.activeElement;
+  modal.hidden = false;
+  const box = modal.querySelector(".modal-box") || modal;
+  const f = focusTarget || focusablesIn(box)[0] || box;
+  if (f && f.focus) f.focus();
+}
+function closeModal(modal) {
+  if (modal.hidden) return;
+  modal.hidden = true;
+  const back = modalOpener;
+  modalOpener = null;
+  if (back && back.focus && document.contains(back)) back.focus();
+}
+function openDialogEl() { return [...document.querySelectorAll(".modal")].find((m) => !m.hidden) || null; }
+// One global handler drives Escape-to-close and Tab-trapping for the open
+// dialog, so each call site only has to open/close.
+function wireModalA11y() {
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" && e.key !== "Tab") return;
+    const modal = openDialogEl();
+    if (!modal) return;
+    if (e.key === "Escape") { e.preventDefault(); closeModal(modal); return; }
+    const f = focusablesIn(modal.querySelector(".modal-box") || modal);
+    if (!f.length) return;
+    const first = f[0], last = f[f.length - 1];
+    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+}
+
 // ---- wordlist / file preview (client-side) ---------------------------------
 function wirePreview() {
   const modal = $("preview-modal");
-  $("preview-close").addEventListener("click", () => { modal.hidden = true; });
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
-  document.addEventListener("keydown", (e) => { if (e.key === "Escape") modal.hidden = true; });
+  $("preview-close").addEventListener("click", () => closeModal(modal));
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
 }
 async function previewFile(f) {
   const CAP = 256 * 1024, MAXL = 500;
@@ -202,7 +301,7 @@ async function previewFile(f) {
   $("preview-title").textContent = f.name;
   $("preview-meta").textContent = `${fmtBytes(f.size)} · showing ${shown.length} line(s)` + (truncated ? " (truncated)" : "");
   $("preview-body").textContent = shown.join("\n");
-  $("preview-modal").hidden = false;
+  openModal($("preview-modal"));
 }
 
 // ---- inline help (hover tooltips) ------------------------------------------
@@ -421,9 +520,9 @@ function applySharedConfig() {
 }
 
 function wireImport() {
-  $("yaml-import").addEventListener("click", () => { $("import-modal").hidden = false; $("import-text").focus(); });
-  $("import-close").addEventListener("click", () => { $("import-modal").hidden = true; });
-  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) $("import-modal").hidden = true; });
+  $("yaml-import").addEventListener("click", () => openModal($("import-modal"), $("import-text")));
+  $("import-close").addEventListener("click", () => closeModal($("import-modal")));
+  $("import-modal").addEventListener("click", (e) => { if (e.target === $("import-modal")) closeModal($("import-modal")); });
   $("import-do").addEventListener("click", doImport);
 }
 async function doImport() {
@@ -435,7 +534,7 @@ async function doImport() {
   } catch { toast("Could not validate the configuration."); return; }
   Editor.set(text);
   $("yaml-authoritative").checked = true;
-  $("import-modal").hidden = true;
+  closeModal($("import-modal"));
   document.querySelector('#tabs button[data-tab="config"]').click();
   toast("Imported — the next run uses this configuration.");
 }
@@ -469,14 +568,14 @@ function wirePalette() {
   const inp = $("palette-input");
   inp.addEventListener("input", renderPalette);
   inp.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") $("palette-modal").hidden = true;
-    else if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
+    // Escape is handled by the global modal trap (which also restores focus).
+    if (e.key === "ArrowDown") { e.preventDefault(); paletteIdx = Math.min(paletteItems.length - 1, paletteIdx + 1); highlightPalette(); }
     else if (e.key === "ArrowUp") { e.preventDefault(); paletteIdx = Math.max(0, paletteIdx - 1); highlightPalette(); }
     else if (e.key === "Enter") { e.preventDefault(); runPalette(paletteIdx); }
   });
-  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) $("palette-modal").hidden = true; });
+  $("palette-modal").addEventListener("click", (e) => { if (e.target === $("palette-modal")) closeModal($("palette-modal")); });
 }
-function openPalette() { $("palette-modal").hidden = false; $("palette-input").value = ""; paletteIdx = 0; renderPalette(); $("palette-input").focus(); }
+function openPalette() { $("palette-input").value = ""; paletteIdx = 0; renderPalette(); openModal($("palette-modal"), $("palette-input")); }
 function renderPalette() {
   const q = $("palette-input").value.toLowerCase();
   paletteItems = PALETTE.filter((a) => a.label.toLowerCase().includes(q));
@@ -485,12 +584,14 @@ function renderPalette() {
   paletteItems.forEach((a, i) => ul.append(el("li", { className: i === paletteIdx ? "sel" : "", textContent: a.label, onclick: () => runPalette(i) })));
 }
 function highlightPalette() { [...$("palette-list").children].forEach((li, i) => li.classList.toggle("sel", i === paletteIdx)); }
-function runPalette(i) { $("palette-modal").hidden = true; const a = paletteItems[i]; if (a) a.run(); }
+function runPalette(i) { closeModal($("palette-modal")); const a = paletteItems[i]; if (a) a.run(); }
 function setYamlStatus(msg, ok) { const s = $("yaml-status"); s.textContent = msg; s.className = ok ? "ok" : "err"; }
 
 // ---- run / events -----------------------------------------------------------
 function wireRun() {
   $("run").addEventListener("click", runJob);
+  $("estimate").addEventListener("click", inspectJob);
+  $("inspect-close").addEventListener("click", () => { $("inspect-card").hidden = true; });
   $("cancel").addEventListener("click", async () => { if (currentJob) await fetch(api("/jobs/" + currentJob + "/cancel"), { method: "POST" }); });
 }
 
@@ -503,6 +604,9 @@ async function runJob() {
   for (const f of $("wordlists").files) fd.append("aux", f);
   for (const f of $("aux").files) fd.append("aux", f);
   if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
+  if ($("case_id").value.trim()) fd.append("case_id", $("case_id").value.trim());
+  if ($("examiner").value.trim()) fd.append("examiner", $("examiner").value.trim());
+  for (const f of $("recovered").files) fd.append("recovered", f);
   $("log").textContent = ""; $("results").textContent = ""; $("results-card").hidden = false;
   $("latest-term").textContent = ""; resetBar();
   Charts.reset();
@@ -525,6 +629,70 @@ async function runJob() {
   $("job-ended").textContent = "—";
   startElapsed();
   streamEvents(id);
+}
+
+// inspectJob posts the current candidate configuration and targets to /inspect
+// and shows a feasibility estimate (per-file keyspace, verify rate, and
+// time-to-exhaust) plus a preview of the exact candidate stream — the CLI's
+// --keyspace/--benchmark/--estimate/--stdout — without starting a job.
+async function inspectJob() {
+  if (pickedSources.length === 0) { setRunStatus("Choose at least one file first.", true); return; }
+  const fd = new FormData();
+  fd.append("spec", specForRun());
+  for (const f of pickedSources) fd.append("source", f);
+  for (const f of $("wordlists").files) fd.append("aux", f);
+  for (const f of $("aux").files) fd.append("aux", f);
+  if ($("lib_names").value.trim()) fd.append("library", $("lib_names").value);
+  const btn = $("estimate");
+  btn.disabled = true; setRunStatus("Estimating…");
+  let res;
+  try { res = await fetch(api("/inspect"), { method: "POST", body: fd }); }
+  catch (e) { btn.disabled = false; return setRunStatus("Network error: " + e, true); }
+  btn.disabled = false;
+  if (!res.ok) { const e = await res.json().catch(() => ({})); return setRunStatus("✕ " + (e.error || res.status), true); }
+  renderInspect(await res.json());
+  setRunStatus("");
+}
+
+function fmtInt(n) { return (n == null ? 0 : n).toLocaleString(); }
+
+function renderInspect(data) {
+  const host = $("inspect-files");
+  host.textContent = "";
+  for (const f of (data.files || [])) {
+    const row = document.createElement("div");
+    row.className = "inspect-row";
+    const ks = f.keyspace < 0 ? "open-ended" : (f.keyspace_capped ? "≥" : "") + fmtInt(f.keyspace);
+    const rate = f.encrypted ? ((f.rate_text || fmtInt(Math.round(f.rate))) + "/s") : "—";
+    const time = f.time_to_exhaust
+      ? ("~" + f.time_to_exhaust + " to exhaust, ~" + (f.time_expected || "?") + " expected")
+      : (f.note || "—");
+    row.innerHTML =
+      '<div class="inspect-name">' + escapeHTML(f.name) +
+        (f.scheme ? ' <span class="pill">' + escapeHTML(f.scheme) + '</span>' : '') + '</div>' +
+      '<div class="inspect-metrics">' +
+        '<span><span class="k">keyspace</span> ' + escapeHTML(ks) + '</span>' +
+        '<span><span class="k">rate</span> ' + escapeHTML(rate) + '</span>' +
+        '<span><span class="k">time</span> ' + escapeHTML(time) + '</span>' +
+      '</div>';
+    host.appendChild(row);
+  }
+  if (data.files_truncated) {
+    const n = document.createElement("p"); n.className = "muted";
+    n.textContent = "Only the first " + (data.files || []).length + " files were estimated.";
+    host.appendChild(n);
+  }
+  const prev = data.candidate_preview || [];
+  const wrap = $("inspect-preview-wrap");
+  if (prev.length) {
+    wrap.hidden = false;
+    $("inspect-preview").textContent = prev.join("\n");
+    $("inspect-preview-count").textContent = prev.length;
+    $("inspect-preview-more").textContent = data.candidate_preview_truncated ? "+" : "";
+  } else {
+    wrap.hidden = true;
+  }
+  $("inspect-card").hidden = false;
 }
 
 function startElapsed() {
@@ -591,12 +759,15 @@ function updateProgress(candidates, latest) {
       if (remain > 365 * 86400) line += " — impractically long at this rate; a wordlist + rules will likely beat brute force";
     }
     $("progress-text").textContent = line;
+    setBarAria(pct, line);
   } else {
     // Animate the sweep only while the event stream is live; a finished run
     // (finishRun / openHistoryJob close evtSource first) leaves a static bar.
     fill.style.width = "100%";
     bar.classList.toggle("indeterminate", evtSource != null);
-    $("progress-text").textContent = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
+    const line = `${candidates.toLocaleString()} candidates · ${rate.toLocaleString()}/s`;
+    $("progress-text").textContent = line;
+    setBarAria(-1, line); // indeterminate: no numeric value
   }
   if (evtSource) setTitleProgress(jobKeyspace > 0 ? Math.min(100, candidates / jobKeyspace * 100) : -1);
   if (latest) $("latest-term").innerHTML = "latest: <code>" + escapeHTML(latest) + "</code>";
@@ -606,6 +777,17 @@ function updateProgress(candidates, latest) {
 function resetBar() {
   const fill = $("bar-fill"); fill.style.width = "0%"; fill.parentElement.classList.remove("indeterminate");
   $("progress-text").textContent = "—"; $("run-source").textContent = "";
+  setBarAria(-1, "");
+}
+// setBarAria keeps the progressbar's accessible value in sync with the visual
+// fill. pct < 0 marks an indeterminate bar (no known keyspace), so the numeric
+// value is removed and only a text description is exposed.
+function setBarAria(pct, text) {
+  const bar = $("progress-bar"); if (!bar) return;
+  if (pct >= 0) bar.setAttribute("aria-valuenow", Math.round(pct));
+  else bar.removeAttribute("aria-valuenow");
+  if (text) bar.setAttribute("aria-valuetext", text);
+  else bar.removeAttribute("aria-valuetext");
 }
 function escapeHTML(s) { return s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"); }
 
@@ -663,6 +845,7 @@ function setRunStatus(msg, err) { const s = $("run-status"); s.textContent = msg
 // ---- history ----------------------------------------------------------------
 function wireHistory() {
   $("history-refresh").addEventListener("click", refreshHistory);
+  $("audit-refresh").addEventListener("click", refreshAudit);
   $("vault-refresh").addEventListener("click", refreshVault);
   const nt = $("notify-toggle");
   try { nt.checked = localStorage.getItem("xcrack-notify") === "1"; } catch {}
@@ -670,6 +853,32 @@ function wireHistory() {
     try { localStorage.setItem("xcrack-notify", nt.checked ? "1" : "0"); } catch {}
     if (nt.checked) requestNotifyPermission();
   });
+}
+
+// ---- audit trail ------------------------------------------------------------
+async function refreshAudit() {
+  const host = $("audit-body");
+  let entries;
+  try {
+    const r = await fetch(api("/audit"));
+    if (r.status === 403) { host.textContent = ""; host.append(el("p", { className: "hint", textContent: "Audit is visible to administrators only." })); return; }
+    entries = (await r.json()).entries || [];
+  } catch { host.textContent = ""; host.append(el("p", { className: "err", textContent: "Could not load the audit trail." })); return; }
+  host.textContent = "";
+  if (!entries.length) { host.append(el("p", { className: "hint", textContent: "No audited actions yet." })); return; }
+  const tbl = el("table", { className: "history-table" });
+  tbl.append(el("tr", {}, ["When", "Actor", "IP", "Action", "Target", "Detail"].map((h) => el("th", { textContent: h }))));
+  for (const e of entries) {
+    tbl.append(el("tr", {}, [
+      el("td", { textContent: e.time ? new Date(e.time).toLocaleString() : "—" }),
+      el("td", { textContent: e.email || e.actor || "—" }),
+      el("td", { textContent: e.ip || "—" }),
+      el("td", {}, [el("span", { className: "pill", textContent: e.action })]),
+      el("td", { textContent: e.target || "" }),
+      el("td", { textContent: e.detail || "" }),
+    ]));
+  }
+  host.append(tbl);
 }
 
 const STATE_LABEL = { done: "done", error: "error", canceled: "canceled", interrupted: "interrupted", running: "running", queued: "queued" };
@@ -695,12 +904,40 @@ async function refreshHistory() {
       el("td", { textContent: j.created_at ? new Date(j.created_at).toLocaleString() : "—" }),
       el("td", {}, [
         hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/download"), textContent: "⬇ zip" }) : "",
-        el("button", { type: "button", className: "mini", textContent: "re-run", onclick: () => rerunJob(j.id) }),
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report"), target: "_blank", rel: "noopener", textContent: "report" }) : "",
+        hasOutput ? el("a", { className: "mini", href: api("/jobs/" + j.id + "/report?format=csv"), textContent: "csv" }) : "",
+        el("button", {
+          type: "button", className: j.resumable ? "mini resume" : "mini",
+          textContent: j.resumable ? "⟳ resume" : "re-run",
+          title: j.resumable ? "Resume this interrupted run from its saved checkpoint" : "Start a fresh run from this job's spec and files",
+          onclick: () => rerunJob(j.id),
+        }),
+        ownsJob(j) ? el("button", { type: "button", className: "mini", textContent: (j.shared && j.shared.length) ? "shared ✓" : "share", onclick: () => shareJob(j) }) : "",
         el("button", { type: "button", className: "mini danger", textContent: "delete", onclick: () => deleteHistoryJob(j.id) }),
       ]),
     ]));
   }
   host.append(tbl);
+}
+
+// ownsJob reports whether the signed-in user owns this job, so only an owner is
+// offered the Share control (single-user mode has no sharing).
+function ownsJob(j) {
+  return me && me.auth_enabled && me.user && j.owner && j.owner === me.user.subject;
+}
+
+// shareJob prompts for the subjects to grant read access and saves the share.
+async function shareJob(j) {
+  const current = (j.shared || []).join(", ");
+  const input = prompt("Share this job (read-only) with these user subjects, comma-separated.\nLeave empty to un-share.", current);
+  if (input === null) return; // cancelled
+  const subjects = input.split(",").map((s) => s.trim()).filter(Boolean);
+  let res;
+  try { res = await fetch(api("/jobs/" + j.id + "/share"), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ subjects }) }); }
+  catch (e) { toast("Share failed: " + e); return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); toast("Share failed: " + (e.error || res.status)); return; }
+  toast(subjects.length ? ("Shared with " + subjects.length + " user(s)") : "Un-shared");
+  refreshHistory();
 }
 
 // rerunJob starts a fresh job from a saved one's spec + uploads (no re-upload)
@@ -784,7 +1021,7 @@ async function previewLibrary(name) {
   $("preview-title").textContent = name;
   $("preview-meta").textContent = `first ${(v.lines || []).length} line(s)`;
   $("preview-body").textContent = (v.lines || []).join("\n");
-  $("preview-modal").hidden = false;
+  openModal($("preview-modal"));
 }
 async function deleteLibrary(name) {
   if (!confirm("Delete library wordlist " + name + "?")) return;
@@ -817,6 +1054,99 @@ async function clusterHealth() {
     ]));
   }
   out.append(tbl);
+}
+
+// ---- fleet (managed distributed workers) -----------------------------------
+let fleetNodes = [];
+function wireFleet() {
+  const on = (id, fn) => { const e = $(id); if (e) e.addEventListener("click", fn); };
+  on("fleet-add", () => { collectFleet(); fleetNodes.push({ url: "", group: "", label: "" }); renderFleet(); });
+  on("fleet-save", saveFleet);
+  on("fleet-health", fleetHealth);
+  on("fleet-use", useFleet);
+}
+async function refreshFleet() {
+  let v;
+  try { v = await (await fetch(api("/fleet"))).json(); }
+  catch { return; }
+  fleetNodes = v.nodes || [];
+  const dis = $("fleet-disabled"); if (dis) dis.hidden = !!v.distributed_ready;
+  renderFleet();
+}
+// collectFleet reads the editable rows back into fleetNodes before a re-render or
+// save, so in-progress edits are not lost.
+function collectFleet() {
+  const rows = document.querySelectorAll("#fleet-list tr.fleet-row");
+  if (!rows.length) return;
+  fleetNodes = [...rows].map((tr) => ({
+    url: tr.querySelector(".f-url").value.trim(),
+    group: tr.querySelector(".f-group").value.trim(),
+    label: tr.querySelector(".f-label").value.trim(),
+  })).filter((n) => n.url || n.group || n.label);
+}
+function renderFleet(health) {
+  const host = $("fleet-list"); if (!host) return;
+  host.textContent = "";
+  if (!fleetNodes.length) {
+    host.append(el("p", { className: "hint", textContent: "No worker nodes yet — add one, then Save." }));
+    return;
+  }
+  const byURL = {};
+  for (const h of health || []) byURL[h.url] = h;
+  const tbl = el("table", { className: "stat-table fleet-table" });
+  tbl.append(el("tr", {}, ["Node URL", "Group", "Label", "Status", "ms", "Version", "GPU", ""].map((h) => el("th", { textContent: h }))));
+  for (const n of fleetNodes) {
+    const h = byURL[n.url];
+    const statusCell = h
+      ? el("span", { className: "badge " + (h.ok ? "on" : "off"), textContent: h.ok ? "up" : (h.error ? "down" : "err") })
+      : el("span", { className: "hint", textContent: "—" });
+    const row = el("tr", { className: "fleet-row" }, [
+      el("td", {}, [el("input", { className: "f-url", type: "text", value: n.url || "", placeholder: "https://node:8443" })]),
+      el("td", {}, [el("input", { className: "f-group", type: "text", value: n.group || "", placeholder: "gpu" })]),
+      el("td", {}, [el("input", { className: "f-label", type: "text", value: n.label || "", placeholder: "rack-1" })]),
+      el("td", {}, [statusCell]),
+      el("td", { textContent: h ? String(h.latency_ms || 0) : "" }),
+      el("td", { textContent: (h && h.version) ? h.version : "" }),
+      el("td", {}, [h && h.gpu ? el("span", { className: "badge on", textContent: "GPU" }) : ""]),
+      el("td", {}, [el("button", { type: "button", className: "mini danger", textContent: "remove", onclick: (e) => { collectFleet(); const i = fleetNodes.indexOf(n); if (i >= 0) fleetNodes.splice(i, 1); renderFleet(); } })]),
+    ]);
+    tbl.append(row);
+  }
+  host.append(tbl);
+}
+async function saveFleet() {
+  collectFleet();
+  const status = $("fleet-status"); status.textContent = "Saving…";
+  let res;
+  try { res = await fetch(api("/fleet"), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ nodes: fleetNodes }) }); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); status.textContent = "✕ " + (e.error || res.status); return; }
+  const v = await res.json(); fleetNodes = v.nodes || []; renderFleet();
+  status.textContent = "Saved " + fleetNodes.length + " node(s).";
+  setTimeout(() => { status.textContent = ""; }, 2500);
+}
+async function fleetHealth() {
+  collectFleet();
+  const status = $("fleet-status"); status.textContent = "Probing…";
+  let v;
+  try { v = await (await fetch(api("/fleet/health"), { method: "POST" })).json(); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (v.error) { status.textContent = "✕ " + v.error; return; }
+  renderFleet(v.nodes || []);
+  const up = (v.nodes || []).filter((n) => n.ok).length;
+  status.textContent = up + " of " + (v.nodes || []).length + " node(s) up.";
+}
+// useFleet applies the saved fleet to a job: it fills the Crack form's
+// distributed-servers field (url@group lines) and opens it.
+function useFleet() {
+  collectFleet();
+  const lines = fleetNodes.filter((n) => n.url).map((n) => n.group ? n.url + "@" + n.group : n.url);
+  if (!lines.length) { $("fleet-status").textContent = "Add at least one node first."; return; }
+  $("servers").value = lines.join("\n");
+  if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
+  const panel = $("dist-panel"); if (panel) panel.open = true;
+  gotoTab("crack");
+  toast(lines.length + " node(s) applied to the job's distributed settings.");
 }
 
 async function deleteHistoryJob(id) {
@@ -868,7 +1198,12 @@ function notify(title, body) {
 let toastTimer = null;
 function toast(msg) {
   let t = $("toast");
-  if (!t) { t = el("div", { id: "toast", className: "toast" }); document.body.append(t); }
+  if (!t) {
+    t = el("div", { id: "toast", className: "toast" });
+    t.setAttribute("role", "status");
+    t.setAttribute("aria-live", "polite");
+    document.body.append(t);
+  }
   t.textContent = msg; t.classList.add("show");
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove("show"), 4000);
 }
@@ -983,7 +1318,44 @@ function wireTools() {
   $("pdf-table-run").addEventListener("click", pdfTable);
   $("wl-run").addEventListener("click", wordlistTool);
   $("rt-run").addEventListener("click", ruleTest);
+  $("kp-run").addEventListener("click", runKP);
   wireCLI();
+}
+
+// runKP launches the ZipCrypto known-plaintext recovery as a background job and
+// streams its progress into the tool card (with a download link on success).
+async function runKP() {
+  const out = toolOut("kp");
+  const plain = $("kp-plain").files[0], cipher = $("kp-cipher").files[0];
+  if (!plain || !cipher) { out.textContent = "Choose the known plaintext and its ciphertext."; return; }
+  const fd = new FormData();
+  fd.append("plain", plain);
+  fd.append("cipher", cipher);
+  if ($("kp-zip").files[0]) fd.append("zip", $("kp-zip").files[0]);
+  if ($("kp-entry").files[0]) fd.append("entry", $("kp-entry").files[0]);
+  fd.append("offset", $("kp-offset").value || "0");
+  out.textContent = "Starting…";
+  let res;
+  try { res = await fetch(api("/tools/kp"), { method: "POST", body: fd }); }
+  catch (e) { out.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); out.textContent = "✕ " + (e.error || res.status); return; }
+  const { id } = await res.json();
+  out.textContent = "";
+  const log = el("pre", { className: "log" });
+  out.append(log);
+  const append = (s) => { log.textContent += s + "\n"; };
+  const es = new EventSource(api("/jobs/" + id + "/events"));
+  es.onmessage = (m) => {
+    let e; try { e = JSON.parse(m.data); } catch { return; }
+    if (e.type === "log") append("[" + (e.level || "info") + "] " + e.message);
+    else if (e.type === "found") append("🔓 " + (e.file || "") + (e.password ? " → " + e.password : ""));
+    else if (e.type === "state" && ["done", "error", "canceled"].includes(e.state)) {
+      es.close();
+      append("[" + e.state + "]");
+      if (e.state === "done") out.append(el("a", { href: api("/jobs/" + id + "/download"), className: "mini", textContent: "download decrypted output" }));
+    }
+  };
+  es.onerror = () => {};
 }
 
 // ruleTest shows what mangling rules do to a sample word (engine rule compiler).
@@ -1050,9 +1422,9 @@ const WZ_PRESETS = {
 
 function wireWizard() {
   const modal = $("wizard-modal");
-  $("wizard-open").addEventListener("click", () => { modal.hidden = false; wzPopulateWordlists(); wzSyncKind(); });
-  $("wizard-close").addEventListener("click", () => { modal.hidden = true; });
-  modal.addEventListener("click", (e) => { if (e.target === modal) modal.hidden = true; });
+  $("wizard-open").addEventListener("click", () => { wzPopulateWordlists(); wzSyncKind(); openModal(modal); });
+  $("wizard-close").addEventListener("click", () => closeModal(modal));
+  modal.addEventListener("click", (e) => { if (e.target === modal) closeModal(modal); });
   $("wizard-build").addEventListener("click", buildFromWizard);
   $("wz-kind").addEventListener("change", wzSyncKind);
   modal.querySelectorAll(".wz-chip").forEach((b) => b.addEventListener("click", () => wzApplyPreset(b.dataset.preset)));
@@ -1230,7 +1602,7 @@ function buildFromWizard() {
   }
 
   if (!$("advanced").checked) { $("advanced").checked = true; document.body.classList.add("adv"); }
-  $("wizard-modal").hidden = true;
+  closeModal($("wizard-modal"));
   toast("Wizard filled the Crack form — review the options and press Run.");
 }
 
@@ -1318,7 +1690,7 @@ async function exportChallenge() {
   // body is a JSON {error} explaining why nothing was exported.
   if (res.ok && res.headers.get("Content-Disposition")) {
     downloadBlob(await res.blob(), "challenges.json");
-    out.textContent = "✓ Downloaded challenges.json — solve externally, then xcrack --resume-from";
+    out.textContent = "✓ Downloaded challenges.json — solve it externally, then bring the result back via Crack → Resume (or xcrack --resume-from).";
     return;
   }
   const j = await res.json().catch(() => ({}));
@@ -1417,7 +1789,12 @@ const flagId = (fl) => "cli-f-" + fl.flag.replace(/^--/, "").replace(/[^a-z0-9]/
 
 function wireCLI() {
   const op = $("cli-op"), fields = $("cli-fields");
-  const render = () => { renderCLIFields(CLI_SPECS[op.value], fields); updateCLI(); };
+  const render = () => {
+    renderCLIFields(CLI_SPECS[op.value], fields);
+    // thunder-gen generates a table from parameters; the key attacks need a file.
+    $("cli-upload-field").style.display = op.value === "thunder-gen" ? "none" : "";
+    updateCLI();
+  };
   op.addEventListener("change", render);
   fields.addEventListener("input", updateCLI);
   fields.addEventListener("change", updateCLI);
@@ -1427,7 +1804,39 @@ function wireCLI() {
     $("cli-copy-status").textContent = ok ? "copied" : "copy failed — select the command manually";
     setTimeout(() => { $("cli-copy-status").textContent = ""; }, 1800);
   });
+  $("cli-run").addEventListener("click", runCLIAsJob);
   render();
+}
+
+// runCLIAsJob launches the selected long-running attack as a server-side job and
+// opens it, so the browser-only operator gets live progress + cancel + download
+// without a shell. Numeric fields are read from the same inputs the CLI command
+// builder uses; the key attacks also take the uploaded document.
+async function runCLIAsJob() {
+  const opv = $("cli-op").value;
+  const status = $("cli-run-status");
+  const numField = (flag) => { const e = $("cli-f-" + flag); return e && e.value.trim() ? e.value.trim() : ""; };
+  const fd = new FormData();
+  let endpoint;
+  if (opv === "thunder-gen") {
+    endpoint = "/tools/thunder-gen";
+    for (const k of ["bits", "length", "chains", "tables", "workers"]) { const v = numField(k); if (v) fd.append(k, v); }
+  } else {
+    endpoint = opv === "pdf-keyattack" ? "/tools/pdf-keyattack" : "/tools/office-keyattack";
+    const f = $("cli-upload").files[0];
+    if (!f) { status.textContent = "Choose a document to attack first."; return; }
+    fd.append("source", f);
+    const wk = numField("workers"); if (wk) fd.append("workers", wk);
+  }
+  status.textContent = "Submitting…";
+  let res;
+  try { res = await fetch(api(endpoint), { method: "POST", body: fd }); }
+  catch (e) { status.textContent = "Network error: " + e; return; }
+  if (!res.ok) { const e = await res.json().catch(() => ({})); status.textContent = "✕ " + (e.error || res.status); return; }
+  const { id } = await res.json();
+  status.textContent = "";
+  toast("Started — opening the job.");
+  openHistoryJob(id);
 }
 
 function renderCLIFields(spec, host) {

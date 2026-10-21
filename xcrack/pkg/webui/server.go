@@ -18,14 +18,20 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"time"
 )
 
 // Server is the HTTP application: the SPA assets plus the JSON/SSE API.
 type Server struct {
-	cfg  Config
-	mgr  *Manager
-	auth *authenticator
-	mux  *http.ServeMux
+	cfg         Config
+	mgr         *Manager
+	auth        *authenticator
+	mux         *http.ServeMux
+	handler     http.Handler // mux wrapped in the CSRF + rate-limit middleware
+	limiter     *rateLimiter
+	authLimiter *rateLimiter
+	trail       *auditTrail
+	fleet       *fleetStore
 }
 
 // NewServer builds the web application. It fails if the work directory cannot be
@@ -42,6 +48,15 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, err
 	}
 	s := &Server{cfg: cfg, mgr: mgr, auth: auth}
+	if cfg.RateLimitPerMin > 0 {
+		s.limiter = newRateLimiter(cfg.RateLimitPerMin, time.Minute)
+	}
+	if cfg.AuthRateLimitPerMin > 0 {
+		s.authLimiter = newRateLimiter(cfg.AuthRateLimitPerMin, time.Minute)
+	}
+	s.trail = newAuditTrail(cfg.WorkDir, cfg.AuditLogger)
+	mgr.trail = s.trail
+	s.fleet = newFleetStore(cfg.WorkDir)
 	assets, err := assetHandler()
 	if err != nil {
 		return nil, err
@@ -60,21 +75,29 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/config/validate", p(s.handleValidate))
 	mux.HandleFunc("POST /api/v1/config/format", p(s.handleFormat))
 	mux.HandleFunc("POST /api/v1/identify", p(s.handleIdentify))
+	mux.HandleFunc("POST /api/v1/inspect", p(s.handleInspect))
 	mux.HandleFunc("POST /api/v1/jobs", p(s.handleCreateJob))
 	mux.HandleFunc("GET /api/v1/jobs", p(s.handleListJobs))
 	mux.HandleFunc("GET /api/v1/jobs/{id}", p(s.handleGetJob))
 	mux.HandleFunc("DELETE /api/v1/jobs/{id}", p(s.handleDeleteJob))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/events", p(s.handleJobEvents))
+	mux.HandleFunc("GET /api/v1/events", p(s.handleListEvents))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/cancel", p(s.handleCancelJob))
 	mux.HandleFunc("POST /api/v1/jobs/{id}/rerun", p(s.handleRerun))
+	mux.HandleFunc("POST /api/v1/jobs/{id}/share", p(s.handleShareJob))
 	mux.HandleFunc("GET /api/v1/jobs/{id}/download", p(s.handleDownload))
+	mux.HandleFunc("GET /api/v1/jobs/{id}/report", p(s.handleReport))
 	mux.HandleFunc("GET /api/v1/stats", p(s.handleStats))
+	mux.HandleFunc("GET /api/v1/audit", p(s.handleAudit))
 	mux.HandleFunc("GET /api/v1/vault", p(s.handleVault))
 	mux.HandleFunc("GET /api/v1/library", p(s.handleLibraryList))
 	mux.HandleFunc("POST /api/v1/library", p(s.handleLibraryUpload))
 	mux.HandleFunc("GET /api/v1/library/{name}/preview", p(s.handleLibraryPreview))
 	mux.HandleFunc("DELETE /api/v1/library/{name}", p(s.handleLibraryDelete))
 	mux.HandleFunc("POST /api/v1/cluster/health", p(s.handleClusterHealth))
+	mux.HandleFunc("GET /api/v1/fleet", p(s.handleFleetGet))
+	mux.HandleFunc("PUT /api/v1/fleet", p(s.handleFleetPut))
+	mux.HandleFunc("POST /api/v1/fleet/health", p(s.handleFleetHealth))
 	mux.HandleFunc("GET /api/v1/docs", p(s.handleListDocs))
 	mux.HandleFunc("GET /api/v1/docs/{name}", p(s.handleGetDoc))
 	// Specialist, non-cracking tools (the CLI's subcommands), synchronous.
@@ -85,13 +108,20 @@ func NewServer(cfg Config) (*Server, error) {
 	mux.HandleFunc("POST /api/v1/tools/wordlist", p(s.handleToolWordlist))
 	mux.HandleFunc("POST /api/v1/tools/rule-test", p(s.handleToolRuleTest))
 	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack-table", p(s.handleToolPDFKeyTable))
+	mux.HandleFunc("POST /api/v1/tools/kp", p(s.handleToolKP))
+	mux.HandleFunc("POST /api/v1/tools/office-keyattack", p(s.handleToolOfficeKey))
+	mux.HandleFunc("POST /api/v1/tools/pdf-keyattack", p(s.handleToolPDFKey))
+	mux.HandleFunc("POST /api/v1/tools/thunder-gen", p(s.handleToolThunderGen))
 	mux.Handle("/", assets)
 	s.mux = mux
+	// Wrap the whole application in transport hardening: CSRF guard innermost
+	// (so rejected requests never reach a handler), rate limiter outermost.
+	s.handler = s.rateLimit(s.csrf(mux))
 	return s, nil
 }
 
 // Handler returns the HTTP handler for the whole application.
-func (s *Server) Handler() http.Handler { return s.mux }
+func (s *Server) Handler() http.Handler { return s.handler }
 
 // Close cancels any in-flight jobs and waits for their runner goroutines to
 // exit. After it returns, nothing is still touching the work directory, so a

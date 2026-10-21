@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/rom/xcrack/pkg/accel"
+	"github.com/rom/xcrack/pkg/auditlog"
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/securecache"
 	"github.com/rom/xcrack/pkg/webui"
@@ -44,6 +45,17 @@ import (
 const version = "0.1.0-mvp"
 
 func main() { os.Exit(run()) }
+
+// rateLimitValue maps the CLI convention ("0 or negative = unlimited") onto the
+// webui.Config convention (0 = apply default, negative = disabled), so passing
+// --rate-limit 0 actually disables the limiter instead of re-applying its
+// default.
+func rateLimitValue(n int) int {
+	if n <= 0 {
+		return -1
+	}
+	return n
+}
 
 func run() int {
 	var (
@@ -55,6 +67,22 @@ func run() int {
 		exposeSecrets = flag.Bool("expose-secrets", true, "show recovered passwords in the UI and event stream (turn OFF for a shared/public instance)")
 		allowPaths    = flag.Bool("allow-server-paths", false, "allow a submitted spec to reference server-side file paths, not just uploaded files (trusted local instance only)")
 		open          = flag.Bool("print-url", true, "print the URL to open on startup")
+
+		rateLimit     = flag.Int("rate-limit", 1200, "max requests per client IP per minute (0 or negative = unlimited)")
+		authRateLimit = flag.Int("auth-rate-limit", 20, "max /auth/login starts per client IP per minute (0 or negative = unlimited)")
+		trustProxy    = flag.Bool("trust-proxy", false, "read the client IP from X-Forwarded-For for rate limiting (only behind a trusted reverse proxy)")
+		maxRetained   = flag.Int("max-retained-jobs", 0, "keep at most N finished jobs on disk, pruning the oldest (0 = keep all)")
+		maxJobAge     = flag.Duration("max-job-age", 0, "prune finished jobs older than this (0 = disabled), e.g. 168h")
+		maxWorkDir    = flag.Int64("max-workdir-bytes", 0, "reject new jobs/inspects once the work directory holds this many bytes (0 = unlimited)")
+
+		auditSyslog  = flag.Bool("audit-syslog", false, "also forward the access/action audit trail to the system logger")
+		auditLogFile = flag.String("audit-log-file", "", "also append the access/action audit trail (JSON) to this file")
+
+		notifyWebhook = flag.String("notify-webhook", "", "POST a JSON job-finished summary to this URL when a job completes")
+		smtpHost      = flag.String("notify-smtp", "", "SMTP server host:port for job-finished emails (point at a local/relay MTA)")
+		smtpFrom      = flag.String("notify-from", "", "From address for job-finished emails")
+		smtpTo        = flag.String("notify-to", "", "comma-separated recipient(s) for job-finished emails")
+		smtpUser      = flag.String("notify-smtp-user", "", "SMTP PLAIN-auth username (optional; password via XCRACK_WEB_SMTP_PASSWORD)")
 
 		tlsCert     = flag.String("tls-cert", "", "serve HTTPS with this PEM certificate chain (requires --tls-key; see scripts/gen-selfsigned-cert.sh)")
 		tlsKey      = flag.String("tls-key", "", "private key (PEM) for --tls-cert")
@@ -69,6 +97,7 @@ func run() int {
 		oidcClientID = flag.String("auth-oidc-client-id", "", "OIDC client ID (required with --auth-oidc-issuer)")
 		oidcRedirect = flag.String("auth-redirect-url", "", "this server's own /auth/callback URL as registered with the provider, e.g. https://host:8899/auth/callback (required with --auth-oidc-issuer)")
 		authAdmins   = flag.String("auth-admins", "", "comma-separated subjects or emails allowed to see and manage every user's jobs")
+		authViewers  = flag.String("auth-viewers", "", "comma-separated subjects or emails granted read-only access to every user's jobs (reviewer/auditor role)")
 		cookieInsec  = flag.Bool("auth-cookie-insecure", false, "do not set the Secure flag on the session cookie (plain-HTTP local testing only)")
 	)
 	flag.Parse()
@@ -87,18 +116,46 @@ func run() int {
 		return 1
 	}
 
+	// Optional external sink for the access/action audit trail (the JSONL trail
+	// under the work dir is always on regardless).
+	var auditLogger *slog.Logger
+	if *auditSyslog || *auditLogFile != "" {
+		al, closer, aerr := auditlog.New(auditlog.Config{Format: "json", File: *auditLogFile, Syslog: *auditSyslog})
+		if aerr != nil {
+			fmt.Fprintf(os.Stderr, "xcrack-web: audit log: %v\n", aerr)
+			return 1
+		}
+		defer func() { _ = closer.Close() }()
+		auditLogger = al
+	}
+
 	cfg := webui.Config{
-		WorkDir:           *workDir,
-		DocsDir:           resolveDocsDir(*docsDir),
-		MaxUploadBytes:    *maxUpload,
-		MaxConcurrentJobs: *maxJobs,
-		ExposeSecrets:     *exposeSecrets,
-		AllowServerPaths:  *allowPaths,
-		GPUAvailable:      accel.Built(),
-		TPMBuild:          securecache.TPMBuilt,
-		Version:           version,
-		TLS:               *tlsCert != "" || *tlsKey != "",
-		Accelerator:       gpuAccelerator(logger),
+		WorkDir:             *workDir,
+		DocsDir:             resolveDocsDir(*docsDir),
+		MaxUploadBytes:      *maxUpload,
+		MaxConcurrentJobs:   *maxJobs,
+		ExposeSecrets:       *exposeSecrets,
+		AllowServerPaths:    *allowPaths,
+		RateLimitPerMin:     rateLimitValue(*rateLimit),
+		AuthRateLimitPerMin: rateLimitValue(*authRateLimit),
+		TrustProxyHeaders:   *trustProxy,
+		MaxRetainedJobs:     *maxRetained,
+		MaxJobAge:           *maxJobAge,
+		MaxWorkDirBytes:     *maxWorkDir,
+		GPUAvailable:        accel.Built(),
+		TPMBuild:            securecache.TPMBuilt,
+		Version:             version,
+		TLS:                 *tlsCert != "" || *tlsKey != "",
+		AuditLogger:         auditLogger,
+		Notify: webui.NotifyConfig{
+			WebhookURL:   *notifyWebhook,
+			SMTPHost:     *smtpHost,
+			SMTPFrom:     *smtpFrom,
+			SMTPTo:       splitComma(*smtpTo),
+			SMTPUser:     *smtpUser,
+			SMTPPassword: os.Getenv("XCRACK_WEB_SMTP_PASSWORD"),
+		},
+		Accelerator: gpuAccelerator(logger),
 		Auth: webui.AuthConfig{
 			Enabled:      authEnabled,
 			Issuer:       *oidcIssuer,
@@ -106,6 +163,7 @@ func run() int {
 			ClientSecret: clientSecret,
 			RedirectURL:  *oidcRedirect,
 			Admins:       splitComma(*authAdmins),
+			Viewers:      splitComma(*authViewers),
 			CookieSecure: !*cookieInsec,
 		},
 	}

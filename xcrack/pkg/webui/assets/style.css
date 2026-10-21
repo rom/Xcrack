@@ -224,3 +224,36 @@ a.mini { padding: 2px 8px; font-size: 12px; text-decoration: none; border: 1px s
 
 /* --- results summary (X of Y decrypted) --- */
 .results-summary { font-weight: 600; margin: 2px 0 10px; }
+
+/* --- feasibility estimate (inspect) --- */
+.inspect-head { display: flex; justify-content: space-between; align-items: center; }
+.inspect-files { display: flex; flex-direction: column; gap: 8px; margin: 6px 0; }
+.inspect-row { padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); }
+.inspect-name { font-weight: 600; margin-bottom: 4px; }
+.inspect-metrics { display: flex; flex-wrap: wrap; gap: 16px; font-size: 13px; }
+.inspect-metrics .k { color: var(--muted); margin-right: 4px; }
+.pill { display: inline-block; padding: 1px 8px; border-radius: 999px; background: var(--brand); color: var(--brand-ink); font-size: 12px; font-weight: 500; }
+.muted { color: var(--muted); font-size: 13px; }
+
+/* Fleet table: compact inline inputs for the node URL / group / label. */
+.fleet-table input { width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 13px; }
+.fleet-table td:first-child { min-width: 180px; }
+
+/* A resumable (interrupted) job's re-run button is accented so it reads as
+   "pick up where this left off" rather than a fresh restart. */
+.mini.resume { border-color: var(--brand); color: var(--brand); font-weight: 600; }
+
+/* --- accessibility --- */
+/* Visible, consistent keyboard-focus ring (independent of per-control styles),
+   drawn only for keyboard/AT focus so a mouse click doesn't ring every button. */
+:focus-visible { outline: 2px solid var(--brand); outline-offset: 2px; border-radius: 4px; }
+/* Skip link: off-screen until focused, then pinned top-left over the header. */
+.skip-link { position: absolute; left: 8px; top: -48px; z-index: 100; background: var(--brand); color: var(--brand-ink); padding: 8px 14px; border-radius: 0 0 8px 8px; transition: top .15s ease; }
+.skip-link:focus { top: 0; }
+/* Screen-reader-only text (visually hidden but announced). */
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+/* Respect a reduced-motion preference: drop the bar/toast/skip-link animations
+   and the indeterminate sweep. */
+@media (prefers-reduced-motion: reduce) {
+  * { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}

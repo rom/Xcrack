@@ -380,20 +380,32 @@ and `/auth/*`) require a signed-in session and are scoped to the owner.
 | `POST` | `/api/v1/config/validate` | strict-parse + validate a YAML spec (`{valid, error}`) |
 | `POST` | `/api/v1/config/format` | re-emit a spec tidied (`{yaml}`) |
 | `POST` | `/api/v1/identify` | detect format/encryption of uploaded files (no cracking) |
+| `POST` | `/api/v1/inspect` | feasibility estimate (multipart: `spec` + `source` + `aux`): per-file keyspace, verify rate, time-to-exhaust, and a bounded candidate-stream preview — the CLI's `--keyspace`/`--benchmark`/`--estimate`/`--stdout`, runs nothing and persists no job |
 | `POST` | `/api/v1/jobs` | create a job (multipart: `spec` + `source` files + `aux` files) |
 | `GET` | `/api/v1/jobs` / `/api/v1/jobs/{id}` | list jobs / one job's state + results |
 | `DELETE` | `/api/v1/jobs/{id}` | remove a finished job from the history |
 | `GET` | `/api/v1/jobs/{id}/events` | Server-Sent Events: live progress/log/found/state |
+| `GET` | `/api/v1/events` | Server-Sent Events: a contentless `changed` nudge whenever any job is created/updated/removed, so the History/Statistics/Recovered/Audit lists update live (each list re-fetch is still access-filtered) |
 | `POST` | `/api/v1/jobs/{id}/cancel` | cancel a running job |
-| `POST` | `/api/v1/jobs/{id}/rerun` | start a fresh job from a finished job's saved spec + uploads |
+| `POST` | `/api/v1/jobs/{id}/rerun` | start a new job from a finished/interrupted job's saved spec + uploads (owner/admin). A single-target job's **checkpoint** is carried forward, so re-running an interrupted run **resumes** near where it stopped rather than restarting (the job view's `resumable` flag marks such jobs) |
+| `POST` | `/api/v1/jobs/{id}/share` | set the subjects granted read access to a job (`{subjects:[...]}`; owner/admin, multi-user mode) |
 | `GET` | `/api/v1/jobs/{id}/download` | the decrypted output tree as a zip |
+| `GET` | `/api/v1/jobs/{id}/report` | a self-contained forensic report for the job — case metadata (`case_id`/`examiner`, set at submission), the per-node recovery results with each node's SHA-256, and the job's chain of custody (its audit-trail entries). `?format=html` (default, printable) or `?format=csv`. Passwords are shown only under `--expose-secrets` |
 | `GET` | `/api/v1/stats` | aggregate counters across jobs |
+| `GET` | `/api/v1/audit` | the access/action audit trail (admin-only; newest first) — who ran what, when, from where; never records recovered secrets |
 | `GET` | `/api/v1/vault` | the recovered-password vault (single-user, `--expose-secrets`; off under multi-user) |
 | `GET`/`POST` | `/api/v1/library` | list / upload reusable wordlists |
 | `GET` | `/api/v1/library/{name}/preview` | first lines of a library wordlist |
 | `DELETE` | `/api/v1/library/{name}` | delete a library wordlist |
 | `POST` | `/api/v1/cluster/health` | ping configured `xcrackd` servers (`--allow-server-paths`) |
+| `GET` | `/api/v1/fleet` | the saved worker fleet (node URL/group/label) + whether distributed cracking is enabled (`distributed_ready`) |
+| `PUT` | `/api/v1/fleet` | replace the saved fleet (`{nodes:[{url,group,label}]}`; requires `--allow-server-paths`, admin in multi-user) |
+| `POST` | `/api/v1/fleet/health` | probe every saved node: reachability, latency, and (for an `xcrack-web` node) version + GPU tier (`--allow-server-paths`) |
 | `POST` | `/api/v1/tools/{hashline,vba-recover,access-recover,export-challenge,wordlist,rule-test,pdf-keyattack-table}` | specialist, mostly-stateless tools (see §10.9) |
+| `POST` | `/api/v1/tools/office-keyattack` | Office 97/2000 40-bit RC4 key sweep (multipart: `source`, optional `workers`/`start`/`count`), run as a cancelable background **job** with live progress; writes the recovered key under the job output. A full 2⁴⁰ sweep is a long compute job — the Tools card also builds the CLI command for the distributed/GPU tier |
+| `POST` | `/api/v1/tools/pdf-keyattack` | PDF V1/R2 40-bit RC4 file-key sweep (the full sweep; multipart `source`, optional `workers`/`start`/`count`), run as a background **job**. For the instant precomputed-table path use `/tools/pdf-keyattack-table` |
+| `POST` | `/api/v1/tools/thunder-gen` | precompute a PDF V1/R2 thunder table (form: `bits`/`length`/`chains`/`tables`/`workers`), run as a background **job** with live progress; the table is written to the job output for download |
+| `POST` | `/api/v1/tools/kp` | ZipCrypto known-plaintext (Biham–Kocher) key recovery, run as a background **job** (multipart: `plain` + `cipher`, optional `zip` + `entry` + `offset` for whole-archive decrypt). Returns a job `id`; stream `/jobs/{id}/events` and download via `/jobs/{id}/download`. The in-process attack is compute-heavy; the external bkcrack offload stays CLI-only |
 | `GET` | `/api/v1/docs` / `/api/v1/docs/{name}` | in-app documentation listing / Markdown |
 
 ### Submitting a job
@@ -405,6 +417,13 @@ A job is `multipart/form-data`:
 - `source` — one or more parts: the files to recover.
 - `aux` — zero or more parts: wordlists / breach corpora / combinator / hcmask
   inputs the spec references by **base name**.
+- `case_id`, `examiner` — optional forensic case metadata recorded on the job and
+  surfaced in its report (`/jobs/{id}/report`).
+- `recovered` — zero or more parts: a solved-challenge payload (a
+  `RecoveredPassword` JSON object, or a JSON array of them) exported earlier via
+  `/tools/export-challenge` and solved on an external cracker. Its passwords are
+  tried **first** on every file (the GUI equivalent of the CLI `--resume-from`);
+  the job view reports how many as `resume_count`.
 
 ```sh
 curl -sS -X POST http://127.0.0.1:8899/api/v1/jobs \

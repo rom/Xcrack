@@ -15,6 +15,163 @@ CPU-only (the GPU tier is an opt-in, hardware-gated server exception).
 Work on branch `claude/loving-wozniak-mmti5f`, not yet merged.
 
 ### Added
+- **Web GUI — managed worker fleet.** A new **Fleet** tab turns ad-hoc
+  distributed-cracking URLs into a managed set of worker nodes: save the fleet
+  once (node URL, optional partition group and label; persisted server-wide), see
+  each node's **live health** — reachability, latency, and, for an `xcrack-web`
+  node, its version and GPU tier — and **apply the fleet to a job** with one
+  click (it fills the Crack form's distributed-servers field) instead of
+  retyping URLs. New endpoints `GET`/`PUT /api/v1/fleet` and
+  `POST /api/v1/fleet/health`; like distributed cracking itself every probe is
+  gated behind `--allow-server-paths` (a trusted local instance) and only ever
+  requests fixed, safe paths, and saving is admin-only in multi-user mode.
+- **Web GUI — long-running key attacks as server-side jobs.** The three
+  compute-heavy specialist operations that were CLI-command-only in the Tools tab
+  — **office-keyattack** (Office 97/2000 40-bit RC4 key sweep), **pdf-keyattack**
+  (full PDF V1/R2 40-bit RC4 file-key sweep) and **thunder-gen** (precompute a
+  PDF V1/R2 thunder table) — can now be launched as **cancelable background jobs
+  with live progress** (`POST /api/v1/tools/{office-keyattack,pdf-keyattack,
+  thunder-gen}`), reusing the same job machinery (durability, SSE, cancel,
+  download) as a crack. A recovered key is written to the job output; a generated
+  table is downloaded from it. The sweeps accept an optional `start`/`count`
+  window so a modest run stays bounded, and the Tools card still builds the exact
+  CLI command for the distributed/GPU tier. These are pure-Go, in-process
+  computations — no external binary is ever executed from a web request (the
+  bkcrack offload remains CLI-only for that reason).
+- **Web GUI — resume: solved-challenge round-trip + checkpointed re-runs.** Two
+  long-run ergonomics the CLI had and the GUI lacked. **Challenge round-trip:**
+  the *Tools → Export challenge* card already exported a portable JSON envelope
+  to solve on an external cracker; a job's Crack form now has a **Resume** panel
+  to bring the solved `recovered.json` back in (multipart `recovered` parts,
+  one or many). Its passwords are tried **first** on every file — the GUI
+  equivalent of `--resume-from` — and the job view reports how many as
+  `resume_count`. **Checkpointed resume:** a single-target crack now persists its
+  candidate position under the job directory; if the run is interrupted (server
+  restart or cancel) the job is marked **resumable**, and **re-running** it
+  carries the checkpoint forward so it picks up near where it stopped instead of
+  restarting (the History *re-run* button becomes *⟳ resume*). The checkpoint is
+  keyed to the exact spec + file, so a changed attack starts fresh, and a
+  completed run removes its own checkpoint. No engine or spec change — it reuses
+  `candidates.Checkpoint` and the assembler's priority-password seam.
+- **Web GUI — internationalisation framework.** The console now has a small i18n
+  layer (`assets/i18n.js`): translatable chrome carries a `data-i18n*` key and
+  keeps its English text inline, a catalogue per locale supplies translations,
+  and a **Language** selector (Appearance tab) switches the UI live and
+  remembers the choice; the starting language follows the browser's preference.
+  A missing key falls back to English, so a partial translation is always safe,
+  and `document.lang` tracks the active locale. English (base) and Swedish ship;
+  adding a language is a catalogue plus an `<option>`. A `t(key)` helper is
+  exposed for runtime-built strings. The instrumented set covers the navigation,
+  primary headings and the run controls today; other strings stay English until
+  keyed. (A regression test ties every `data-i18n` key to both catalogues.)
+- **Web GUI — accessibility pass (keyboard + screen reader).** The console now
+  follows the WAI-ARIA patterns a keyboard- or screen-reader-driven operator
+  needs: the section nav is a proper **tablist** (`role="tab"`/`tabpanel`,
+  `aria-selected`, roving tab-stop, arrow/Home/End navigation); every dialog
+  (wizard, import, command palette, preview) is a labelled `role="dialog"` with
+  a **focus trap** — focus moves in on open, Tab cycles within, Escape closes,
+  and focus returns to whatever opened it; the job progress bar is a labelled
+  `role="progressbar"` whose `aria-valuenow`/`aria-valuetext` track the run;
+  run status, progress and toasts are **live regions** (`role="status"`) and
+  the live log is a non-chatty `role="log"`; a **skip link** jumps to the main
+  content, icon-only buttons carry text labels, keyboard focus is always
+  visible (`:focus-visible`), and animations honour `prefers-reduced-motion`.
+  No behaviour changed for mouse users.
+- **Web GUI — case management + forensic reporting.** A job can now carry
+  optional case metadata — a **Case ID** and **examiner**, captured from a *Case
+  details* panel on the Crack tab (multipart `case_id`/`examiner`) and stored on
+  the job. Any finished job renders a self-contained **forensic report** at
+  `GET /api/v1/jobs/{id}/report` (linked as *report* / *csv* on History rows): a
+  printable HTML document (or CSV) with the case metadata, the full per-node
+  recovery result tree — each node identified by its **SHA-256** for evidence
+  integrity — and the job's **chain of custody** (its audit-trail entries: who
+  acted on it, when, from where). It closes the operator/casework gap versus
+  Passware/Elcomsoft reporting. Recovered passwords appear in the report only
+  under `--expose-secrets`; otherwise they read `(hidden)`.
+- **Web GUI — RBAC depth: per-job sharing + a read-only viewer role.** Multi-user
+  access was previously binary (owner, or an admin who sees everything). It now
+  distinguishes **read** from **modify** and adds two ways to widen read access
+  without granting control: a job **owner can share** a specific job (read-only)
+  with named user subjects (`POST /api/v1/jobs/{id}/share`, surfaced as a *Share*
+  control on owned jobs in History), and an operator can grant a **viewer role**
+  (`--auth-viewers`) — a reviewer/auditor who can list, open, download and audit
+  every user's jobs but cannot create, cancel, delete, re-run or share. Cancel /
+  delete / re-run / share now require owner-or-admin (a viewer or shared-with
+  reader gets 403), while list / open / download honour sharing and the viewer
+  role. `/api/v1/me` reports the viewer role so the SPA hides controls a
+  read-only user cannot use. (Per-user vaults remain a follow-up — the recovered-
+  password vault is still single-user-only.)
+- **Web GUI — out-of-band job-finished notifications (webhook + email).**
+  `xcrack-web` can now notify when a job completes beyond the per-viewer browser
+  toast (which only fires while the SPA is open): an operator-configured
+  **webhook** (`--notify-webhook` POSTs a JSON `job_finished` summary) and/or
+  **email** (`--notify-smtp` host:port, `--notify-from`, `--notify-to`, optional
+  `--notify-smtp-user` with `XCRACK_WEB_SMTP_PASSWORD`). Both targets are set by
+  the operator, not by a request, and delivery is asynchronous and best-effort,
+  so a slow or failing target never blocks or fails a job. They fire once on a
+  terminal `done`/`error` state.
+- **Web GUI — ZipCrypto known-plaintext recovery (`kp`) as a background job.**
+  The CLI's `kp` (Biham–Kocher ZipCrypto key-state recovery, with whole-archive
+  cross-entry key reuse) had **no GUI presence at all**; it is now a Tools-tab
+  card and a `POST /api/v1/tools/kp` endpoint. From aligned known plaintext and
+  its ciphertext it recovers the 96-bit key state (no password); given the
+  archive and the known-plaintext entry it rolls back to the entry start and
+  decrypts *every* ZipCrypto entry from one recovery, into the job's downloadable
+  output tree. It runs as a real background job (progress/cancel/history/
+  download via the standard job machinery) because the in-process attack is
+  compute-heavy — implemented via a new specialist-job path that any non-crack
+  tool can reuse. The external bkcrack offload is intentionally CLI-only
+  (executing an operator-named binary from a web request is an exec risk). This
+  is the first of the specialist-tools-as-jobs work; `office-keyattack`,
+  `pdf-keyattack` (full sweep) and `thunder-gen` still build a copyable CLI
+  command.
+- **Web GUI — live-updating lists.** The History, Statistics, Recovered and
+  Audit tabs now refresh on their own the moment a job changes anywhere, instead
+  of only on a manual **Refresh** or a tab switch. A new server-wide
+  `GET /api/v1/events` Server-Sent Events stream emits a contentless `changed`
+  nudge on every job create/update/remove, which the SPA uses to re-fetch
+  whatever list it is showing; the nudge carries no job data, and each list
+  re-fetch stays filtered to the requesting user, so the stream leaks nothing
+  about other users' jobs. (The per-job progress stream is unchanged.)
+- **Web GUI — access/action audit trail + admin Audit view.** `xcrack-web` now
+  keeps a structured, append-only audit trail (`<workdir>/audit.jsonl`,
+  surviving restarts) of who did what, when and from where — job create / cancel
+  / delete / re-run, inspect, login / logout, and password-recovery events —
+  with a new admin-only **Audit** tab and `GET /api/v1/audit` to read it
+  (newest first). It never records a recovered secret: a "found" entry logs the
+  target and scheme, not the password. The trail is always on; `--audit-syslog`
+  and `--audit-log-file` additionally forward it to the system logger or a JSON
+  file via `pkg/auditlog`. (Previously `pkg/auditlog` was not wired into the web
+  tier at all, so a shared instance kept no who-ran-what record.)
+- **Web GUI — transport hardening & retention (CSRF, rate limiting, work-dir
+  caps).** `xcrack-web` now wraps the whole application in two always-on guards
+  (active in single- and multi-user mode alike, since a localhost instance is
+  still reachable by a malicious page via DNS-rebinding/localhost CSRF): a
+  **CSRF guard** that refuses a cross-origin state-changing request using the
+  `Sec-Fetch-Site`/`Origin`/`Referer` headers the browser sets itself (a
+  non-browser client such as `curl` or the CLI, which sends none, is unaffected
+  — there is nothing to forge), replacing the previous reliance on
+  `SameSite=Lax` alone; and a per-client-IP **rate limiter** (`--rate-limit`,
+  default 1200/min, with a stricter `--auth-rate-limit`, default 20/min, on the
+  login endpoint; `--trust-proxy` to read `X-Forwarded-For` behind a trusted
+  proxy). It also adds **retention** so a long-lived shared instance's work
+  directory cannot grow without bound: `--max-retained-jobs` (prune the oldest
+  finished jobs beyond a cap), `--max-job-age` (prune finished jobs older than a
+  duration), and `--max-workdir-bytes` (reject a new job/inspect with HTTP 507
+  once the work directory is full). None require any change to the SPA.
+- **Web GUI — server-side feasibility estimate (`◴ Estimate`).** A new
+  `POST /api/v1/inspect` endpoint and an **Estimate** button in the Crack tab
+  answer "how long will this take, is it even worth starting" *before* a job
+  runs — the CLI's `--keyspace`/`--benchmark`/`--estimate`/`--stdout`, which had
+  no server-side equivalent (the wizard's existing readout is client-side
+  keyspace math only). It takes the same submission as a job (spec + source +
+  aux + library), and per target reports the detected scheme, the candidate
+  **keyspace** (exact for finite sources, counted to a cap otherwise), the
+  measured **verify rate** for that file's format, and the resulting
+  **time-to-exhaust** (and ~half that expected to a hit), plus a bounded preview
+  of the exact candidate stream the attack would try. It runs nothing
+  destructive and persists no job — all work happens in an ephemeral temp
+  directory removed before the response.
 - **Web GUI — expanded attack wizard.** The `xcrack-web` wizard now composes a
   whole attack from what you know, not just a prefix/suffix and length. It adds
   **presets** (Personal, Corporate policy, Passphrase, PIN/numeric, Keyboard

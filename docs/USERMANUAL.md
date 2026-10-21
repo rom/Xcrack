@@ -1176,6 +1176,15 @@ A **Check** button in the panel pings each configured server's health endpoint
 each one up or down with its latency, so you can confirm the fleet is reachable
 before launching a long run.
 
+The **Fleet** tab is the managed version of this: instead of retyping node URLs
+into every job, save the fleet once (each node's URL, optional partition
+**group** and a **label**; it persists under the working directory and is
+admin-managed in multi-user mode). **Check health** probes every saved node and
+shows it up or down with its latency and, for an `xcrack-web` node, its **version
+and GPU tier** (`POST /api/v1/fleet/health`). **Use fleet in a job** fills the
+Crack form's distributed-servers field from the saved nodes in one click. The
+whole tab is gated behind `--allow-server-paths`, like distributed cracking.
+
 ### 10.5 Running a job
 
 Progress streams live over Server-Sent Events (nothing is polled). The running
@@ -1209,7 +1218,28 @@ vanishing.
 
 Any history row can be **re-run**: a fresh job is started from the saved spec
 and the files already uploaded for the original, so a GUI "resume" needs no
-re-upload.
+re-upload. A **single-target** run is also **checkpointed** — its candidate
+position is saved under the job directory — so if it is interrupted (the server
+restarts, or you cancel it) the row is marked **resumable** and its button
+becomes **⟳ resume**: re-running picks up near where it stopped instead of
+starting over. The checkpoint is tied to the exact spec and file, so changing
+the attack starts fresh, and a completed run clears its own checkpoint.
+
+**Resuming a solved challenge.** For an attack better run elsewhere (a GPU
+farm), export a portable challenge from **Tools → Export challenge**, solve it
+externally, then attach the resulting `recovered.json` in the Crack tab's
+**Resume** panel. Its password(s) are tried first on every file — the GUI
+equivalent of the CLI's `--resume-from`.
+
+**Case metadata and the forensic report.** Before a run you can record an
+optional **Case ID** and **examiner** (the *Case details* panel on the Crack
+tab); they are stored on the job. Any finished job then has a self-contained
+**report** (the *report* and *csv* links on its History row, or
+`GET /api/v1/jobs/{id}/report?format=html|csv`): a printable document with the
+case metadata, the full per-node result tree — each node identified by its
+**SHA-256** for evidence integrity — and the job's **chain of custody** (its
+audit-trail entries: who acted on it, when, from where). Recovered passwords
+appear in the report only when the server runs with `--expose-secrets`.
 
 ### 10.7 Recovered passwords (the vault)
 
@@ -1256,13 +1286,19 @@ right away:
   exactly what the engine's rule compiler does to the word (the transformed
   output, or a rejection), so you can check a rule before adding it to a job.
 
-The long compute jobs — a full 2⁴⁰ `pdf-keyattack` / `office-keyattack` sweep
-and `thunder-gen` table generation — are **not** run from the browser; instead
-the tab builds the exact CLI command from a small form (with `--gpu`, workers,
-sharding, progress, table-generation knobs, …) for you to copy and run on the
-CLI or the distributed tier. Recovered secrets (keys, VBA/Access passwords) are
-shown only when the server was started with `--expose-secrets`; otherwise a
-redaction marker stands in, exactly as on the crack path.
+The long compute jobs — a 2⁴⁰ `pdf-keyattack` / `office-keyattack` key sweep and
+`thunder-gen` table generation — can be run **either way** from the one Tools
+card. **Run as job** launches it on the server as a cancelable background job
+with live progress (the recovered key, or the generated table, lands in the
+job's output for download); it reuses all the crack job machinery (History,
+cancel, download, SSE). A full 2⁴⁰ sweep is genuinely long, so the key sweeps
+also accept a bounded range, and the same card still builds the exact **CLI
+command** (with `--gpu`, workers, sharding, progress, table knobs, …) to copy
+and run on the CLI or distributed/GPU tier. These run in-process in pure Go — no
+external binary is executed from a web request. Recovered secrets (keys,
+VBA/Access passwords) are shown only when the server was started with
+`--expose-secrets`; otherwise a redaction marker stands in, exactly as on the
+crack path.
 
 ### 10.10 Statistics
 
@@ -1295,8 +1331,15 @@ and usable down to a phone-width screen.
 The **Configuration** tab's Appearance picker offers six themes plus System
 (which follows your OS light/dark setting): **Light**, **Dark**, **Glow**,
 **Gold**, **Autumn** and **Spring**. The choice is remembered in the browser.
+The same panel has a **Language** selector (English and Swedish ship today); the
+console starts in your browser's preferred language and remembers the choice.
 The **Docs** tab renders this manual and the reference docs as formatted pages,
 so the full documentation travels with the GUI.
+
+The console is built for **keyboard and screen-reader** use: the section nav is
+a proper ARIA tablist (arrow-key navigable), dialogs trap focus and close on
+Escape, the run status and progress are announced as live regions, keyboard
+focus is always visible, and motion honours your reduced-motion preference.
 
 ### 10.13 Security
 

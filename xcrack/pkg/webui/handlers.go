@@ -1,6 +1,7 @@
 package webui
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -8,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/rom/xcrack/pkg/jobspec"
 	"github.com/rom/xcrack/pkg/xcrack"
@@ -127,6 +129,11 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.mgr.overQuota() {
+		writeErr(w, http.StatusInsufficientStorage, "the server's work directory is full; delete finished jobs or raise --max-workdir-bytes")
+		return
+	}
+
 	owner, _ := s.currentUser(r)
 
 	job, err := s.mgr.newJob()
@@ -180,6 +187,26 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	}
 	yamlOut, _ := spec.Marshal()
 
+	// Solved-challenge round-trip: any uploaded `recovered` parts (the JSON a
+	// challenge exported here was solved into on an external cracker) are decoded
+	// into priority passwords, tried first on every file — the GUI equivalent of
+	// the CLI's --resume-from. Malformed payloads are rejected so a mistake is
+	// visible rather than silently dropped.
+	var priority []string
+	for _, fh := range r.MultipartForm.File["recovered"] {
+		data, err := readPart(fh)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "recovered upload: "+err.Error())
+			return
+		}
+		pws, err := decodeRecoveredPasswords(data)
+		if err != nil {
+			writeErr(w, http.StatusBadRequest, "recovered-password file: "+err.Error())
+			return
+		}
+		priority = append(priority, pws...)
+	}
+
 	job.mu.Lock()
 	job.spec = spec
 	job.Files = names
@@ -187,9 +214,17 @@ func (s *Server) handleCreateJob(w http.ResponseWriter, r *http.Request) {
 	job.FilesTotal = len(paths)
 	job.SpecYAML = string(yamlOut)
 	job.Owner = owner.Subject
+	job.CaseID = strings.TrimSpace(r.FormValue("case_id"))
+	job.Examiner = strings.TrimSpace(r.FormValue("examiner"))
+	job.priority = priority
 	job.mu.Unlock()
 
 	s.mgr.start(job)
+	detail := fmt.Sprintf("%d file(s)", len(names))
+	if len(priority) > 0 {
+		detail += fmt.Sprintf(", %d resume password(s)", len(priority))
+	}
+	s.audit(r, "job.create", job.ID, detail)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": job.ID})
 }
 
@@ -198,7 +233,7 @@ func (s *Server) handleListJobs(w http.ResponseWriter, r *http.Request) {
 	all := s.mgr.list()
 	jobs := make([]JobView, 0, len(all))
 	for _, v := range all {
-		if s.canAccess(u, v.Owner) {
+		if s.canAccess(u, v.Owner, v.Shared) {
 			jobs = append(jobs, v)
 		}
 	}
@@ -216,17 +251,18 @@ func (s *Server) handleGetJob(w http.ResponseWriter, r *http.Request) {
 // handleDeleteJob removes a job from the history and deletes its working
 // directory (canceling it first if it is still running).
 func (s *Server) handleDeleteJob(w http.ResponseWriter, r *http.Request) {
-	if s.jobForRequest(w, r) == nil {
+	if s.jobForMutation(w, r) == nil {
 		return
 	}
 	s.mgr.remove(r.PathValue("id"))
+	s.audit(r, "job.delete", r.PathValue("id"), "")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
 }
 
 // handleRerun starts a fresh job from an existing (finished or interrupted) job's
 // saved spec and uploaded files — a GUI "resume" that needs no re-upload.
 func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
-	old := s.jobForRequest(w, r)
+	old := s.jobForMutation(w, r)
 	if old == nil {
 		return
 	}
@@ -236,7 +272,45 @@ func (s *Server) handleRerun(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	s.audit(r, "job.rerun", nj.ID, "from "+old.ID)
 	writeJSON(w, http.StatusAccepted, map[string]string{"id": nj.ID})
+}
+
+// handleShareJob sets the subjects a job is shared with (read access). Only the
+// owner or an admin may share (jobForMutation), and only in multi-user mode.
+func (s *Server) handleShareJob(w http.ResponseWriter, r *http.Request) {
+	job := s.jobForMutation(w, r)
+	if job == nil {
+		return
+	}
+	if !s.auth.enabled {
+		writeErr(w, http.StatusBadRequest, "sharing is only meaningful in multi-user mode")
+		return
+	}
+	var body struct {
+		Subjects []string `json:"subjects"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&body); err != nil {
+		writeErr(w, http.StatusBadRequest, `invalid body (expected {"subjects":[...]})`)
+		return
+	}
+	owner := job.ownerID()
+	seen := map[string]bool{}
+	var shared []string
+	for _, sub := range body.Subjects {
+		sub = strings.TrimSpace(sub)
+		if sub == "" || sub == owner || seen[sub] {
+			continue
+		}
+		seen[sub] = true
+		shared = append(shared, sub)
+	}
+	job.mu.Lock()
+	job.Shared = shared
+	job.mu.Unlock()
+	s.mgr.persist(job)
+	s.audit(r, "job.share", job.ID, strings.Join(shared, ", "))
+	writeJSON(w, http.StatusOK, map[string]any{"shared": shared})
 }
 
 // handleVault lists the found-password vault (potfile). It is a single-user,
@@ -251,13 +325,14 @@ func (s *Server) handleVault(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCancelJob(w http.ResponseWriter, r *http.Request) {
-	if s.jobForRequest(w, r) == nil {
+	if s.jobForMutation(w, r) == nil {
 		return
 	}
 	if !s.mgr.cancel(r.PathValue("id")) {
 		writeErr(w, http.StatusNotFound, "no such job (or already finished)")
 		return
 	}
+	s.audit(r, "job.cancel", r.PathValue("id"), "")
 	writeJSON(w, http.StatusOK, map[string]string{"status": "canceling"})
 }
 
@@ -271,8 +346,25 @@ func (s *Server) jobForRequest(w http.ResponseWriter, r *http.Request) *Job {
 		return nil
 	}
 	u, _ := s.currentUser(r)
-	if !s.canAccess(u, job.ownerID()) {
+	owner, shared := job.ownerAndShared()
+	if !s.canAccess(u, owner, shared) {
 		writeErr(w, http.StatusNotFound, "no such job")
+		return nil
+	}
+	return job
+}
+
+// jobForMutation returns the job named by {id} only if the request's user may
+// MODIFY it (owner or admin). A user who can read but not modify it (a viewer or
+// a shared-with reader) gets 403; a job they cannot even see gets 404.
+func (s *Server) jobForMutation(w http.ResponseWriter, r *http.Request) *Job {
+	job := s.jobForRequest(w, r)
+	if job == nil {
+		return nil
+	}
+	u, _ := s.currentUser(r)
+	if !s.canMutate(u, job.ownerID()) {
+		writeErr(w, http.StatusForbidden, "read-only access: only the job's owner can change it")
 		return nil
 	}
 	return job
@@ -344,7 +436,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	all := s.mgr.list()
 	jobs := make([]JobView, 0, len(all))
 	for _, v := range all {
-		if s.canAccess(u, v.Owner) {
+		if s.canAccess(u, v.Owner, v.Shared) {
 			jobs = append(jobs, v)
 		}
 	}
